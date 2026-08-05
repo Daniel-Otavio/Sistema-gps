@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motorista - GPS Caminhão</title>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; background: #f0f2f5; color: white; }
+        #mapa { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 1; background: #e4e6eb; }
+        
+        #status-bar { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; padding: 10px 24px; border-radius: 50px; font-size: 14px; font-weight: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.5); transition: all 0.3s ease; max-width: 90%; white-space: nowrap; background: #1e1e24; color: #fff; border: 1px solid rgba(255,255,255,0.05); text-align: center; backdrop-filter: blur(5px); display: flex; align-items: center; justify-content: center; gap: 8px; }
+        #status-bar.carregando { background: #451a03; color: #fdba74; border-color: #9a3412; }
+        #status-bar.sucesso { background: #052e16; color: #86efac; border-color: #166534; }
+        #status-bar.erro { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
+
+        #info-rota { 
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 1000; 
+            background: #18181e; backdrop-filter: blur(10px); padding: 18px 24px; border-radius: 16px; 
+            color: #f4f4f5; border: 1px solid rgba(255, 255, 255, 0.06); 
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); display: none; text-align: center; 
+            max-width: 95%; width: auto; min-width: 320px; line-height: 1.5; transition: all 0.3s ease; 
+        }
+        .route-header { 
+            font-weight: 600; font-size: 15px; margin-bottom: 16px; color: #fff; 
+            padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); 
+            display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; 
+        }
+        .route-header i { color: #3b82f6; }
+        .route-header .orig-dest { color: #a1a1aa; font-weight: 400; }
+        .info-grid { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+        .info-item { 
+            display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1aa; 
+            background: #27272a; padding: 6px 14px; border-radius: 20px; 
+            border: 1px solid rgba(255,255,255,0.03); 
+        }
+        .info-item i { color: #3b82f6; font-size: 14px; }
+        .info-item .val { color: #fff; font-weight: 600; }
+        .restricoes-box { 
+            margin-top: 10px; font-size: 12px; color: #a1a1aa; background: #27272a; 
+            padding: 6px 14px; border-radius: 20px; display: inline-flex; align-items: center; gap: 8px; 
+            border: 1px solid rgba(255,255,255,0.03); 
+        }
+        #progresso-viagem { margin-top: 12px; width: 100%; height: 4px; background: #27272a; border-radius: 4px; overflow: hidden; display: none; }
+        #progresso-viagem .barra { height: 100%; width: 0%; background: #3b82f6; transition: width 0.3s ease; border-radius: 4px; }
+
+        #velocimetro { 
+            position: fixed; bottom: 130px; left: 20px; z-index: 2000; 
+            width: 80px; height: 80px;
+            background: rgba(13, 13, 18, 0.85); backdrop-filter: blur(5px); 
+            border-radius: 50%; 
+            border: 3px solid #3b82f6; 
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.2); 
+            color: #fff; 
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-family: 'Segoe UI', sans-serif;
+        }
+        #velocidade-valor { font-size: 28px; font-weight: 700; color: #fff; line-height: 1; display: block; margin-top: 2px; }
+        #velocidade-unidade { font-size: 10px; color: #a1a1aa; font-weight: 600; letter-spacing: 1px; display: block; margin-top: 2px; }
+
+        /* SISTEMA DE REPORTE (BOTÃO E MENU) */
+        #btn-reportar { 
+            position: fixed; bottom: 280px; right: 20px; z-index: 2000; width: 44px; height: 44px; 
+            border-radius: 50%; background: #1e1e24; color: #f97316; border: 1px solid rgba(255,255,255,0.1); 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; 
+            display: none; align-items: center; justify-content: center; 
+        }
+        #btn-reportar:hover { background: #27272a; border-color: #f97316; transform: scale(1.1); }
+        #btn-reportar:active { transform: scale(0.9); }
+
+        #menu-reporte {
+            position: fixed; bottom: 335px; right: 20px; z-index: 2000; 
+            background: #18181e; backdrop-filter: blur(15px); padding: 12px; 
+            border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); 
+            box-shadow: 0 8px 24px rgba(0,0,0,0.8); display: none; flex-direction: column; gap: 8px; 
+            min-width: 140px;
+        }
+        #menu-reporte button {
+            background: transparent; border: none; color: #f4f4f5; padding: 8px 12px; 
+            border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; 
+            display: flex; align-items: center; gap: 12px; transition: background 0.2s; width: 100%;
+        }
+        #menu-reporte button:hover { background: #27272a; }
+        #menu-reporte button i { width: 16px; text-align: center; }
+        .btn-report-radar i { color: #f97316; }
+        .btn-report-acidente i { color: #ef4444; }
+        .btn-report-obra i { color: #fbbf24; }
+        .btn-report-perigo i { color: #f59e0b; }
+
+        @keyframes pulse-microphone {
+            0% { color: #3b82f6; transform: scale(1); }
+            100% { color: #22c55e; transform: scale(1.1); }
+        }
+
+        #btn-iniciar-3d { 
+            position: fixed; bottom: 230px; left: 50%; transform: translateX(-50%); z-index: 2000; 
+            display: none; background: #3b82f6; color: white; border: none; padding: 14px 32px; 
+            border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6); transition: transform 0.2s, background 0.2s; 
+            align-items: center; gap: 10px; 
+        }
+        #btn-iniciar-3d:hover { transform: translateX(-50%) scale(1.05); background: #2563eb; }
+        #btn-iniciar-3d:active { transform: translateX(-50%) scale(0.95); }
+
+        #btn-tema-mapa { 
+            position: fixed; top: 115px; left: 10px; z-index: 2000; width: 30px; height: 30px;
+            background: #ffffff; color: #333333; border: none; border-radius: 2px;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-size: 16px; cursor: pointer; 
+            transition: all 0.2s ease; display: none; align-items: center; justify-content: center; 
+        }
+        #btn-tema-mapa:hover { background: #f2f2f2; color: #000; }
+        #btn-tema-mapa:active { transform: scale(0.9); }
+
+        #btn-centralizar { 
+            position: fixed; bottom: 230px; right: 20px; z-index: 2000; width: 44px; height: 44px; 
+            border-radius: 50%; background: #1e1e24; color: #3b82f6; border: 1px solid rgba(255,255,255,0.1); 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; 
+            display: none; align-items: center; justify-content: center; 
+        }
+        #btn-centralizar:hover { background: #27272a; border-color: #3b82f6; transform: scale(1.1); }
+        #btn-centralizar:active { transform: scale(0.9); }
+
+        #login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.92); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+        #login-overlay.hidden { display: none; }
+        .login-card { background: #1a1a2e; padding: 40px 36px; border-radius: 20px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.8); border: 1px solid #2a2a3e; }
+        .login-card h2 { font-size: 26px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; justify-content: center;}
+        .login-card h2 span { color: #3b82f6; }
+        .login-card p.sub { color: #a1a1aa; margin-bottom: 24px; font-size: 14px; text-align: center; }
+        .login-card .grupo { margin-bottom: 20px; }
+        .login-card .grupo label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
+        .login-card .grupo input { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #2a2a3e; background: #0f0f1a; color: white; font-size: 14px; transition: border 0.2s; }
+        .login-card .grupo input:focus { outline: none; border-color: #3b82f6; }
+        .btn-primary { width: 100%; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+        .btn-primary:hover { background: #2563eb; }
+        .status-box { margin-top: 16px; padding: 10px; background: #0f0f1a; border-radius: 8px; font-size: 13px; text-align: center; border-left: 3px solid #3b82f6; min-height: 40px; color: #a1a1aa; }
+        .status-box.sucesso { border-left-color: #22c55e; color: #4ade80; }
+        .status-box.erro { border-left-color: #ef4444; color: #f87171; }
+        .status-box.carregando { border-left-color: #fbbf24; color: #fde047; }
+
+        @media (max-width: 768px) {
+            #status-bar { top: 15px; font-size: 12px; padding: 8px 16px; white-space: normal; }
+            #info-rota { bottom: 20px; padding: 14px 16px; font-size: 12px; min-width: unset; width: 92%; }
+            #velocimetro { bottom: 110px; left: 15px; width: 65px; height: 65px; }
+            #velocidade-valor { font-size: 22px; }
+            #btn-iniciar-3d { bottom: 195px; font-size: 14px; padding: 12px 20px; }
+            #btn-tema-mapa { top: 80px; left: 10px; width: 30px; height: 30px; font-size: 16px; }
+            #btn-centralizar { bottom: 195px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
+            #btn-reportar { bottom: 240px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
+            #menu-reporte { bottom: 290px; right: 15px; min-width: 120px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="mapa"></div>
+    <div id="status-bar"><i class="fas fa-circle-notch fa-spin"></i> Carregando...</div>
+    <button id="btn-iniciar-3d"><i class="fas fa-route"></i> Iniciar Navegação 3D</button>
+    <button id="btn-tema-mapa"><i class="fas fa-moon"></i></button>
+    <button id="btn-centralizar"><i class="fas fa-crosshairs"></i></button>
+    
+    <!-- SISTEMA DE REPORTE -->
+    <button id="btn-reportar"><i class="fas fa-flag"></i></button>
+    <div id="menu-reporte">
+        <button class="btn-report-radar" onclick="enviarReporte('radar')"><i class="fas fa-tower-broadcast"></i> Radar</button>
+        <button class="btn-report-acidente" onclick="enviarReporte('acidente')"><i class="fas fa-car-crash"></i> Acidente</button>
+        <button class="btn-report-obra" onclick="enviarReporte('obra')"><i class="fas fa-hard-hat"></i> Obra</button>
+        <button class="btn-report-perigo" onclick="enviarReporte('perigo')"><i class="fas fa-triangle-exclamation"></i> Perigo</button>
+    </div>
+
+    <div id="velocimetro">
+        <span id="velocidade-valor">0</span>
+        <span id="velocidade-unidade">km/h</span>
+    </div>
+    <div id="info-rota"></div>
+    <div id="login-overlay">
+        <div class="login-card">
+            <h2><i class="fas fa-truck"></i> <span>GPS</span> Motorista</h2>
+            <p class="sub">Acesse sua rota atribuída</p>
+            <div class="grupo"><label for="login-user"><i class="far fa-user"></i> Login</label><input type="text" id="login-user" placeholder="Seu login" value="jose"></div>
+            <div class="grupo"><label for="login-pass"><i class="fas fa-lock"></i> Senha</label><input type="password" id="login-pass" placeholder="Sua senha" value="motor123"></div>
+            <button class="btn-primary" onclick="fazerLoginMotorista()">Entrar</button>
+            <div id="login-status" class="status-box">Use <strong>jose</strong> / <strong>motor123</strong></div>
+        </div>
+    </div>
+
+    <script>
+        let mapa = null;
+        let tokenJWT = null;
+        let marcadorMotorista = null;
+        let intervalLocalizacao = null;
+        let watchId = null; // ID do watcher do GPS real
+        let ultimaPosicaoLngLat = null; 
+        let ultimoBearing = 0;
+        let modoNavegacaoAtivo = false;
+        let dadosGeoJsonAtual = null; 
+        let temaAtual = 'light'; 
+        const API_BASE = 'http://localhost:3000';
+
+        const estiloLight = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'; 
+        const estiloDark = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'; 
+        const estiloFallbackLight = 'https://tiles.openfreemap.org/styles/liberty';
+        const estiloFallbackDark = 'https://tiles.openfreemap.org/styles/dark-matter';
+
+        let pathCoordinates = [];
+        let distanciaTotalKm = 0;
+        let tempoTotalSegundos = 0;
+
+        // =============================================
+        // SISTEMA DE VOZ
+        // =============================================
+        let vozFemininaSelecionada = null;
+        let lastVoiceIndex = -10; 
+
+        function inicializarVozes() {
+            if (!window.speechSynthesis) return;
+            window.speechSynthesis.onvoiceschanged = () => {
+                const vozes = window.speechSynthesis.getVoices();
+                vozFemininaSelecionada = vozes.find(v => 
+                    v.lang.includes('pt-BR') && 
+                    (v.name.includes('Maria') || v.name.includes('mulher') || v.name.includes('woman') || v.name.includes('female'))
+                );
+                if (!vozFemininaSelecionada) {
+                    vozFemininaSelecionada = vozes.find(v => v.lang.includes('pt') && (v.name.includes('woman') || v.name.includes('female')));
+                }
+                if (!vozFemininaSelecionada) {
+                    vozFemininaSelecionada = vozes.find(v => v.lang.includes('pt'));
+                }
+                console.log("🗣️ Voz de navegação selecionada:", vozFemininaSelecionada ? vozFemininaSelecionada.name : "Padrão do navegador");
+            };
+            if (window.speechSynthesis.getVoices().length > 0) {
+                window.speechSynthesis.onvoiceschanged();
+            }
+        }
+
+        function playBeep() {
+            try {
+                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioCtx.createOscillator();
+                const gainNode = audioCtx.createGain();
+                oscillator.type = 'sine';
+                oscillator.frequency.value = 800;
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                oscillator.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+                oscillator.start();
+                oscillator.stop(audioCtx.currentTime + 0.15);
+            } catch (e) {}
+        }
+
+        function speak(text, distance = null) {
+            if (!window.speechSynthesis) return;
+            let finalText = text;
+            if (distance !== null) {
+                const metros = Math.round(distance * 1000);
+                if (metros > 20) {
+                    finalText = `${text} em ${metros} metros`;
+                } else {
+                    finalText = `${text} agora`;
+                }
+            }
+            playBeep();
+            setTimeout(() => {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(finalText);
+                utterance.lang = 'pt-BR';
+                utterance.rate = 1.0;    
+                utterance.pitch = 1.0;
+                if (vozFemininaSelecionada) {
+                    utterance.voice = vozFemininaSelecionada;
+                }
+                window.speechSynthesis.speak(utterance);
+            }, 300);
+        }
+
+        // =============================================
+        // LÓGICA DE REPORTE
+        // =============================================
+        function toggleMenuReporte() {
+            const menu = document.getElementById('menu-reporte');
+            if (menu.style.display === 'flex') {
+                menu.style.display = 'none';
+            } else {
+                menu.style.display = 'flex';
+            }
+        }
+
+        async function enviarReporte(tipo) {
+            if (!marcadorMotorista) {
+                alert('Caminhão não está posicionado.');
+                return;
+            }
+            const posicao = marcadorMotorista.getLngLat();
+            if (!posicao) return;
+
+            const statusBar = document.getElementById('status-bar');
+            document.getElementById('menu-reporte').style.display = 'none';
+
+            try {
+                const resp = await fetch(`${API_BASE}/reportar`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+                    body: JSON.stringify({
+                        lat: posicao.lat,
+                        lng: posicao.lng,
+                        tipo: tipo
+                    })
+                });
+
+                if (!resp.ok) throw new Error('Erro ao enviar reporte');
+
+                statusBar.innerHTML = `✅ Reporte de "${tipo}" enviado!`;
+                statusBar.className = 'sucesso';
+                speak(`Reporte de ${tipo} enviado`);
+
+                setTimeout(() => {
+                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                    statusBar.className = 'sucesso';
+                }, 3000);
+
+            } catch (erro) {
+                statusBar.innerHTML = `❌ Erro: ${erro.message}`;
+                statusBar.className = 'erro';
+                speak(`Erro ao enviar reporte`);
+                setTimeout(() => {
+                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                    statusBar.className = 'sucesso';
+                }, 3000);
+            }
+        }
+
+        // =============================================
+        // 🎤 SISTEMA DE ESCUTA CONTÍNUA POR VOZ (MÃOS LIVRES)
+        // =============================================
+        let continuousRecognition = null;
+        let isWaitingForReportType = false;
+        let reportTimeout = null;
+        let inactivityTimeout = null;
+
+        function iniciarEscutaContinua() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SpeechRecognition) {
+                console.warn('Navegador não suporta comandos de voz contínuos.');
+                return;
+            }
+            if (continuousRecognition) return;
+
+            continuousRecognition = new SpeechRecognition();
+            continuousRecognition.lang = 'pt-BR';
+            continuousRecognition.continuous = true;
+            continuousRecognition.interimResults = true;
+
+            continuousRecognition.onresult = (event) => {
+                let transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    transcript += event.results[i][0].transcript.toLowerCase().trim();
+                }
+
+                clearTimeout(inactivityTimeout);
+                inactivityTimeout = setTimeout(() => {
+                    if(continuousRecognition) {
+                        continuousRecognition.stop();
+                        setTimeout(iniciarEscutaContinua, 1000);
+                    }
+                }, 15000);
+
+                const statusBar = document.getElementById('status-bar');
+
+                let detectedType = null;
+                if (transcript.includes('radar')) detectedType = 'radar';
+                else if (transcript.includes('acidente')) detectedType = 'acidente';
+                else if (transcript.includes('obra')) detectedType = 'obra';
+                else if (transcript.includes('perigo')) detectedType = 'perigo';
+
+                if (detectedType && (transcript.includes('reporte') || transcript.includes('reportar'))) {
+                    clearTimeout(reportTimeout);
+                    isWaitingForReportType = false;
+                    enviarReporte(detectedType);
+                    return;
+                }
+
+                if ((transcript.includes('reporte') || transcript.includes('reportar')) && !isWaitingForReportType) {
+                    isWaitingForReportType = true;
+                    statusBar.innerHTML = '🎤 Ocorrência detectada. Fale o tipo: Radar, Acidente, Obra ou Perigo.';
+                    statusBar.className = 'carregando';
+                    playBeep();
+                    
+                    clearTimeout(reportTimeout);
+                    reportTimeout = setTimeout(() => {
+                        isWaitingForReportType = false;
+                        statusBar.innerHTML = '⏳ Comando não concluído. Aguardando próxima instrução.';
+                        statusBar.className = 'carregando';
+                        setTimeout(() => {
+                            statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                            statusBar.className = 'sucesso';
+                        }, 2000);
+                    }, 5000);
+                    return;
+                }
+
+                if (isWaitingForReportType && detectedType) {
+                    clearTimeout(reportTimeout);
+                    isWaitingForReportType = false;
+                    enviarReporte(detectedType);
+                }
+            };
+
+            continuousRecognition.onerror = (event) => {
+                console.warn('Erro no reconhecimento contínuo:', event.error);
+                if (event.error !== 'no-speech') {
+                    if (continuousRecognition) {
+                        continuousRecognition.stop();
+                        continuousRecognition = null;
+                        setTimeout(iniciarEscutaContinua, 1000);
+                    }
+                }
+            };
+
+            continuousRecognition.onend = () => {
+                if (continuousRecognition) {
+                    setTimeout(iniciarEscutaContinua, 1000);
+                }
+            };
+
+            continuousRecognition.start();
+        }
+
+        function initMapa() {
+            if (mapa) return;
+            mapa = new maplibregl.Map({
+                container: 'mapa',
+                style: estiloLight,
+                center: [-46.6333, -23.5505], 
+                zoom: 14,
+                pitch: 0,
+                bearing: 0
+            });
+            mapa.addControl(new maplibregl.NavigationControl());
+            document.getElementById('btn-iniciar-3d').addEventListener('click', iniciarNavegacao3D);
+            document.getElementById('btn-tema-mapa').addEventListener('click', alternarTemaMapa);
+            document.getElementById('btn-centralizar').addEventListener('click', centralizarNoCarro);
+            document.getElementById('btn-reportar').addEventListener('click', toggleMenuReporte);
+            
+            mapa.on('style.load', function() { if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual); });
+            mapa.on('error', function(e) {
+                if (e.error && e.error.status === 404) {
+                    if (temaAtual === 'light') mapa.setStyle(estiloFallbackLight);
+                    else mapa.setStyle(estiloFallbackDark);
+                }
+            });
+        }
+
+        async function fazerLoginMotorista() {
+            const login = document.getElementById('login-user').value;
+            const senha = document.getElementById('login-pass').value;
+            const statusDiv = document.getElementById('login-status');
+            statusDiv.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Autenticando...';
+            statusDiv.className = 'status-box carregando';
+            try {
+                const resp = await fetch(`${API_BASE}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, senha }) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.erro || 'Erro no login');
+                if (data.usuario.tipo !== 'motorista') throw new Error('Acesso negado.');
+                tokenJWT = data.token;
+                document.getElementById('login-overlay').classList.add('hidden');
+                initMapa(); 
+                await carregarRotaDoMotorista();
+                if (intervalLocalizacao) clearInterval(intervalLocalizacao);
+                // A simulação de localização foi removida, usaremos o GPS real!
+            } catch (erro) { statusDiv.innerHTML = `❌ ${erro.message}`; statusDiv.className = 'status-box erro'; }
+        }
+
+        async function carregarRotaDoMotorista() {
+            const statusBar = document.getElementById('status-bar');
+            try {
+                statusBar.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Buscando rota...';
+                statusBar.className = 'carregando';
+                const resp = await fetch(`${API_BASE}/rotas/minha-rota`, { headers: { 'Authorization': tokenJWT } });
+                if (resp.status === 404) { statusBar.innerHTML = '❌ Rota não encontrada.'; statusBar.className = 'erro'; return; }
+                if (!resp.ok) throw new Error('Erro ao buscar rota');
+                const dados = await resp.json();
+                dadosGeoJsonAtual = dados.dados_geojson; 
+                mapa.once('load', function() {
+                    desenharRota(dadosGeoJsonAtual);
+                    mostrarInformacoesRota(dadosGeoJsonAtual, dados);
+                    
+                    document.getElementById('btn-iniciar-3d').style.display = 'flex';
+                    document.getElementById('btn-tema-mapa').style.display = 'flex';
+                    document.getElementById('btn-centralizar').style.display = 'flex';
+                    document.getElementById('btn-reportar').style.display = 'flex';
+                });
+                statusBar.innerHTML = `<i class="fas fa-check-circle"></i> Rota "${dados.nome || 'Sem nome'}" carregada!`;
+                statusBar.className = 'sucesso';
+            } catch (erro) { statusBar.innerHTML = `<i class="fas fa-times-circle"></i> ${erro.message}`; statusBar.className = 'erro'; }
+        }
+
+        function desenharRota(geoJson) {
+            if (!geoJson || !mapa) return;
+            try {
+                if (mapa.getLayer('rota-layer')) mapa.removeLayer('rota-layer');
+                if (mapa.getSource('rota-src')) mapa.removeSource('rota-src');
+                const coords = geoJson.features[0].geometry.coordinates;
+                if (!coords || coords.length === 0) return;
+                pathCoordinates = coords;
+
+                const inicio = coords[0]; const fim = coords[coords.length - 1];
+                
+                mapa.addSource('rota-src', { type: 'geojson', data: geoJson });
+
+                mapa.addLayer({
+                    id: 'rota-layer-glow', type: 'line', source: 'rota-src',
+                    paint: {
+                        'line-color': '#3b82f6',
+                        'line-width': 22,
+                        'line-opacity': 0.2,
+                        'line-blur': 15
+                    }
+                });
+                mapa.addLayer({
+                    id: 'rota-layer', type: 'line', source: 'rota-src',
+                    paint: {
+                        'line-color': '#3b82f6',
+                        'line-width': 14,
+                        'line-opacity': 0.9,
+                        'line-offset': 0
+                    }
+                });
+
+                if (marcadorMotorista) { marcadorMotorista.remove(); marcadorMotorista = null; }
+                const elOrigem = document.createElement('div');
+                elOrigem.innerHTML = '<div style="background:#22c55e; color:white; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; border:3px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.3);"><i class="fas fa-flag-checkered"></i></div>';
+                new maplibregl.Marker({ element: elOrigem }).setLngLat(inicio).addTo(mapa);
+                const elDestino = document.createElement('div');
+                elDestino.innerHTML = '<div style="background:#ef4444; color:white; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; border:3px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.3);"><i class="fas fa-location-dot"></i></div>';
+                new maplibregl.Marker({ element: elDestino }).setLngLat(fim).addTo(mapa);
+                
+                const elMotorista = document.createElement('div');
+                elMotorista.innerHTML = `
+                    <div style="background:#3b82f6; color:white; width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:22px; border:4px solid white; box-shadow: 0 6px 16px rgba(0,0,0,0.4); transform: rotate(0deg);">
+                        <i class="fas fa-location-arrow" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));"></i>
+                    </div>
+                `;
+                marcadorMotorista = new maplibregl.Marker({ element: elMotorista }).setLngLat(inicio).addTo(mapa);
+                ultimaPosicaoLngLat = inicio;
+                const bounds = new maplibregl.LngLatBounds();
+                coords.forEach(coord => bounds.extend(coord));
+                mapa.fitBounds(bounds, { padding: 60, maxZoom: 14 });
+            } catch (erro) { console.error('❌ ERRO NA ROTA:', erro.message); }
+        }
+
+        function alternarTemaMapa() {
+            const btn = document.getElementById('btn-tema-mapa');
+            if (temaAtual === 'light') {
+                temaAtual = 'dark'; btn.innerHTML = '<i class="fas fa-sun"></i>'; mapa.setStyle(estiloDark);
+            } else {
+                temaAtual = 'light'; btn.innerHTML = '<i class="fas fa-moon"></i>'; mapa.setStyle(estiloLight);
+            }
+        }
+
+        function centralizarNoCarro() {
+            if (!marcadorMotorista) return;
+            const posicao = marcadorMotorista.getLngLat();
+            if (posicao) {
+                if (modoNavegacaoAtivo) {
+                    mapa.jumpTo({
+                        center: posicao,
+                        zoom: 19,
+                        pitch: 65,
+                        bearing: ultimoBearing
+                    });
+                } else {
+                    mapa.jumpTo({
+                        center: posicao,
+                        zoom: 15,
+                        pitch: 0,
+                        bearing: 0
+                    });
+                }
+            }
+        }
+
+        function calcularDistancia(lat1, lon1, lat2, lon2) {
+            const R = 6371; 
+            const dLat = (lat2 - lat1) * (Math.PI / 180);
+            const dLon = (lon2 - lon1) * (Math.PI / 180);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        }
+
+        function atualizarMetricasRestantes() {
+            if (!modoNavegacaoAtivo || !marcadorMotorista) return;
+            // A partir de agora, a métrica é calculada em tempo real com base na distância percorrida
+            // Para esta versão, manteremos fixo o restante pois o GPS real pode desviar da rota.
+            // Isso pode ser melhorado posteriormente com uma biblioteca de "snapping" (ex: Turf.js)
+        }
+
+        // =============================================
+        // 📡 GPS REAL DO CELULAR
+        // =============================================
+        function iniciarGPSReal() {
+            if (!navigator.geolocation) {
+                alert("Seu navegador não suporta geolocalização. Verifique as permissões.");
+                return;
+            }
+
+            const statusBar = document.getElementById('status-bar');
+            statusBar.innerHTML = '📡 Aguardando sinal de GPS...';
+            statusBar.className = 'carregando';
+
+            watchId = navigator.geolocation.watchPosition(
+                (position) => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const velocidade = position.coords.speed; // em m/s
+
+                    const novaPosicao = [lng, lat];
+                    
+                    // 1. Atualiza o marcador do caminhão
+                    marcadorMotorista.setLngLat(novaPosicao);
+
+                    // 2. Calcula e atualiza a velocidade real no velocímetro
+                    let velocidadeKmh = 0;
+                    if (velocidade !== null && velocidade !== undefined && velocidade >= 0) {
+                        velocidadeKmh = velocidade * 3.6; // m/s para km/h
+                    } else if (ultimaPosicaoLngLat) {
+                        // Fallback: Se o hardware não der a velocidade, calcula pela distância entre os pontos
+                        const dist = calcularDistancia(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
+                        velocidadeKmh = dist / (1 / 3600); // Considera 1 segundo de intervalo (aproximado)
+                    }
+                    document.getElementById('velocidade-valor').textContent = Math.round(velocidadeKmh);
+
+                    // 3. Lógica de perseguição 3D
+                    if (modoNavegacaoAtivo && mapa.loaded()) {
+                        try {
+                            if (ultimaPosicaoLngLat) {
+                                const bearing = calcularBearing(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
+                                ultimoBearing = bearing;
+                                marcadorMotorista._element.querySelector('div').style.transform = `rotate(${bearing}deg)`;
+                                
+                                // Atualiza câmera instantaneamente
+                                mapa.jumpTo({
+                                    center: novaPosicao,
+                                    bearing: bearing,
+                                    pitch: 65,
+                                    zoom: 19
+                                });
+                            } else {
+                                // Primeira leitura
+                                mapa.jumpTo({
+                                    center: novaPosicao,
+                                    bearing: 0,
+                                    pitch: 65,
+                                    zoom: 19
+                                });
+                            }
+                            document.getElementById('velocimetro').style.display = 'flex';
+                            statusBar.innerHTML = '📡 GPS conectado!';
+                            statusBar.className = 'sucesso';
+                            
+                            setTimeout(() => {
+                                statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                                statusBar.className = 'sucesso';
+                            }, 1500);
+
+                        } catch (e) {
+                            console.warn('Erro ao reposicionar mapa via GPS:', e);
+                        }
+                    }
+                    ultimaPosicaoLngLat = novaPosicao;
+                },
+                (error) => {
+                    console.warn("❌ Erro no GPS:", error.message);
+                    let msg = "⚠️ Erro no GPS. ";
+                    if (error.code === error.PERMISSION_DENIED) msg += "Permissão negada.";
+                    else if (error.code === error.POSITION_UNAVAILABLE) msg += "Sinal indisponível.";
+                    else if (error.code === error.TIMEOUT) msg += "Tempo limite excedido.";
+                    
+                    document.getElementById('status-bar').innerHTML = msg;
+                    document.getElementById('status-bar').className = 'erro';
+                },
+                {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                }
+            );
+        }
+
+        function iniciarNavegacao3D() {
+            if (!marcadorMotorista) return;
+            const btn = document.getElementById('btn-iniciar-3d');
+            btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Carregando...';
+            btn.disabled = true;
+            const statusBar = document.getElementById('status-bar');
+            const estiloAtual = temaAtual === 'light' ? estiloLight : estiloDark;
+            mapa.setStyle(estiloAtual);
+
+            setTimeout(() => {
+                if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual);
+                
+                // Ativa o modo 3D
+                modoNavegacaoAtivo = true;
+                btn.style.display = 'none';
+                
+                const posicao = marcadorMotorista.getLngLat();
+                if (posicao) {
+                    mapa.flyTo({
+                        center: posicao,
+                        zoom: 19,
+                        pitch: 65,
+                        bearing: 0,
+                        duration: 2500
+                    });
+                }
+                statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                statusBar.className = 'sucesso';
+
+                document.getElementById('velocimetro').style.display = 'flex';
+
+                // 🎤 Inicia a escuta contínua por voz
+                iniciarEscutaContinua();
+
+                // 📡 Inicia o rastreamento por GPS Real
+                iniciarGPSReal();
+
+            }, 2000); 
+        }
+
+        function calcularBearing(lat1, lon1, lat2, lon2) {
+            const dLon = (lon2 - lon1) * (Math.PI / 180);
+            const y = Math.sin(dLon) * Math.cos(lat2 * (Math.PI / 180));
+            const x = Math.cos(lat1 * (Math.PI / 180)) * Math.sin(lat2 * (Math.PI / 180)) - Math.sin(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.cos(dLon);
+            let bearing = (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
+            return bearing;
+        }
+
+        function mostrarInformacoesRota(geoJson, dadosRota) {
+            const infoDiv = document.getElementById('info-rota');
+            const segmento = geoJson.features[0].properties.segments[0];
+            if (!segmento) return infoDiv.style.display = 'none';
+            const dist = (segmento.distance / 1000).toFixed(1);
+            const dur = segmento.duration;
+            
+            distanciaTotalKm = parseFloat(dist);
+            tempoTotalSegundos = dur;
+
+            const h = Math.floor(dur / 3600);
+            const m = Math.floor((dur % 3600) / 60);
+            const origem = dadosRota.origem || 'Origem'; const destino = dadosRota.destino || 'Destino';
+            let restricoesHtml = '';
+            if (dadosRota.restricoes) {
+                const r = dadosRota.restricoes;
+                restricoesHtml = `<div class="restricoes-box"><i class="fas fa-arrows-up-down"></i> ${r.altura}m &nbsp;|&nbsp; <i class="fas fa-weight-scale"></i> ${r.peso}t &nbsp;|&nbsp; <i class="fas fa-arrows-left-right"></i> ${r.comprimento}m</div>`;
+            }
+            infoDiv.innerHTML = `
+                <div class="route-header"><i class="fas fa-circle-check" style="color:#22c55e;"></i> <span class="orig-dest">${origem}</span> <i class="fas fa-arrow-right" style="color:#52525b; font-size:12px;"></i> <span class="orig-dest">${destino}</span></div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <i class="fas fa-route"></i>
+                        <span id="dist-restante" class="val">${dist}</span> km
+                    </div>
+                    <div class="info-item">
+                        <i class="far fa-clock"></i>
+                        <span id="time-restante" class="val">${h}h ${m}min</span>
+                    </div>
+                </div>
+                ${restricoesHtml}
+                <div id="progresso-viagem"><div class="barra"></div></div>
+            `;
+            infoDiv.style.display = 'block';
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
+                fazerLoginMotorista();
+            }
+        });
+
+        window.onload = function() {
+            inicializarVozes();
+        };
+    </script>
+</body>
+</html>

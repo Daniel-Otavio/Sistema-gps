@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Gestão - GPS Caminhão</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background: #0f0f1a;
+            color: white;
+        }
+
+        /* --- MAPA --- */
+        #mapa {
+            position: fixed;
+            left: 380px;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1;
+        }
+
+        /* --- SIDEBAR (painel de controle) --- */
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 380px;
+            background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
+            padding: 24px 20px;
+            z-index: 1000;
+            overflow-y: auto;
+            box-shadow: 2px 0 20px rgba(0,0,0,0.8);
+            border-right: 1px solid #2a2a3e;
+        }
+
+        .sidebar h1 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 4px;
+        }
+        .sidebar h1::before { content: "📊"; font-size: 28px; }
+        .sidebar .subtitle {
+            font-size: 13px;
+            color: #ff6600;
+            border-bottom: 1px solid #2a2a3e;
+            padding-bottom: 16px;
+            margin-bottom: 20px;
+        }
+
+        /* --- NAVEGAÇÃO POR ABAS --- */
+        .tab-nav {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #2a2a3e;
+            padding-bottom: 10px;
+        }
+        .tab-btn {
+            background: transparent;
+            border: none;
+            color: #888;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            padding: 8px 16px;
+            border-radius: 8px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tab-btn:hover { color: #fff; background: #2a2a3e; }
+        .tab-btn.active {
+            color: #ff6600;
+            background: rgba(255, 102, 0, 0.15);
+        }
+        
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        /* --- GRUPOS DE INPUT --- */
+        .grupo {
+            margin-bottom: 16px;
+        }
+        .grupo label {
+            display: block;
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .grupo input, .grupo select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid #2a2a3e;
+            background: #0a0a12;
+            color: white;
+            font-size: 14px;
+            transition: border 0.2s;
+        }
+        .grupo input:focus, .grupo select:focus {
+            outline: none;
+            border-color: #ff6600;
+        }
+        .grupo select option { background: #1a1a2e; }
+
+        /* --- BOTÕES --- */
+        .btn-primary {
+            width: 100%;
+            padding: 12px;
+            background: #ff6600;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.2s;
+            margin-top: 8px;
+        }
+        .btn-primary:hover { background: #e05a00; transform: scale(1.01); }
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-success {
+            background: #00b894;
+        }
+        .btn-success:hover { background: #00a381; }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .btn-secondary:hover { background: #5a6268; }
+
+        .status-box {
+            margin-top: 16px;
+            padding: 10px;
+            background: #0a0a12;
+            border-radius: 8px;
+            font-size: 13px;
+            text-align: center;
+            border-left: 3px solid #ff6600;
+            min-height: 40px;
+        }
+        .status-box.sucesso { border-left-color: #00b894; color: #00b894; }
+        .status-box.erro { border-left-color: #d63031; color: #d63031; }
+        .status-box.carregando { border-left-color: #fdcb6e; color: #fdcb6e; }
+
+        /* --- LOGIN OVERLAY --- */
+        #login-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(8px);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+        #login-overlay.hidden { display: none; }
+
+        .login-card {
+            background: #1a1a2e;
+            padding: 40px 36px;
+            border-radius: 20px;
+            width: 100%;
+            max-width: 380px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
+            border: 1px solid #2a2a3e;
+        }
+        .login-card h2 {
+            font-size: 28px;
+            margin-bottom: 8px;
+        }
+        .login-card h2 span { color: #ff6600; }
+        .login-card p.sub {
+            color: #aaa;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+        .login-card .grupo { margin-bottom: 20px; }
+        .login-card .btn-primary { margin-top: 0; }
+
+        /* --- Responsivo --- */
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; height: 50%; bottom: auto; position: relative; }
+            #mapa { left: 0; top: 50%; height: 50%; position: relative; }
+            body { overflow: auto; }
+        }
+
+        /* Scrollbar estilizada */
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-track { background: #0a0a12; }
+        .sidebar::-webkit-scrollbar-thumb { background: #ff6600; border-radius: 4px; }
+
+        .user-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #0a0a12;
+            padding: 8px 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 13px;
+        }
+        .user-info .logout-btn {
+            background: none;
+            border: none;
+            color: #d63031;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .user-info .logout-btn:hover { text-decoration: underline; }
+
+        .marker-icon { font-size: 30px; line-height: 30px; text-align: center; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); }
+    </style>
+</head>
+<body>
+
+    <!-- ============================================= -->
+    <!-- TELA DE LOGIN (OVERLAY) -->
+    <!-- ============================================= -->
+    <div id="login-overlay">
+        <div class="login-card">
+            <h2>🚛 <span>GPS</span> Gestão</h2>
+            <p class="sub">Acesse o painel de controle de rotas</p>
+            <div class="grupo">
+                <label>👤 Login</label>
+                <input type="text" id="login-user" placeholder="admin" value="admin">
+            </div>
+            <div class="grupo">
+                <label>🔒 Senha</label>
+                <input type="password" id="login-pass" placeholder="••••••••" value="admin123">
+            </div>
+            <button class="btn-primary" onclick="fazerLogin()">Entrar no Sistema</button>
+            <div id="login-status" class="status-box" style="margin-top: 16px;">Use admin / admin123</div>
+        </div>
+    </div>
+
+    <!-- ============================================= -->
+    <!-- SIDEBAR (PAINEL DE CONTROLE) -->
+    <!-- ============================================= -->
+    <div class="sidebar" id="sidebar-principal">
+        <h1>Gestão de Rotas</h1>
+        <div class="subtitle">Atribuir rotas para motoristas</div>
+
+        <div class="user-info" id="user-info-area">
+            <span>👤 <span id="nome-admin">Admin</span></span>
+            <button class="logout-btn" onclick="fazerLogout()">Sair</button>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- NAVEGAÇÃO ENTRE ABAS (Rotas / Motoristas)  -->
+        <!-- ============================================= -->
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="trocarAba('rotas')">🗺️ Rotas</button>
+            <button class="tab-btn" onclick="trocarAba('motoristas')">👤 Cadastrar</button>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- ABA 1: CRIAÇÃO DE ROTAS                      -->
+        <!-- ============================================= -->
+        <div id="tab-rotas" class="tab-content active">
+            
+            <div class="grupo">
+                <label>👨‍✈️ Nome do Motorista</label>
+                <input type="text" id="nome-motorista" placeholder="Digite o nome do motorista" value="José Silva">
+                <div style="font-size: 11px; color: #888; margin-top: 4px;">O sistema buscará o ID automaticamente ao salvar.</div>
+            </div>
+
+            <div class="grupo">
+                <label>🚗 Tipo de Veículo</label>
+                <select id="tipo-veiculo" onchange="toggleRestricoes()">
+                    <option value="driving-car">Carro (Sem restrições)</option>
+                    <option value="driving-hgv" selected>Caminhão (Com restrições)</option>
+                </select>
+                <div style="font-size: 11px; color: #888; margin-top: 4px;">Use "Carro" para testar rotas locais e evitar bloqueios.</div>
+            </div>
+
+            <div class="grupo">
+                <label>⚙️ Preferência de Rota</label>
+                <select id="preferencia-rota">
+                    <option value="fastest">Mais Rápida (Padrão)</option>
+                    <option value="shortest">Mais Curta</option>
+                    <option value="recommended">Recomendada</option>
+                </select>
+            </div>
+
+            <hr style="border-color: #2a2a3e; margin: 16px 0;">
+
+            <div class="grupo">
+                <label>📌 Nome da Rota</label>
+                <input type="text" id="nome-rota" placeholder="Ex: Entrega SP - RJ" value="Rota Teste 01">
+            </div>
+            <div class="grupo">
+                <label>📍 Origem</label>
+                <input type="text" id="origem" placeholder="Cidade ou endereço" value="São Paulo, SP">
+            </div>
+            <div class="grupo">
+                <label>🏁 Destino</label>
+                <input type="text" id="destino" placeholder="Cidade ou endereço" value="Rio de Janeiro, RJ">
+            </div>
+
+            <!-- Campos de Restrição (Escondidos se for Carro) -->
+            <div id="container-restricoes">
+                <div class="grupo">
+                    <label>📏 Altura (m)</label>
+                    <input type="number" id="altura" value="4.2" step="0.1" min="0.1" max="6">
+                </div>
+                <div class="grupo">
+                    <label>⚖️ Peso (t)</label>
+                    <input type="number" id="peso" value="15" step="1" min="0.1" max="74">
+                </div>
+                <div class="grupo">
+                    <label>📐 Comprimento (m)</label>
+                    <input type="number" id="comprimento" value="12" step="0.5" min="0.1" max="30">
+                </div>
+            </div>
+
+            <button class="btn-primary" id="btn-calcular" onclick="calcularRota()">
+                🗺️ Calcular Rota e Visualizar
+            </button>
+
+            <button class="btn-primary btn-success" id="btn-salvar" onclick="salvarRota()" style="display: none; margin-top: 10px;">
+                💾 Salvar Rota no Banco
+            </button>
+
+            <div id="status-dashboard" class="status-box">Preencha os dados e calcule a rota.</div>
+        </div>
+
+        <!-- ============================================= -->
+        <!-- ABA 2: CADASTRO DE MOTORISTAS                -->
+        <!-- ============================================= -->
+        <div id="tab-motoristas" class="tab-content">
+            <h2 style="font-size: 18px; margin-bottom: 16px;">➕ Cadastrar Novo Motorista</h2>
+            
+            <div class="grupo">
+                <label>👤 Nome do Motorista</label>
+                <input type="text" id="novo-nome" placeholder="Ex: Daniel Otavio">
+            </div>
+            <div class="grupo">
+                <label>🔑 Login</label>
+                <input type="text" id="novo-login" placeholder="Ex: daniel">
+            </div>
+            <div class="grupo">
+                <label>🔒 Senha</label>
+                <input type="password" id="novo-senha" placeholder="Crie uma senha">
+            </div>
+            <div class="grupo" style="margin-bottom: 0;">
+                <button class="btn-primary btn-secondary" onclick="cadastrarMotorista()">
+                    ✅ Cadastrar Motorista
+                </button>
+            </div>
+            <div id="status-cadastro" class="status-box" style="margin-top: 12px;">Preencha os dados para cadastrar.</div>
+        </div>
+
+    </div>
+
+    <!-- ============================================= -->
+    <!-- MAPA -->
+    <!-- ============================================= -->
+    <div id="mapa"></div>
+
+    <!-- ============================================= -->
+    <!-- SCRIPTS -->
+    <!-- ============================================= -->
+    <script>
+        // =============================================
+        // VARIÁVEIS GLOBAIS
+        // =============================================
+        let mapa = null;
+        let rotaAtual = null;
+        let marcadorOrigem = null;
+        let marcadorDestino = null;
+        let tokenJWT = null;
+        let dadosUsuario = null;
+        let geoJsonCalculado = null;
+        let motoristasList = []; 
+
+        const API_BASE = 'http://localhost:3000';
+        const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4YTFkNjA1ODZkMDQwYTk4NWM4YzI0OGRmMWM2MmIxIiwiaCI6Im11cm11cjY0In0=';
+
+        // =============================================
+        // FUNÇÕES DE NAVEGAÇÃO (TROCAR ABAS)
+        // =============================================
+        function trocarAba(aba) {
+            // Remove a classe ativa de todos os botões e conteúdos
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+            // Adiciona a classe ativa na aba selecionada
+            document.querySelector(`.tab-btn[onclick="trocarAba('${aba}')"]`).classList.add('active');
+            document.getElementById(`tab-${aba}`).classList.add('active');
+        }
+
+        // =============================================
+        // LÓGICA DE ESCONDER RESTRIÇÕES (CARRO x CAMINHÃO)
+        // =============================================
+        function toggleRestricoes() {
+            const tipoVeiculo = document.getElementById('tipo-veiculo').value;
+            const containerRestricoes = document.getElementById('container-restricoes');
+
+            if (tipoVeiculo === 'driving-car') {
+                // Esconde os campos de restrição para carro
+                containerRestricoes.style.display = 'none';
+            } else {
+                // Mostra os campos de restrição para caminhão
+                containerRestricoes.style.display = 'block';
+            }
+        }
+
+        // =============================================
+        // INICIALIZAR MAPA
+        // =============================================
+        function initMapa() {
+            if (mapa) return;
+            mapa = L.map('mapa').setView([-23.5505, -46.6333], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap',
+                maxZoom: 19
+            }).addTo(mapa);
+        }
+
+        // =============================================
+        // LOGIN
+        // =============================================
+        async function fazerLogin() {
+            const login = document.getElementById('login-user').value;
+            const senha = document.getElementById('login-pass').value;
+            const statusDiv = document.getElementById('login-status');
+
+            if (!login || !senha) {
+                statusDiv.textContent = '❌ Preencha login e senha!';
+                statusDiv.className = 'status-box erro';
+                return;
+            }
+
+            statusDiv.textContent = '🔄 Autenticando...';
+            statusDiv.className = 'status-box carregando';
+
+            try {
+                const resp = await fetch(`${API_BASE}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ login, senha })
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    throw new Error(data.erro || 'Erro no login');
+                }
+
+                if (data.usuario.tipo !== 'admin') {
+                    throw new Error('Acesso negado. Apenas administradores.');
+                }
+
+                tokenJWT = data.token;
+                dadosUsuario = data.usuario;
+                document.getElementById('nome-admin').textContent = dadosUsuario.nome;
+
+                document.getElementById('login-overlay').classList.add('hidden');
+                document.getElementById('login-status').textContent = '✅ Login realizado!';
+                document.getElementById('login-status').className = 'status-box sucesso';
+
+                initMapa();
+                await carregarMotoristas();
+                
+                // Inicializa o estado dos campos de restrição baseado no veículo padrão
+                toggleRestricoes();
+                
+                atualizarStatus('Dashboard pronto. Crie uma rota!', 'sucesso');
+
+            } catch (erro) {
+                statusDiv.textContent = `❌ ${erro.message}`;
+                statusDiv.className = 'status-box erro';
+                console.error(erro);
+            }
+        }
+
+        function fazerLogout() {
+            tokenJWT = null;
+            dadosUsuario = null;
+            geoJsonCalculado = null;
+            motoristasList = [];
+            document.getElementById('login-overlay').classList.remove('hidden');
+            document.getElementById('login-status').textContent = 'Sessão encerrada. Faça login novamente.';
+            document.getElementById('login-status').className = 'status-box';
+            if (rotaAtual) { mapa.removeLayer(rotaAtual); rotaAtual = null; }
+            if (marcadorOrigem) { mapa.removeLayer(marcadorOrigem); marcadorOrigem = null; }
+            if (marcadorDestino) { mapa.removeLayer(marcadorDestino); marcadorDestino = null; }
+            document.getElementById('btn-salvar').style.display = 'none';
+        }
+
+        // =============================================
+        // CARREGAR MOTORISTAS
+        // =============================================
+        async function carregarMotoristas() {
+            try {
+                const resp = await fetch(`${API_BASE}/motoristas`, {
+                    headers: { 'Authorization': tokenJWT }
+                });
+                if (!resp.ok) throw new Error('Erro ao buscar motoristas');
+                motoristasList = await resp.json();
+                console.log('📋 Lista de motoristas carregada:', motoristasList);
+            } catch (erro) {
+                console.error(erro);
+                atualizarStatus('Erro ao carregar motoristas: ' + erro.message, 'erro');
+            }
+        }
+
+        // =============================================
+        // CADASTRAR MOTORISTA
+        // =============================================
+        async function cadastrarMotorista() {
+            const nome = document.getElementById('novo-nome').value.trim();
+            const login = document.getElementById('novo-login').value.trim();
+            const senha = document.getElementById('novo-senha').value.trim();
+            const statusDiv = document.getElementById('status-cadastro');
+
+            if (!nome || !login || !senha) {
+                statusDiv.textContent = '❌ Preencha todos os campos!';
+                statusDiv.className = 'status-box erro';
+                return;
+            }
+
+            statusDiv.textContent = '🔄 Cadastrando motorista...';
+            statusDiv.className = 'status-box carregando';
+
+            try {
+                const resp = await fetch(`${API_BASE}/motoristas`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': tokenJWT
+                    },
+                    body: JSON.stringify({ nome, login, senha, tipo: 'motorista' })
+                });
+
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    throw new Error(data.erro || 'Erro ao cadastrar');
+                }
+
+                statusDiv.textContent = `✅ Motorista "${nome}" cadastrado com sucesso!`;
+                statusDiv.className = 'status-box sucesso';
+
+                document.getElementById('novo-nome').value = '';
+                document.getElementById('novo-login').value = '';
+                document.getElementById('novo-senha').value = '';
+
+                await carregarMotoristas();
+                atualizarStatus(`Motorista "${nome}" cadastrado! Já pode ser selecionado.`, 'sucesso');
+
+                // Opcional: Trocar para a aba de rotas automaticamente após o cadastro?
+                // trocarAba('rotas'); // Descomente se quiser essa funcionalidade
+
+            } catch (erro) {
+                statusDiv.textContent = `❌ Erro: ${erro.message}`;
+                statusDiv.className = 'status-box erro';
+                console.error(erro);
+            }
+        }
+
+        // =============================================
+        // CALCULAR ROTA
+        // =============================================
+        async function calcularRota() {
+            let altura = parseFloat(document.getElementById('altura').value);
+            let peso = parseFloat(document.getElementById('peso').value);
+            let comprimento = parseFloat(document.getElementById('comprimento').value);
+            const origem = document.getElementById('origem').value;
+            const destino = document.getElementById('destino').value;
+            const preferencia = document.getElementById('preferencia-rota').value;
+            const perfil = document.getElementById('tipo-veiculo').value;
+
+            // Validação de segurança: Se os campos estiverem ocultos (Carro), a gente garante que não vão quebrar o cálculo
+            if (isNaN(altura) || altura === 0) altura = 2.5;
+            if (isNaN(peso) || peso === 0) peso = 10;
+            if (isNaN(comprimento) || comprimento === 0) comprimento = 10;
+
+            if (!origem || !destino) {
+                atualizarStatus('Preencha origem e destino!', 'erro');
+                return;
+            }
+
+            atualizarStatus('🔄 Geocodificando endereços...', 'carregando');
+            document.getElementById('btn-salvar').style.display = 'none';
+
+            try {
+                const coordsOrigem = await geocodificar(origem);
+                const coordsDestino = await geocodificar(destino);
+                if (!coordsOrigem || !coordsDestino) {
+                    throw new Error('Não foi possível encontrar as coordenadas dos locais');
+                }
+
+                atualizarStatus('🔄 Calculando rota na OpenRouteService...', 'carregando');
+
+                const rota = await chamarAPIRota(coordsOrigem, coordsDestino, altura, peso, comprimento, preferencia, perfil);
+                
+                if (!rota || !rota.features || rota.features.length === 0) {
+                    throw new Error('Nenhuma rota encontrada para esses parâmetros');
+                }
+
+                geoJsonCalculado = rota;
+                desenharRota(rota);
+
+                const seg = rota.features[0].properties.segments[0];
+                const dist = (seg.distance / 1000).toFixed(1);
+                const dur = seg.duration;
+                const h = Math.floor(dur / 3600);
+                const m = Math.floor((dur % 3600) / 60);
+                atualizarStatus(`✅ Rota calculada! Distância: ${dist}km, Tempo: ${h}h ${m}min.`, 'sucesso');
+
+                document.getElementById('btn-salvar').style.display = 'block';
+
+            } catch (erro) {
+                console.error(erro);
+                const detalheApi = erro.detalheORS ? ` (${erro.detalheORS})` : '';
+                atualizarStatus('❌ Erro ao calcular rota: ' + erro.message + detalheApi, 'erro');
+                document.getElementById('btn-salvar').style.display = 'none';
+            }
+        }
+
+        // =============================================
+        // SALVAR ROTA
+        // =============================================
+        async function salvarRota() {
+            if (!geoJsonCalculado) {
+                atualizarStatus('Calcule a rota primeiro antes de salvar!', 'erro');
+                return;
+            }
+
+            const nome = document.getElementById('nome-rota').value || 'Rota sem nome';
+            const origem = document.getElementById('origem').value;
+            const destino = document.getElementById('destino').value;
+            const altura = parseFloat(document.getElementById('altura').value);
+            const peso = parseFloat(document.getElementById('peso').value);
+            const comprimento = parseFloat(document.getElementById('comprimento').value);
+            const nomeMotorista = document.getElementById('nome-motorista').value.trim();
+
+            if (!nomeMotorista) {
+                atualizarStatus('Digite o nome do motorista!', 'erro');
+                return;
+            }
+
+            const motoristaEncontrado = motoristasList.find(m => m.nome.toLowerCase() === nomeMotorista.toLowerCase());
+            if (!motoristaEncontrado) {
+                atualizarStatus(`❌ Motorista "${nomeMotorista}" não encontrado no sistema.`, 'erro');
+                return;
+            }
+
+            const restricoes = { altura, peso, comprimento };
+
+            const payload = {
+                nome,
+                origem,
+                destino,
+                restricoes,
+                dados_geojson: geoJsonCalculado,
+                id_motorista: motoristaEncontrado.id
+            };
+
+            atualizarStatus('🔄 Salvando rota no banco de dados...', 'carregando');
+
+            try {
+                const resp = await fetch(`${API_BASE}/rotas`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': tokenJWT
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.erro || 'Erro ao salvar');
+
+                atualizarStatus(`✅ Rota "${nome}" salva para ${nomeMotorista} com sucesso! ID: ${data.id}`, 'sucesso');
+                document.getElementById('btn-salvar').style.display = 'none';
+                geoJsonCalculado = null;
+
+            } catch (erro) {
+                console.error(erro);
+                atualizarStatus('❌ Erro ao salvar rota: ' + erro.message, 'erro');
+            }
+        }
+
+        // =============================================
+        // FUNÇÕES AUXILIARES
+        // =============================================
+        async function geocodificar(endereco) {
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(endereco)}&limit=1`;
+            const resp = await fetch(url, { headers: { 'User-Agent': 'GPS-Caminhao-Dashboard/1.0' } });
+            const data = await resp.json();
+            if (data && data.length > 0) {
+                return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+            }
+            return null;
+        }
+
+        async function chamarAPIRota(origem, destino, altura, peso, comprimento, preferencia, perfil) {
+            const url = `https://api.openrouteservice.org/v2/directions/${perfil}/geojson`;
+            
+            const body = {
+                coordinates: [
+                    [origem.lon, origem.lat],
+                    [destino.lon, destino.lat]
+                ],
+                preference: preferencia || 'fastest'
+            };
+
+            if (perfil === 'driving-hgv') {
+                body.options = {
+                    profile_params: {
+                        restrictions: {
+                            height: altura,
+                            weight: peso,
+                            length: comprimento,
+                            width: 2.6
+                        }
+                    }
+                };
+            }
+            
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': ORS_API_KEY
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!resp.ok) {
+                let detalheErro = `Erro ${resp.status}`;
+                try {
+                    const erroJson = await resp.json();
+                    if (erroJson.error && erroJson.error.message) {
+                        detalheErro += `: ${erroJson.error.message}`;
+                    }
+                } catch (e) {}
+                const erro = new Error(`API ORS retornou ${detalheErro}`);
+                erro.detalheORS = detalheErro;
+                throw erro;
+            }
+            return await resp.json();
+        }
+
+        function desenharRota(rotaData) {
+            if (rotaAtual) { mapa.removeLayer(rotaAtual); rotaAtual = null; }
+            if (marcadorOrigem) { mapa.removeLayer(marcadorOrigem); marcadorOrigem = null; }
+            if (marcadorDestino) { mapa.removeLayer(marcadorDestino); marcadorDestino = null; }
+
+            if (!rotaData) return;
+
+            const geometria = rotaData.features[0].geometry;
+            rotaAtual = L.geoJSON(geometria, {
+                color: '#ff6600',
+                weight: 6,
+                opacity: 0.9,
+                dashArray: '10, 10'
+            }).addTo(mapa);
+
+            const coords = rotaData.features[0].geometry.coordinates;
+            const inicio = coords[0];
+            const fim = coords[coords.length - 1];
+
+            marcadorOrigem = L.marker([inicio[1], inicio[0]], {
+                icon: L.divIcon({ html: '🚛', className: 'marker-icon', iconSize: [30, 30] })
+            }).addTo(mapa).bindPopup('📍 Origem');
+
+            marcadorDestino = L.marker([fim[1], fim[0]], {
+                icon: L.divIcon({ html: '🏁', className: 'marker-icon', iconSize: [30, 30] })
+            }).addTo(mapa).bindPopup('🏁 Destino');
+
+            const bounds = rotaAtual.getBounds();
+            mapa.fitBounds(bounds, { padding: [50, 50] });
+        }
+
+        function atualizarStatus(msg, tipo) {
+            const div = document.getElementById('status-dashboard');
+            div.textContent = msg;
+            div.className = 'status-box ' + (tipo || '');
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
+                fazerLogin();
+            }
+        });
+
+        window.onload = function() {
+            document.getElementById('login-status').textContent = 'Use admin / admin123 para testar';
+        };
+    </script>
+</body>
+</html>
