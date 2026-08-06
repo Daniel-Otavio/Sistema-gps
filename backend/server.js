@@ -110,7 +110,6 @@ function autenticar(req, res, next) {
 // 🧪 ROTA DE TESTE (MAPA COMPLETO - SEM API EXTERNA)
 // ==============================================
 app.get('/teste-rota', (req, res) => {
-  // GeoJSON de exemplo: Uma rota de São Paulo (SP) para Rio de Janeiro (RJ)
   const rotaExemplo = {
     type: "FeatureCollection",
     features: [
@@ -140,7 +139,6 @@ app.get('/teste-rota', (req, res) => {
         }
       }
     ],
-    // Metadados adicionais para teste
     info: {
       origem: "São Paulo, SP",
       destino: "Rio de Janeiro, RJ",
@@ -157,13 +155,12 @@ app.get('/teste-rota', (req, res) => {
 });
 
 // ---------- ROTAS PÚBLICAS ----------
-// Rota raiz (boas-vindas)
 app.get('/', (req, res) => {
   res.json({ 
     mensagem: '🚀 API do GPS Caminhão está rodando!',
     endpoints: {
       publicos: ['POST /login', 'GET /teste-rota'],
-      protegidos_admin: ['GET /motoristas', 'POST /motoristas', 'POST /rotas', 'GET /localizacoes'],
+      protegidos_admin: ['GET /motoristas', 'POST /motoristas', 'POST /rotas', 'GET /rotas', 'GET /localizacoes'],
       protegidos_motorista: ['GET /rotas/minha-rota', 'PATCH /rotas/:id/status', 'POST /localizacao']
     }
   });
@@ -193,7 +190,6 @@ app.post('/login', (req, res) => {
         return res.status(401).json({ erro: 'Senha incorreta' });
       }
 
-      // Gerar token JWT
       const token = jwt.sign(
         { id: user.id, login: user.login, tipo: user.tipo },
         process.env.JWT_SECRET,
@@ -213,7 +209,7 @@ app.post('/login', (req, res) => {
 });
 
 // ---------- ROTAS PROTEGIDAS (ADMIN) ----------
-// Listar todos os motoristas (apenas admin)
+// Listar todos os motoristas
 app.get('/motoristas', autenticar, (req, res) => {
   if (req.usuario.tipo !== 'admin') {
     return res.status(403).json({ erro: 'Acesso negado' });
@@ -230,7 +226,7 @@ app.get('/motoristas', autenticar, (req, res) => {
   );
 });
 
-// 🆕 CADASTRAR UM NOVO MOTORISTA (ADMIN)
+// Cadastrar um novo motorista
 app.post('/motoristas', autenticar, (req, res) => {
   if (req.usuario.tipo !== 'admin') {
     return res.status(403).json({ erro: 'Acesso negado' });
@@ -242,7 +238,6 @@ app.post('/motoristas', autenticar, (req, res) => {
     return res.status(400).json({ erro: 'Nome, login e senha são obrigatórios' });
   }
 
-  // Verificar se o login já existe
   db.get(`SELECT id FROM usuarios WHERE login = ?`, [login], (err, row) => {
     if (err) {
       return res.status(500).json({ erro: err.message });
@@ -251,10 +246,8 @@ app.post('/motoristas', autenticar, (req, res) => {
       return res.status(400).json({ erro: 'Login já está em uso' });
     }
 
-    // Criptografar a senha
     const senhaHash = bcrypt.hashSync(senha, 10);
 
-    // Inserir o novo motorista
     db.run(
       `INSERT INTO usuarios (nome, tipo, login, senha) VALUES (?, 'motorista', ?, ?)`,
       [nome, login, senhaHash],
@@ -273,7 +266,7 @@ app.post('/motoristas', autenticar, (req, res) => {
   });
 });
 
-// Criar uma nova rota (admin)
+// Criar uma nova rota
 app.post('/rotas', autenticar, (req, res) => {
   if (req.usuario.tipo !== 'admin') {
     return res.status(403).json({ erro: 'Acesso negado' });
@@ -308,6 +301,33 @@ app.post('/rotas', autenticar, (req, res) => {
   );
 });
 
+// 🔹 NOVA ROTA: Listar todas as rotas (apenas admin - Debug)
+app.get('/rotas', autenticar, (req, res) => {
+  if (req.usuario.tipo !== 'admin') {
+    return res.status(403).json({ erro: 'Acesso negado' });
+  }
+
+  db.all(
+    `SELECT * FROM rotas ORDER BY criada_em DESC`,
+    (err, rows) => {
+      if (err) {
+        return res.status(500).json({ erro: err.message });
+      }
+      // Tenta parsear os JSONs para enviar ao Dashboard
+      const rotasFormatadas = rows.map(row => {
+        try {
+          row.restricoes = JSON.parse(row.restricoes);
+        } catch (e) { row.restricoes = {}; }
+        try {
+          row.dados_geojson = JSON.parse(row.dados_geojson);
+        } catch (e) { row.dados_geojson = null; }
+        return row;
+      });
+      res.json(rotasFormatadas);
+    }
+  );
+});
+
 // ---------- ROTAS PROTEGIDAS (MOTORISTA) ----------
 // Buscar a rota ativa do motorista logado
 app.get('/rotas/minha-rota', autenticar, (req, res) => {
@@ -330,7 +350,6 @@ app.get('/rotas/minha-rota', autenticar, (req, res) => {
         return res.status(404).json({ mensagem: 'Nenhuma rota ativa encontrada' });
       }
 
-      // Parse dos JSONs antes de enviar
       try {
         row.restricoes = JSON.parse(row.restricoes);
         row.dados_geojson = JSON.parse(row.dados_geojson);
