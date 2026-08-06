@@ -147,6 +147,7 @@
         }
         .btn-secondary:hover { background: #5a6268; }
 
+        /* --- STATUS BOX --- */
         .status-box {
             margin-top: 16px;
             padding: 10px;
@@ -341,6 +342,12 @@
                 💾 Salvar Rota no Banco
             </button>
 
+            <hr style="border-color: #2a2a3e; margin: 16px 0;">
+
+            <button class="btn-primary btn-danger" onclick="testarListarRotas()" style="background: #d63031;">
+                👁️ Verificar Rotas Salvas (Debug)
+            </button>
+
             <div id="status-dashboard" class="status-box">Preencha os dados e calcule a rota.</div>
         </div>
 
@@ -393,41 +400,29 @@
         let geoJsonCalculado = null;
         let motoristasList = []; 
 
-        const API_BASE = 'http://localhost:3000';
+        const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
         const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4YTFkNjA1ODZkMDQwYTk4NWM4YzI0OGRmMWM2MmIxIiwiaCI6Im11cm11cjY0In0=';
 
         // =============================================
-        // FUNÇÕES DE NAVEGAÇÃO (TROCAR ABAS)
+        // FUNÇÕES DE NAVEGAÇÃO
         // =============================================
         function trocarAba(aba) {
-            // Remove a classe ativa de todos os botões e conteúdos
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-
-            // Adiciona a classe ativa na aba selecionada
             document.querySelector(`.tab-btn[onclick="trocarAba('${aba}')"]`).classList.add('active');
             document.getElementById(`tab-${aba}`).classList.add('active');
         }
 
-        // =============================================
-        // LÓGICA DE ESCONDER RESTRIÇÕES (CARRO x CAMINHÃO)
-        // =============================================
         function toggleRestricoes() {
             const tipoVeiculo = document.getElementById('tipo-veiculo').value;
             const containerRestricoes = document.getElementById('container-restricoes');
-
             if (tipoVeiculo === 'driving-car') {
-                // Esconde os campos de restrição para carro
                 containerRestricoes.style.display = 'none';
             } else {
-                // Mostra os campos de restrição para caminhão
                 containerRestricoes.style.display = 'block';
             }
         }
 
-        // =============================================
-        // INICIALIZAR MAPA
-        // =============================================
         function initMapa() {
             if (mapa) return;
             mapa = L.map('mapa').setView([-23.5505, -46.6333], 13);
@@ -482,9 +477,7 @@
                 initMapa();
                 await carregarMotoristas();
                 
-                // Inicializa o estado dos campos de restrição baseado no veículo padrão
                 toggleRestricoes();
-                
                 atualizarStatus('Dashboard pronto. Crie uma rota!', 'sucesso');
 
             } catch (erro) {
@@ -508,9 +501,6 @@
             document.getElementById('btn-salvar').style.display = 'none';
         }
 
-        // =============================================
-        // CARREGAR MOTORISTAS
-        // =============================================
         async function carregarMotoristas() {
             try {
                 const resp = await fetch(`${API_BASE}/motoristas`, {
@@ -525,9 +515,6 @@
             }
         }
 
-        // =============================================
-        // CADASTRAR MOTORISTA
-        // =============================================
         async function cadastrarMotorista() {
             const nome = document.getElementById('novo-nome').value.trim();
             const login = document.getElementById('novo-login').value.trim();
@@ -569,9 +556,6 @@
                 await carregarMotoristas();
                 atualizarStatus(`Motorista "${nome}" cadastrado! Já pode ser selecionado.`, 'sucesso');
 
-                // Opcional: Trocar para a aba de rotas automaticamente após o cadastro?
-                // trocarAba('rotas'); // Descomente se quiser essa funcionalidade
-
             } catch (erro) {
                 statusDiv.textContent = `❌ Erro: ${erro.message}`;
                 statusDiv.className = 'status-box erro';
@@ -579,9 +563,6 @@
             }
         }
 
-        // =============================================
-        // CALCULAR ROTA
-        // =============================================
         async function calcularRota() {
             let altura = parseFloat(document.getElementById('altura').value);
             let peso = parseFloat(document.getElementById('peso').value);
@@ -591,7 +572,6 @@
             const preferencia = document.getElementById('preferencia-rota').value;
             const perfil = document.getElementById('tipo-veiculo').value;
 
-            // Validação de segurança: Se os campos estiverem ocultos (Carro), a gente garante que não vão quebrar o cálculo
             if (isNaN(altura) || altura === 0) altura = 2.5;
             if (isNaN(peso) || peso === 0) peso = 10;
             if (isNaN(comprimento) || comprimento === 0) comprimento = 10;
@@ -640,7 +620,7 @@
         }
 
         // =============================================
-        // SALVAR ROTA
+        // SALVAR ROTA (COM TRATAMENTO DE ERROS)
         // =============================================
         async function salvarRota() {
             if (!geoJsonCalculado) {
@@ -678,6 +658,8 @@
                 id_motorista: motoristaEncontrado.id
             };
 
+            console.log("📦 Enviando payload da rota:", payload);
+
             atualizarStatus('🔄 Salvando rota no banco de dados...', 'carregando');
 
             try {
@@ -691,15 +673,59 @@
                 });
 
                 const data = await resp.json();
-                if (!resp.ok) throw new Error(data.erro || 'Erro ao salvar');
+
+                if (!resp.ok) {
+                    console.error("❌ Erro do Backend ao salvar:", data);
+                    atualizarStatus(`❌ Erro: ${data.erro || 'Erro desconhecido no servidor.'}`, 'erro');
+                    return;
+                }
 
                 atualizarStatus(`✅ Rota "${nome}" salva para ${nomeMotorista} com sucesso! ID: ${data.id}`, 'sucesso');
                 document.getElementById('btn-salvar').style.display = 'none';
                 geoJsonCalculado = null;
 
             } catch (erro) {
+                console.error("❌ Erro de rede ou parse:", erro);
+                atualizarStatus(`❌ Erro ao salvar rota: ${erro.message}`, 'erro');
+            }
+        }
+
+        // =============================================
+        // 🔍 FUNÇÃO DE DEBUG (LISTAR ROTAS)
+        // =============================================
+        async function testarListarRotas() {
+            const statusDiv = document.getElementById('status-dashboard');
+            statusDiv.innerHTML = '🔄 Buscando rotas no servidor...';
+            statusDiv.className = 'status-box carregando';
+
+            try {
+                const resp = await fetch(`${API_BASE}/rotas`, {
+                    headers: { 'Authorization': tokenJWT }
+                });
+
+                if (!resp.ok) throw new Error('Erro ao buscar rotas');
+                const rotas = await resp.json();
+
+                if (rotas.length === 0) {
+                    statusDiv.innerHTML = '📭 Nenhuma rota encontrada no banco.';
+                    statusDiv.className = 'status-box erro';
+                    return;
+                }
+
+                let texto = `✅ ${rotas.length} rota(s) encontradas:<br><br>`;
+                rotas.forEach(r => {
+                    texto += `🔹 <strong>${r.nome}</strong><br>`;
+                    texto += `&nbsp;&nbsp;ID: ${r.id} | Motorista ID: ${r.id_motorista} | Status: ${r.status}<br>`;
+                    texto += `&nbsp;&nbsp;Origem: ${r.origem} -> Destino: ${r.destino}<br><br>`;
+                });
+
+                statusDiv.innerHTML = texto;
+                statusDiv.className = 'status-box sucesso';
+
+            } catch (erro) {
                 console.error(erro);
-                atualizarStatus('❌ Erro ao salvar rota: ' + erro.message, 'erro');
+                statusDiv.innerHTML = `❌ Erro: ${erro.message}`;
+                statusDiv.className = 'status-box erro';
             }
         }
 
