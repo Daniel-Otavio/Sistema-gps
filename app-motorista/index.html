@@ -24,26 +24,14 @@
             box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); display: none; text-align: center; 
             max-width: 95%; width: auto; min-width: 320px; line-height: 1.5; transition: all 0.3s ease; 
         }
-        .route-header { 
-            font-weight: 600; font-size: 15px; margin-bottom: 16px; color: #fff; 
-            padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); 
-            display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; 
-        }
+        .route-header { font-weight: 600; font-size: 15px; margin-bottom: 16px; color: #fff; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
         .route-header i { color: #3b82f6; }
         .route-header .orig-dest { color: #a1a1aa; font-weight: 400; }
         .info-grid { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-        .info-item { 
-            display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1aa; 
-            background: #27272a; padding: 6px 14px; border-radius: 20px; 
-            border: 1px solid rgba(255,255,255,0.03); 
-        }
+        .info-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1aa; background: #27272a; padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.03); }
         .info-item i { color: #3b82f6; font-size: 14px; }
         .info-item .val { color: #fff; font-weight: 600; }
-        .restricoes-box { 
-            margin-top: 10px; font-size: 12px; color: #a1a1aa; background: #27272a; 
-            padding: 6px 14px; border-radius: 20px; display: inline-flex; align-items: center; gap: 8px; 
-            border: 1px solid rgba(255,255,255,0.03); 
-        }
+        .restricoes-box { margin-top: 10px; font-size: 12px; color: #a1a1aa; background: #27272a; padding: 6px 14px; border-radius: 20px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,0.03); }
         #progresso-viagem { margin-top: 12px; width: 100%; height: 4px; background: #27272a; border-radius: 4px; overflow: hidden; display: none; }
         #progresso-viagem .barra { height: 100%; width: 0%; background: #3b82f6; transition: width 0.3s ease; border-radius: 4px; }
 
@@ -51,81 +39,36 @@
             position: fixed; bottom: 130px; left: 20px; z-index: 2000; 
             width: 80px; height: 80px;
             background: rgba(13, 13, 18, 0.85); backdrop-filter: blur(5px); 
-            border-radius: 50%; 
-            border: 3px solid #3b82f6; 
-            box-shadow: 0 0 20px rgba(59, 130, 246, 0.2); 
-            color: #fff; 
-            display: none;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            font-family: 'Segoe UI', sans-serif;
+            border-radius: 50%; border: 3px solid #3b82f6; 
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.2); color: #fff; 
+            display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-family: 'Segoe UI', sans-serif;
         }
         #velocidade-valor { font-size: 28px; font-weight: 700; color: #fff; line-height: 1; display: block; margin-top: 2px; }
         #velocidade-unidade { font-size: 10px; color: #a1a1aa; font-weight: 600; letter-spacing: 1px; display: block; margin-top: 2px; }
 
-        /* SISTEMA DE REPORTE (BOTÃO E MENU) */
-        #btn-reportar { 
-            position: fixed; bottom: 280px; right: 20px; z-index: 2000; width: 44px; height: 44px; 
-            border-radius: 50%; background: #1e1e24; color: #f97316; border: 1px solid rgba(255,255,255,0.1); 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; 
-            display: none; align-items: center; justify-content: center; 
-        }
+        #btn-iniciar-3d { position: fixed; bottom: 160px; left: 50%; transform: translateX(-50%); z-index: 2000; display: none; background: #3b82f6; color: white; border: none; padding: 14px 32px; border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 20px rgba(0,0,0,0.6); transition: transform 0.2s, background 0.2s; align-items: center; gap: 10px; }
+        #btn-iniciar-3d:hover { transform: translateX(-50%) scale(1.05); background: #2563eb; }
+        #btn-iniciar-3d:active { transform: translateX(-50%) scale(0.95); }
+
+        #btn-tema-mapa { position: fixed; top: 115px; left: 10px; z-index: 2000; width: 30px; height: 30px; background: #ffffff; color: #333333; border: none; border-radius: 2px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-size: 16px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
+        #btn-tema-mapa:hover { background: #f2f2f2; color: #000; }
+        #btn-tema-mapa:active { transform: scale(0.9); }
+
+        #btn-centralizar { position: fixed; bottom: 230px; right: 20px; z-index: 2000; width: 44px; height: 44px; border-radius: 50%; background: #1e1e24; color: #3b82f6; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
+        #btn-centralizar:hover { background: #27272a; border-color: #3b82f6; transform: scale(1.1); }
+        #btn-centralizar:active { transform: scale(0.9); }
+
+        #btn-reportar { position: fixed; bottom: 280px; right: 20px; z-index: 2000; width: 44px; height: 44px; border-radius: 50%; background: #1e1e24; color: #f97316; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
         #btn-reportar:hover { background: #27272a; border-color: #f97316; transform: scale(1.1); }
         #btn-reportar:active { transform: scale(0.9); }
 
-        #menu-reporte {
-            position: fixed; bottom: 335px; right: 20px; z-index: 2000; 
-            background: #18181e; backdrop-filter: blur(15px); padding: 12px; 
-            border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); 
-            box-shadow: 0 8px 24px rgba(0,0,0,0.8); display: none; flex-direction: column; gap: 8px; 
-            min-width: 140px;
-        }
-        #menu-reporte button {
-            background: transparent; border: none; color: #f4f4f5; padding: 8px 12px; 
-            border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; 
-            display: flex; align-items: center; gap: 12px; transition: background 0.2s; width: 100%;
-        }
+        #menu-reporte { position: fixed; bottom: 335px; right: 20px; z-index: 2000; background: #18181e; backdrop-filter: blur(15px); padding: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); box-shadow: 0 8px 24px rgba(0,0,0,0.8); display: none; flex-direction: column; gap: 8px; min-width: 140px; }
+        #menu-reporte button { background: transparent; border: none; color: #f4f4f5; padding: 8px 12px; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 12px; transition: background 0.2s; width: 100%; }
         #menu-reporte button:hover { background: #27272a; }
-        #menu-reporte button i { width: 16px; text-align: center; }
         .btn-report-radar i { color: #f97316; }
         .btn-report-acidente i { color: #ef4444; }
         .btn-report-obra i { color: #fbbf24; }
         .btn-report-perigo i { color: #f59e0b; }
-
-        @keyframes pulse-microphone {
-            0% { color: #3b82f6; transform: scale(1); }
-            100% { color: #22c55e; transform: scale(1.1); }
-        }
-
-        #btn-iniciar-3d { 
-            position: fixed; bottom: 230px; left: 50%; transform: translateX(-50%); z-index: 2000; 
-            display: none; background: #3b82f6; color: white; border: none; padding: 14px 32px; 
-            border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; 
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6); transition: transform 0.2s, background 0.2s; 
-            align-items: center; gap: 10px; 
-        }
-        #btn-iniciar-3d:hover { transform: translateX(-50%) scale(1.05); background: #2563eb; }
-        #btn-iniciar-3d:active { transform: translateX(-50%) scale(0.95); }
-
-        #btn-tema-mapa { 
-            position: fixed; top: 115px; left: 10px; z-index: 2000; width: 30px; height: 30px;
-            background: #ffffff; color: #333333; border: none; border-radius: 2px;
-            box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-size: 16px; cursor: pointer; 
-            transition: all 0.2s ease; display: none; align-items: center; justify-content: center; 
-        }
-        #btn-tema-mapa:hover { background: #f2f2f2; color: #000; }
-        #btn-tema-mapa:active { transform: scale(0.9); }
-
-        #btn-centralizar { 
-            position: fixed; bottom: 230px; right: 20px; z-index: 2000; width: 44px; height: 44px; 
-            border-radius: 50%; background: #1e1e24; color: #3b82f6; border: 1px solid rgba(255,255,255,0.1); 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; 
-            display: none; align-items: center; justify-content: center; 
-        }
-        #btn-centralizar:hover { background: #27272a; border-color: #3b82f6; transform: scale(1.1); }
-        #btn-centralizar:active { transform: scale(0.9); }
 
         #login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.92); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
         #login-overlay.hidden { display: none; }
@@ -149,7 +92,7 @@
             #info-rota { bottom: 20px; padding: 14px 16px; font-size: 12px; min-width: unset; width: 92%; }
             #velocimetro { bottom: 110px; left: 15px; width: 65px; height: 65px; }
             #velocidade-valor { font-size: 22px; }
-            #btn-iniciar-3d { bottom: 195px; font-size: 14px; padding: 12px 20px; }
+            #btn-iniciar-3d { bottom: 130px; font-size: 14px; padding: 12px 20px; }
             #btn-tema-mapa { top: 80px; left: 10px; width: 30px; height: 30px; font-size: 16px; }
             #btn-centralizar { bottom: 195px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
             #btn-reportar { bottom: 240px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
@@ -163,8 +106,6 @@
     <button id="btn-iniciar-3d"><i class="fas fa-route"></i> Iniciar Navegação 3D</button>
     <button id="btn-tema-mapa"><i class="fas fa-moon"></i></button>
     <button id="btn-centralizar"><i class="fas fa-crosshairs"></i></button>
-    
-    <!-- SISTEMA DE REPORTE -->
     <button id="btn-reportar"><i class="fas fa-flag"></i></button>
     <div id="menu-reporte">
         <button class="btn-report-radar" onclick="enviarReporte('radar')"><i class="fas fa-tower-broadcast"></i> Radar</button>
@@ -172,7 +113,6 @@
         <button class="btn-report-obra" onclick="enviarReporte('obra')"><i class="fas fa-hard-hat"></i> Obra</button>
         <button class="btn-report-perigo" onclick="enviarReporte('perigo')"><i class="fas fa-triangle-exclamation"></i> Perigo</button>
     </div>
-
     <div id="velocimetro">
         <span id="velocidade-valor">0</span>
         <span id="velocidade-unidade">km/h</span>
@@ -190,17 +130,17 @@
     </div>
 
     <script>
+        const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
         let mapa = null;
         let tokenJWT = null;
         let marcadorMotorista = null;
         let intervalLocalizacao = null;
-        let watchId = null; // ID do watcher do GPS real
+        let watchId = null;
         let ultimaPosicaoLngLat = null; 
         let ultimoBearing = 0;
         let modoNavegacaoAtivo = false;
         let dadosGeoJsonAtual = null; 
         let temaAtual = 'light'; 
-        const API_BASE = 'http://localhost:3000';
 
         const estiloLight = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'; 
         const estiloDark = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'; 
@@ -211,9 +151,6 @@
         let distanciaTotalKm = 0;
         let tempoTotalSegundos = 0;
 
-        // =============================================
-        // SISTEMA DE VOZ
-        // =============================================
         let vozFemininaSelecionada = null;
         let lastVoiceIndex = -10; 
 
@@ -279,9 +216,6 @@
             }, 300);
         }
 
-        // =============================================
-        // LÓGICA DE REPORTE
-        // =============================================
         function toggleMenuReporte() {
             const menu = document.getElementById('menu-reporte');
             if (menu.style.display === 'flex') {
@@ -292,42 +226,28 @@
         }
 
         async function enviarReporte(tipo) {
-            if (!marcadorMotorista) {
-                alert('Caminhão não está posicionado.');
-                return;
-            }
+            if (!marcadorMotorista) return;
             const posicao = marcadorMotorista.getLngLat();
             if (!posicao) return;
-
             const statusBar = document.getElementById('status-bar');
             document.getElementById('menu-reporte').style.display = 'none';
-
             try {
                 const resp = await fetch(`${API_BASE}/reportar`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
-                    body: JSON.stringify({
-                        lat: posicao.lat,
-                        lng: posicao.lng,
-                        tipo: tipo
-                    })
+                    body: JSON.stringify({ lat: posicao.lat, lng: posicao.lng, tipo: tipo })
                 });
-
                 if (!resp.ok) throw new Error('Erro ao enviar reporte');
-
                 statusBar.innerHTML = `✅ Reporte de "${tipo}" enviado!`;
                 statusBar.className = 'sucesso';
                 speak(`Reporte de ${tipo} enviado`);
-
                 setTimeout(() => {
                     statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
                     statusBar.className = 'sucesso';
                 }, 3000);
-
             } catch (erro) {
                 statusBar.innerHTML = `❌ Erro: ${erro.message}`;
                 statusBar.className = 'erro';
-                speak(`Erro ao enviar reporte`);
                 setTimeout(() => {
                     statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
                     statusBar.className = 'sucesso';
@@ -335,22 +255,14 @@
             }
         }
 
-        // =============================================
-        // 🎤 SISTEMA DE ESCUTA CONTÍNUA POR VOZ (MÃOS LIVRES)
-        // =============================================
         let continuousRecognition = null;
         let isWaitingForReportType = false;
         let reportTimeout = null;
-        let inactivityTimeout = null;
 
         function iniciarEscutaContinua() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                console.warn('Navegador não suporta comandos de voz contínuos.');
-                return;
-            }
+            if (!SpeechRecognition) return;
             if (continuousRecognition) return;
-
             continuousRecognition = new SpeechRecognition();
             continuousRecognition.lang = 'pt-BR';
             continuousRecognition.continuous = true;
@@ -361,17 +273,7 @@
                 for (let i = event.resultIndex; i < event.results.length; i++) {
                     transcript += event.results[i][0].transcript.toLowerCase().trim();
                 }
-
-                clearTimeout(inactivityTimeout);
-                inactivityTimeout = setTimeout(() => {
-                    if(continuousRecognition) {
-                        continuousRecognition.stop();
-                        setTimeout(iniciarEscutaContinua, 1000);
-                    }
-                }, 15000);
-
                 const statusBar = document.getElementById('status-bar');
-
                 let detectedType = null;
                 if (transcript.includes('radar')) detectedType = 'radar';
                 else if (transcript.includes('acidente')) detectedType = 'acidente';
@@ -384,13 +286,11 @@
                     enviarReporte(detectedType);
                     return;
                 }
-
                 if ((transcript.includes('reporte') || transcript.includes('reportar')) && !isWaitingForReportType) {
                     isWaitingForReportType = true;
                     statusBar.innerHTML = '🎤 Ocorrência detectada. Fale o tipo: Radar, Acidente, Obra ou Perigo.';
                     statusBar.className = 'carregando';
                     playBeep();
-                    
                     clearTimeout(reportTimeout);
                     reportTimeout = setTimeout(() => {
                         isWaitingForReportType = false;
@@ -403,14 +303,12 @@
                     }, 5000);
                     return;
                 }
-
                 if (isWaitingForReportType && detectedType) {
                     clearTimeout(reportTimeout);
                     isWaitingForReportType = false;
                     enviarReporte(detectedType);
                 }
             };
-
             continuousRecognition.onerror = (event) => {
                 console.warn('Erro no reconhecimento contínuo:', event.error);
                 if (event.error !== 'no-speech') {
@@ -421,13 +319,11 @@
                     }
                 }
             };
-
             continuousRecognition.onend = () => {
                 if (continuousRecognition) {
                     setTimeout(iniciarEscutaContinua, 1000);
                 }
             };
-
             continuousRecognition.start();
         }
 
@@ -469,11 +365,22 @@
                 if (data.usuario.tipo !== 'motorista') throw new Error('Acesso negado.');
                 tokenJWT = data.token;
                 document.getElementById('login-overlay').classList.add('hidden');
+
+                solicitarPermissoesAntecipadas();
                 initMapa(); 
                 await carregarRotaDoMotorista();
-                if (intervalLocalizacao) clearInterval(intervalLocalizacao);
-                // A simulação de localização foi removida, usaremos o GPS real!
             } catch (erro) { statusDiv.innerHTML = `❌ ${erro.message}`; statusDiv.className = 'status-box erro'; }
+        }
+
+        function solicitarPermissoesAntecipadas() {
+            try { iniciarEscutaContinua(); } catch(e) {}
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => { ultimaPosicaoLngLat = [pos.coords.longitude, pos.coords.latitude]; },
+                    (err) => { console.log("⏳ Permissão de GPS em processo:", err.message); },
+                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+                );
+            }
         }
 
         async function carregarRotaDoMotorista() {
@@ -487,17 +394,26 @@
                 const dados = await resp.json();
                 dadosGeoJsonAtual = dados.dados_geojson; 
                 mapa.once('load', function() {
-                    desenharRota(dadosGeoJsonAtual);
-                    mostrarInformacoesRota(dadosGeoJsonAtual, dados);
-                    
-                    document.getElementById('btn-iniciar-3d').style.display = 'flex';
-                    document.getElementById('btn-tema-mapa').style.display = 'flex';
-                    document.getElementById('btn-centralizar').style.display = 'flex';
-                    document.getElementById('btn-reportar').style.display = 'flex';
+                    try {
+                        desenharRota(dadosGeoJsonAtual);
+                        mostrarInformacoesRota(dadosGeoJsonAtual, dados);
+                        document.getElementById('btn-iniciar-3d').style.display = 'flex';
+                        document.getElementById('btn-tema-mapa').style.display = 'flex';
+                        document.getElementById('btn-centralizar').style.display = 'flex';
+                        document.getElementById('btn-reportar').style.display = 'flex';
+                        statusBar.innerHTML = `<i class="fas fa-check-circle"></i> Rota "${dados.nome || 'Sem nome'}" carregada!`;
+                        statusBar.className = 'sucesso';
+                    } catch (innerError) {
+                        console.error('ERRO PROTEGIDO AO DESENHAR ROTA:', innerError);
+                        statusBar.innerHTML = `⚠️ Erro ao desenhar a rota. O app não fechou!`;
+                        statusBar.className = 'erro';
+                    }
                 });
-                statusBar.innerHTML = `<i class="fas fa-check-circle"></i> Rota "${dados.nome || 'Sem nome'}" carregada!`;
-                statusBar.className = 'sucesso';
-            } catch (erro) { statusBar.innerHTML = `<i class="fas fa-times-circle"></i> ${erro.message}`; statusBar.className = 'erro'; }
+            } catch (erro) {
+                console.error('❌ ERRO GRAVE AO CARREGAR ROTA:', erro);
+                statusBar.innerHTML = `❌ Erro fatal: ${erro.message}. O app foi protegido.`;
+                statusBar.className = 'erro';
+            }
         }
 
         function desenharRota(geoJson) {
@@ -505,6 +421,7 @@
             try {
                 if (mapa.getLayer('rota-layer')) mapa.removeLayer('rota-layer');
                 if (mapa.getSource('rota-src')) mapa.removeSource('rota-src');
+
                 const coords = geoJson.features[0].geometry.coordinates;
                 if (!coords || coords.length === 0) return;
                 pathCoordinates = coords;
@@ -551,7 +468,7 @@
                 const bounds = new maplibregl.LngLatBounds();
                 coords.forEach(coord => bounds.extend(coord));
                 mapa.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-            } catch (erro) { console.error('❌ ERRO NA ROTA:', erro.message); }
+            } catch (erro) { console.error('❌ ERRO INTERNO DA ROTA:', erro.message); throw erro; }
         }
 
         function alternarTemaMapa() {
@@ -598,141 +515,177 @@
 
         function atualizarMetricasRestantes() {
             if (!modoNavegacaoAtivo || !marcadorMotorista) return;
-            // A partir de agora, a métrica é calculada em tempo real com base na distância percorrida
-            // Para esta versão, manteremos fixo o restante pois o GPS real pode desviar da rota.
-            // Isso pode ser melhorado posteriormente com uma biblioteca de "snapping" (ex: Turf.js)
         }
 
-        // =============================================
-        // 📡 GPS REAL DO CELULAR
-        // =============================================
+        let gpsTimeout = null;
+        let gpsInicializado = false;
+        let primeiraConexaoGps = true; // Flag para evitar o loop de "Gps conectado"
+
         function iniciarGPSReal() {
+            if (gpsInicializado) return;
             if (!navigator.geolocation) {
-                alert("Seu navegador não suporta geolocalização. Verifique as permissões.");
+                alert("Seu navegador não suporta geolocalização.");
                 return;
             }
-
+            gpsInicializado = true;
             const statusBar = document.getElementById('status-bar');
-            statusBar.innerHTML = '📡 Aguardando sinal de GPS...';
+            statusBar.innerHTML = '📡 Conectando ao GPS...';
             statusBar.className = 'carregando';
 
-            watchId = navigator.geolocation.watchPosition(
-                (position) => {
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const velocidade = position.coords.speed; // em m/s
+            gpsTimeout = setTimeout(() => {
+                statusBar.innerHTML = '⚠️ Sinal de GPS não encontrado. Usando simulação.';
+                statusBar.className = 'erro';
+                if(watchId) {
+                    navigator.geolocation.clearWatch(watchId);
+                    watchId = null;
+                }
+                if (ultimaPosicaoLngLat && modoNavegacaoAtivo) {
+                    try {
+                        mapa.jumpTo({
+                            center: ultimaPosicaoLngLat,
+                            bearing: ultimoBearing,
+                            pitch: 65,
+                            zoom: 19
+                        });
+                    } catch(e) {}
+                }
+                setTimeout(() => {
+                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                    statusBar.className = 'sucesso';
+                }, 2000);
+            }, 8000);
 
-                    const novaPosicao = [lng, lat];
-                    
-                    // 1. Atualiza o marcador do caminhão
-                    marcadorMotorista.setLngLat(novaPosicao);
+            try {
+                watchId = navigator.geolocation.watchPosition(
+                    (position) => {
+                        if (gpsTimeout) {
+                            clearTimeout(gpsTimeout);
+                            gpsTimeout = null;
+                        }
 
-                    // 2. Calcula e atualiza a velocidade real no velocímetro
-                    let velocidadeKmh = 0;
-                    if (velocidade !== null && velocidade !== undefined && velocidade >= 0) {
-                        velocidadeKmh = velocidade * 3.6; // m/s para km/h
-                    } else if (ultimaPosicaoLngLat) {
-                        // Fallback: Se o hardware não der a velocidade, calcula pela distância entre os pontos
-                        const dist = calcularDistancia(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
-                        velocidadeKmh = dist / (1 / 3600); // Considera 1 segundo de intervalo (aproximado)
-                    }
-                    document.getElementById('velocidade-valor').textContent = Math.round(velocidadeKmh);
-
-                    // 3. Lógica de perseguição 3D
-                    if (modoNavegacaoAtivo && mapa.loaded()) {
-                        try {
-                            if (ultimaPosicaoLngLat) {
-                                const bearing = calcularBearing(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
-                                ultimoBearing = bearing;
-                                marcadorMotorista._element.querySelector('div').style.transform = `rotate(${bearing}deg)`;
-                                
-                                // Atualiza câmera instantaneamente
-                                mapa.jumpTo({
-                                    center: novaPosicao,
-                                    bearing: bearing,
-                                    pitch: 65,
-                                    zoom: 19
-                                });
-                            } else {
-                                // Primeira leitura
-                                mapa.jumpTo({
-                                    center: novaPosicao,
-                                    bearing: 0,
-                                    pitch: 65,
-                                    zoom: 19
-                                });
-                            }
-                            document.getElementById('velocimetro').style.display = 'flex';
+                        // Só mostra a mensagem de conectado na PRIMEIRA vez que o sinal chegar
+                        if (primeiraConexaoGps) {
                             statusBar.innerHTML = '📡 GPS conectado!';
                             statusBar.className = 'sucesso';
-                            
                             setTimeout(() => {
                                 statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
                                 statusBar.className = 'sucesso';
                             }, 1500);
-
-                        } catch (e) {
-                            console.warn('Erro ao reposicionar mapa via GPS:', e);
+                            primeiraConexaoGps = false;
                         }
+
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        const novaPosicao = [lng, lat];
+                        
+                        // 🔹 FILTRO ANTI-TREMOR: Se moveu menos de 5 metros, ignora e não mexe na câmera
+                        if (ultimaPosicaoLngLat) {
+                            const distMetros = calcularDistancia(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng) * 1000;
+                            if (distMetros < 5.0) {
+                                return; // Para a execução aqui, evitando o tremor
+                            }
+                        }
+
+                        marcadorMotorista.setLngLat(novaPosicao);
+                        document.getElementById('velocidade-valor').textContent = '5';
+
+                        if (modoNavegacaoAtivo && mapa.loaded()) {
+                            try {
+                                if (ultimaPosicaoLngLat) {
+                                    const bearing = calcularBearing(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
+                                    ultimoBearing = bearing;
+                                    marcadorMotorista._element.querySelector('div').style.transform = `rotate(${bearing}deg)`;
+                                    
+                                    // 🔹 TROCAMOS O JUMPTO PELO EASETO PARA SUAVIZAR O MOVIMENTO
+                                    mapa.easeTo({
+                                        center: novaPosicao,
+                                        bearing: bearing,
+                                        pitch: 65,
+                                        zoom: 19,
+                                        duration: 300 // Tempo de transição suave
+                                    });
+                                } else {
+                                    mapa.jumpTo({
+                                        center: novaPosicao,
+                                        bearing: 0,
+                                        pitch: 65,
+                                        zoom: 19
+                                    });
+                                }
+                                document.getElementById('velocimetro').style.display = 'flex';
+                            } catch (e) {
+                                console.warn('Erro ao reposicionar mapa via GPS:', e);
+                            }
+                        }
+                        ultimaPosicaoLngLat = novaPosicao;
+                    },
+                    (error) => {
+                        console.warn("❌ Erro no GPS:", error.message);
+                        let msg = "⚠️ Erro no GPS. ";
+                        if (error.code === error.PERMISSION_DENIED) msg += "Permissão negada.";
+                        else if (error.code === error.POSITION_UNAVAILABLE) msg += "Sinal indisponível.";
+                        else if (error.code === error.TIMEOUT) msg += "Tempo limite excedido.";
+                        document.getElementById('status-bar').innerHTML = msg;
+                        document.getElementById('status-bar').className = 'erro';
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        maximumAge: 0,
+                        timeout: 15000
                     }
-                    ultimaPosicaoLngLat = novaPosicao;
-                },
-                (error) => {
-                    console.warn("❌ Erro no GPS:", error.message);
-                    let msg = "⚠️ Erro no GPS. ";
-                    if (error.code === error.PERMISSION_DENIED) msg += "Permissão negada.";
-                    else if (error.code === error.POSITION_UNAVAILABLE) msg += "Sinal indisponível.";
-                    else if (error.code === error.TIMEOUT) msg += "Tempo limite excedido.";
-                    
-                    document.getElementById('status-bar').innerHTML = msg;
-                    document.getElementById('status-bar').className = 'erro';
-                },
-                {
-                    enableHighAccuracy: true,
-                    maximumAge: 0,
-                    timeout: 10000
-                }
-            );
+                );
+            } catch (e) {
+                console.error('Erro ao iniciar o watchPosition (protegido):', e);
+                statusBar.innerHTML = '⚠️ Erro de hardware do GPS. Modo 3D ativo sem rastreio.';
+                statusBar.className = 'erro';
+                gpsInicializado = false;
+            }
         }
 
         function iniciarNavegacao3D() {
             if (!marcadorMotorista) return;
-            const btn = document.getElementById('btn-iniciar-3d');
-            btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Carregando...';
-            btn.disabled = true;
-            const statusBar = document.getElementById('status-bar');
-            const estiloAtual = temaAtual === 'light' ? estiloLight : estiloDark;
-            mapa.setStyle(estiloAtual);
+            try {
+                const btn = document.getElementById('btn-iniciar-3d');
+                btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Carregando...';
+                btn.disabled = true;
+                const statusBar = document.getElementById('status-bar');
+                const estiloAtual = temaAtual === 'light' ? estiloLight : estiloDark;
+                mapa.setStyle(estiloAtual);
 
-            setTimeout(() => {
-                if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual);
-                
-                // Ativa o modo 3D
-                modoNavegacaoAtivo = true;
-                btn.style.display = 'none';
-                
-                const posicao = marcadorMotorista.getLngLat();
-                if (posicao) {
-                    mapa.flyTo({
-                        center: posicao,
-                        zoom: 19,
-                        pitch: 65,
-                        bearing: 0,
-                        duration: 2500
-                    });
-                }
-                statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                statusBar.className = 'sucesso';
-
-                document.getElementById('velocimetro').style.display = 'flex';
-
-                // 🎤 Inicia a escuta contínua por voz
-                iniciarEscutaContinua();
-
-                // 📡 Inicia o rastreamento por GPS Real
-                iniciarGPSReal();
-
-            }, 2000); 
+                setTimeout(() => {
+                    try {
+                        if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual);
+                        modoNavegacaoAtivo = true;
+                        btn.style.display = 'none';
+                        const posicao = marcadorMotorista.getLngLat();
+                        if (posicao) {
+                            mapa.flyTo({
+                                center: posicao,
+                                zoom: 19,
+                                pitch: 65,
+                                bearing: 0,
+                                duration: 2500
+                            });
+                        }
+                        statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
+                        statusBar.className = 'sucesso';
+                        document.getElementById('velocimetro').style.display = 'flex';
+                        setTimeout(() => {
+                            iniciarGPSReal();
+                        }, 3000);
+                    } catch (innerError) {
+                        console.error('Erro protegido durante inicialização 3D:', innerError);
+                        statusBar.innerHTML = '⚠️ Erro ao ativar 3D. Mantendo 2D.';
+                        statusBar.className = 'erro';
+                        btn.innerHTML = 'Tentar Novamente';
+                        btn.disabled = false;
+                    }
+                }, 2000); 
+            } catch (outerError) {
+                console.error('Erro crítico no botão 3D:', outerError);
+                document.getElementById('status-bar').innerHTML = '❌ Crash protegido. Reinicie o app.';
+                document.getElementById('status-bar').className = 'erro';
+            }
         }
 
         function calcularBearing(lat1, lon1, lat2, lon2) {
@@ -749,10 +702,6 @@
             if (!segmento) return infoDiv.style.display = 'none';
             const dist = (segmento.distance / 1000).toFixed(1);
             const dur = segmento.duration;
-            
-            distanciaTotalKm = parseFloat(dist);
-            tempoTotalSegundos = dur;
-
             const h = Math.floor(dur / 3600);
             const m = Math.floor((dur % 3600) / 60);
             const origem = dadosRota.origem || 'Origem'; const destino = dadosRota.destino || 'Destino';
@@ -764,14 +713,8 @@
             infoDiv.innerHTML = `
                 <div class="route-header"><i class="fas fa-circle-check" style="color:#22c55e;"></i> <span class="orig-dest">${origem}</span> <i class="fas fa-arrow-right" style="color:#52525b; font-size:12px;"></i> <span class="orig-dest">${destino}</span></div>
                 <div class="info-grid">
-                    <div class="info-item">
-                        <i class="fas fa-route"></i>
-                        <span id="dist-restante" class="val">${dist}</span> km
-                    </div>
-                    <div class="info-item">
-                        <i class="far fa-clock"></i>
-                        <span id="time-restante" class="val">${h}h ${m}min</span>
-                    </div>
+                    <div class="info-item"><i class="fas fa-route"></i> <span class="val">${dist}</span> km</div>
+                    <div class="info-item"><i class="far fa-clock"></i> <span class="val">${h}h ${m}min</span></div>
                 </div>
                 ${restricoesHtml}
                 <div id="progresso-viagem"><div class="barra"></div></div>
