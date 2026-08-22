@@ -166,7 +166,7 @@ const globalLimiter = rateLimit({
 
 const heavyLimiter = rateLimit({
     windowMs: 5 * 60 * 1000,
-    max: 20,
+    max: 70,
     message: {
         erro: 'Limite excedido.'
     }
