@@ -1,736 +1,665 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motorista - GPS Caminhão</title>
-    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; background: #f0f2f5; color: white; }
-        #mapa { position: fixed; left: 0; top: 0; width: 100%; height: 100%; z-index: 1; background: #e4e6eb; }
-        
-        #status-bar { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; padding: 10px 24px; border-radius: 50px; font-size: 14px; font-weight: 500; box-shadow: 0 8px 24px rgba(0,0,0,0.5); transition: all 0.3s ease; max-width: 90%; white-space: nowrap; background: #1e1e24; color: #fff; border: 1px solid rgba(255,255,255,0.05); text-align: center; backdrop-filter: blur(5px); display: flex; align-items: center; justify-content: center; gap: 8px; }
-        #status-bar.carregando { background: #451a03; color: #fdba74; border-color: #9a3412; }
-        #status-bar.sucesso { background: #052e16; color: #86efac; border-color: #166534; }
-        #status-bar.erro { background: #450a0a; color: #fca5a5; border-color: #7f1d1d; }
-
-        #info-rota { 
-            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 1000; 
-            background: #18181e; backdrop-filter: blur(10px); padding: 18px 24px; border-radius: 16px; 
-            color: #f4f4f5; border: 1px solid rgba(255, 255, 255, 0.06); 
-            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7); display: none; text-align: center; 
-            max-width: 95%; width: auto; min-width: 320px; line-height: 1.5; transition: all 0.3s ease; 
-        }
-        .route-header { font-weight: 600; font-size: 15px; margin-bottom: 16px; color: #fff; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
-        .route-header i { color: #3b82f6; }
-        .route-header .orig-dest { color: #a1a1aa; font-weight: 400; }
-        .info-grid { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
-        .info-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #a1a1aa; background: #27272a; padding: 6px 14px; border-radius: 20px; border: 1px solid rgba(255,255,255,0.03); }
-        .info-item i { color: #3b82f6; font-size: 14px; }
-        .info-item .val { color: #fff; font-weight: 600; }
-        .restricoes-box { margin-top: 10px; font-size: 12px; color: #a1a1aa; background: #27272a; padding: 6px 14px; border-radius: 20px; display: inline-flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,0.03); }
-        #progresso-viagem { margin-top: 12px; width: 100%; height: 4px; background: #27272a; border-radius: 4px; overflow: hidden; display: none; }
-        #progresso-viagem .barra { height: 100%; width: 0%; background: #3b82f6; transition: width 0.3s ease; border-radius: 4px; }
-
-        #velocimetro { 
-            position: fixed; bottom: 130px; left: 20px; z-index: 2000; 
-            width: 80px; height: 80px;
-            background: rgba(13, 13, 18, 0.85); backdrop-filter: blur(5px); 
-            border-radius: 50%; border: 3px solid #3b82f6; 
-            box-shadow: 0 0 20px rgba(59, 130, 246, 0.2); color: #fff; 
-            display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; font-family: 'Segoe UI', sans-serif;
-        }
-        #velocidade-valor { font-size: 28px; font-weight: 700; color: #fff; line-height: 1; display: block; margin-top: 2px; }
-        #velocidade-unidade { font-size: 10px; color: #a1a1aa; font-weight: 600; letter-spacing: 1px; display: block; margin-top: 2px; }
-
-        #btn-iniciar-3d { position: fixed; bottom: 160px; left: 50%; transform: translateX(-50%); z-index: 2000; display: none; background: #3b82f6; color: white; border: none; padding: 14px 32px; border-radius: 50px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 20px rgba(0,0,0,0.6); transition: transform 0.2s, background 0.2s; align-items: center; gap: 10px; }
-        #btn-iniciar-3d:hover { transform: translateX(-50%) scale(1.05); background: #2563eb; }
-        #btn-iniciar-3d:active { transform: translateX(-50%) scale(0.95); }
-
-        #btn-tema-mapa { position: fixed; top: 115px; left: 10px; z-index: 2000; width: 30px; height: 30px; background: #ffffff; color: #333333; border: none; border-radius: 2px; box-shadow: 0 1px 5px rgba(0,0,0,0.65); font-size: 16px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
-        #btn-tema-mapa:hover { background: #f2f2f2; color: #000; }
-        #btn-tema-mapa:active { transform: scale(0.9); }
-
-        #btn-centralizar { position: fixed; bottom: 230px; right: 20px; z-index: 2000; width: 44px; height: 44px; border-radius: 50%; background: #1e1e24; color: #3b82f6; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
-        #btn-centralizar:hover { background: #27272a; border-color: #3b82f6; transform: scale(1.1); }
-        #btn-centralizar:active { transform: scale(0.9); }
-
-        #btn-reportar { position: fixed; bottom: 280px; right: 20px; z-index: 2000; width: 44px; height: 44px; border-radius: 50%; background: #1e1e24; color: #f97316; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.5); font-size: 20px; cursor: pointer; transition: all 0.2s ease; display: none; align-items: center; justify-content: center; }
-        #btn-reportar:hover { background: #27272a; border-color: #f97316; transform: scale(1.1); }
-        #btn-reportar:active { transform: scale(0.9); }
-
-        #menu-reporte { position: fixed; bottom: 335px; right: 20px; z-index: 2000; background: #18181e; backdrop-filter: blur(15px); padding: 12px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); box-shadow: 0 8px 24px rgba(0,0,0,0.8); display: none; flex-direction: column; gap: 8px; min-width: 140px; }
-        #menu-reporte button { background: transparent; border: none; color: #f4f4f5; padding: 8px 12px; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 12px; transition: background 0.2s; width: 100%; }
-        #menu-reporte button:hover { background: #27272a; }
-        .btn-report-radar i { color: #f97316; }
-        .btn-report-acidente i { color: #ef4444; }
-        .btn-report-obra i { color: #fbbf24; }
-        .btn-report-perigo i { color: #f59e0b; }
-
-        #login-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.92); backdrop-filter: blur(10px); z-index: 9999; display: flex; align-items: center; justify-content: center; flex-direction: column; }
-        #login-overlay.hidden { display: none; }
-        .login-card { background: #1a1a2e; padding: 40px 36px; border-radius: 20px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.8); border: 1px solid #2a2a3e; }
-        .login-card h2 { font-size: 26px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; justify-content: center;}
-        .login-card h2 span { color: #3b82f6; }
-        .login-card p.sub { color: #a1a1aa; margin-bottom: 24px; font-size: 14px; text-align: center; }
-        .login-card .grupo { margin-bottom: 20px; }
-        .login-card .grupo label { display: block; font-size: 12px; color: #a1a1aa; margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;}
-        .login-card .grupo input { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1px solid #2a2a3e; background: #0f0f1a; color: white; font-size: 14px; transition: border 0.2s; }
-        .login-card .grupo input:focus { outline: none; border-color: #3b82f6; }
-        .btn-primary { width: 100%; padding: 12px; background: #3b82f6; color: white; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
-        .btn-primary:hover { background: #2563eb; }
-        .status-box { margin-top: 16px; padding: 10px; background: #0f0f1a; border-radius: 8px; font-size: 13px; text-align: center; border-left: 3px solid #3b82f6; min-height: 40px; color: #a1a1aa; }
-        .status-box.sucesso { border-left-color: #22c55e; color: #4ade80; }
-        .status-box.erro { border-left-color: #ef4444; color: #f87171; }
-        .status-box.carregando { border-left-color: #fbbf24; color: #fde047; }
-
-        @media (max-width: 768px) {
-            #status-bar { top: 15px; font-size: 12px; padding: 8px 16px; white-space: normal; }
-            #info-rota { bottom: 20px; padding: 14px 16px; font-size: 12px; min-width: unset; width: 92%; }
-            #velocimetro { bottom: 110px; left: 15px; width: 65px; height: 65px; }
-            #velocidade-valor { font-size: 22px; }
-            #btn-iniciar-3d { bottom: 130px; font-size: 14px; padding: 12px 20px; }
-            #btn-tema-mapa { top: 80px; left: 10px; width: 30px; height: 30px; font-size: 16px; }
-            #btn-centralizar { bottom: 195px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
-            #btn-reportar { bottom: 240px; right: 15px; width: 40px; height: 40px; font-size: 18px; }
-            #menu-reporte { bottom: 290px; right: 15px; min-width: 120px; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Motorista - GPS Caminhão</title>
+<link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif; overflow:hidden; background:#f0f2f5; color:white; }
+#mapa { position:fixed; left:0; top:0; width:100%; height:100%; z-index:1; background:#e4e6eb; }
+#status-bar { position:fixed; top:20px; left:50%; transform:translateX(-50%); z-index:1000; padding:8px 20px; border-radius:50px; font-size:13px; font-weight:500; box-shadow:0 8px 24px rgba(0,0,0,0.5); transition:all .3s ease; max-width:90%; white-space:nowrap; background:#1e1e24; color:#fff; border:1px solid rgba(255,255,255,0.05); text-align:center; backdrop-filter:blur(5px); display:flex; align-items:center; justify-content:center; gap:8px; }
+#status-bar.carregando { background:#451a03; color:#fdba74; border-color:#9a3412; }
+#status-bar.sucesso { background:#052e16; color:#86efac; border-color:#166534; }
+#status-bar.erro { background:#450a0a; color:#fca5a5; border-color:#7f1d1d; }
+#info-rota { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:1000; background:rgba(24,24,30,0.95); backdrop-filter:blur(8px); padding:6px 14px; border-radius:12px; color:#f4f4f5; border:1px solid rgba(255,255,255,0.06); box-shadow:0 6px 20px rgba(0,0,0,0.6); display:none; text-align:center; max-width:92%; min-width:160px; font-size:11px; }
+.route-header { font-weight:600; font-size:12px; margin-bottom:2px; color:#fff; display:flex; justify-content:center; flex-wrap:wrap; gap:4px; }
+.route-header i { color:#3b82f6; }
+.route-header .orig-dest { color:#a1a1aa; font-weight:400; }
+.info-grid { display:flex; gap:6px; flex-wrap:wrap; justify-content:center; margin-top:2px; }
+.info-item { display:flex; align-items:center; gap:3px; font-size:10px; color:#a1a1aa; background:#27272a; padding:1px 8px; border-radius:12px; }
+.info-item i { color:#3b82f6; }
+.info-item .val { color:#fff; font-weight:600; }
+.restricoes-box { margin-top:2px; font-size:9px; color:#a1a1aa; background:#27272a; padding:1px 8px; border-radius:12px; display:inline-flex; align-items:center; gap:4px; }
+#progresso-viagem { margin-top:4px; width:100%; height:3px; background:#27272a; border-radius:2px; overflow:hidden; }
+#progresso-viagem .barra { height:100%; width:0%; background:#3b82f6; transition:width .3s ease; }
+#velocimetro { position:fixed; bottom:130px; left:20px; z-index:2000; width:70px; height:70px; background:rgba(13,13,18,0.85); backdrop-filter:blur(5px); border-radius:50%; border:3px solid #3b82f6; color:#fff; display:none; flex-direction:column; align-items:center; justify-content:center; }
+#velocidade-valor { font-size:24px; font-weight:700; }
+#velocidade-unidade { font-size:9px; color:#a1a1aa; font-weight:600; }
+#btn-iniciar-3d { position:fixed; bottom:160px; left:50%; transform:translateX(-50%); z-index:2000; display:none; background:#3b82f6; color:white; border:none; padding:10px 24px; border-radius:50px; font-size:14px; font-weight:bold; cursor:pointer; align-items:center; gap:8px; }
+#controles-simulacao { position:fixed; bottom:110px; left:50%; transform:translateX(-50%); z-index:2000; display:none; flex-direction:row; flex-wrap:wrap; justify-content:center; align-items:center; gap:4px; background:rgba(13,13,18,0.85); padding:6px 12px; border-radius:30px; }
+#controles-simulacao button { background:transparent; border:none; color:#f4f4f5; padding:3px 10px; border-radius:20px; cursor:pointer; font-size:11px; }
+.btn-sim-iniciar { color:#22c55e !important; }
+.btn-sim-pausar { color:#fbbf24 !important; }
+.btn-sim-parar { color:#ef4444 !important; }
+.btn-sim-demo { color:#f97316 !important; }
+#btn-tema-mapa { position:fixed; top:115px; left:10px; z-index:2000; width:30px; height:30px; background:white; color:#333; border:none; cursor:pointer; display:none; }
+#btn-centralizar { position:fixed; bottom:230px; right:20px; z-index:2000; width:40px; height:40px; border-radius:50%; background:#1e1e24; color:#3b82f6; border:1px solid rgba(255,255,255,0.1); cursor:pointer; display:none; align-items:center; justify-content:center; }
+#btn-reportar { position:fixed; bottom:280px; right:20px; z-index:2000; width:40px; height:40px; border-radius:50%; background:#1e1e24; color:#f97316; border:1px solid rgba(255,255,255,0.1); cursor:pointer; display:none; align-items:center; justify-content:center; }
+#menu-reporte { position:fixed; bottom:335px; right:20px; z-index:2000; background:#18181e; padding:10px; border-radius:14px; display:none; flex-direction:column; gap:6px; min-width:120px; }
+#menu-reporte button { background:transparent; border:none; color:#f4f4f5; padding:6px 10px; border-radius:8px; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:10px; }
+#login-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.92); z-index:9999; display:flex; align-items:center; justify-content:center; }
+#login-overlay.hidden { display:none; }
+.login-card { background:#1a1a2e; padding:36px 30px; border-radius:20px; width:100%; max-width:360px; }
+.login-card h2 { font-size:24px; margin-bottom:6px; text-align:center; }
+.login-card h2 span { color:#3b82f6; }
+.login-card p { color:#a1a1aa; margin-bottom:20px; text-align:center; }
+.grupo { margin-bottom:16px; }
+.grupo label { display:block; font-size:11px; color:#a1a1aa; margin-bottom:3px; font-weight:600; }
+.grupo input { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #2a2a3e; background:#0f0f1a; color:white; font-size:14px; }
+.btn-primary { width:100%; padding:10px; background:#3b82f6; color:white; border:none; border-radius:8px; font-size:15px; font-weight:bold; cursor:pointer; }
+.status-box { margin-top:14px; padding:8px; background:#0f0f1a; border-radius:6px; font-size:12px; text-align:center; border-left:3px solid #3b82f6; color:#a1a1aa; }
+#legenda-reportes-motorista { position:fixed; bottom:190px; left:20px; z-index:2000; background:rgba(13,13,18,0.9); padding:6px 10px; border-radius:8px; display:none; font-size:10px; }
+.legenda-item { display:flex; align-items:center; gap:4px; }
+.cor-bolinha { width:8px; height:8px; border-radius:50%; }
+@media(max-width:768px){ #status-bar { top:15px; font-size:11px; padding:6px 14px; white-space:normal; } #info-rota { bottom:15px; width:94%; } #velocimetro { bottom:110px; left:10px; width:55px; height:55px; } #btn-centralizar { bottom:180px; right:10px; } #btn-reportar { bottom:220px; right:10px; } #menu-reporte { bottom:270px; right:10px; } }
+</style>
 </head>
 <body>
-    <div id="mapa"></div>
-    <div id="status-bar"><i class="fas fa-circle-notch fa-spin"></i> Carregando...</div>
-    <button id="btn-iniciar-3d"><i class="fas fa-route"></i> Iniciar Navegação 3D</button>
-    <button id="btn-tema-mapa"><i class="fas fa-moon"></i></button>
-    <button id="btn-centralizar"><i class="fas fa-crosshairs"></i></button>
-    <button id="btn-reportar"><i class="fas fa-flag"></i></button>
-    <div id="menu-reporte">
-        <button class="btn-report-radar" onclick="enviarReporte('radar')"><i class="fas fa-tower-broadcast"></i> Radar</button>
-        <button class="btn-report-acidente" onclick="enviarReporte('acidente')"><i class="fas fa-car-crash"></i> Acidente</button>
-        <button class="btn-report-obra" onclick="enviarReporte('obra')"><i class="fas fa-hard-hat"></i> Obra</button>
-        <button class="btn-report-perigo" onclick="enviarReporte('perigo')"><i class="fas fa-triangle-exclamation"></i> Perigo</button>
-    </div>
-    <div id="velocimetro">
-        <span id="velocidade-valor">0</span>
-        <span id="velocidade-unidade">km/h</span>
-    </div>
-    <div id="info-rota"></div>
-    <div id="login-overlay">
-        <div class="login-card">
-            <h2><i class="fas fa-truck"></i> <span>GPS</span> Motorista</h2>
-            <p class="sub">Acesse sua rota atribuída</p>
-            <div class="grupo"><label for="login-user"><i class="far fa-user"></i> Login</label><input type="text" id="login-user" placeholder="Seu login" value="jose"></div>
-            <div class="grupo"><label for="login-pass"><i class="fas fa-lock"></i> Senha</label><input type="password" id="login-pass" placeholder="Sua senha" value="motor123"></div>
-            <button class="btn-primary" onclick="fazerLoginMotorista()">Entrar</button>
-            <div id="login-status" class="status-box">Use <strong>jose</strong> / <strong>motor123</strong></div>
-        </div>
-    </div>
+<div id="mapa"></div>
+<div id="status-bar"><i class="fas fa-circle-notch fa-spin"></i> Carregando...</div>
+<button id="btn-iniciar-3d"><i class="fas fa-route"></i> Iniciar Navegação 3D</button>
+<button id="btn-tema-mapa"><i class="fas fa-moon"></i></button>
+<button id="btn-centralizar"><i class="fas fa-crosshairs"></i></button>
+<button id="btn-reportar"><i class="fas fa-flag"></i></button>
+<div id="menu-reporte">
+<button onclick="enviarReporte('radar')">📡 Radar</button>
+<button onclick="enviarReporte('acidente')">🚗 Acidente</button>
+<button onclick="enviarReporte('obra')">🚧 Obra</button>
+<button onclick="enviarReporte('perigo')">⚠️ Perigo</button>
+<button onclick="enviarReporte('risco')">🔴 Alto Risco / Roubo</button>
+</div>
+<div id="velocimetro"><span id="velocidade-valor">0</span><span id="velocidade-unidade">km/h</span></div>
+<div id="controles-simulacao">
+<button class="btn-sim-iniciar" onclick="iniciarSimulacao(30)">▶ 30</button>
+<button class="btn-sim-iniciar" onclick="iniciarSimulacao(60)">▶ 60</button>
+<button class="btn-sim-iniciar" onclick="iniciarSimulacao(90)">▶ 90</button>
+<button class="btn-sim-pausar" onclick="pausarSimulacao()">⏸ Pausar</button>
+<button class="btn-sim-parar" onclick="pararSimulacao()">⏹ Parar</button>
+<button class="btn-sim-demo" onclick="iniciarDemonstracao()">🧪 Demo</button>
+</div>
+<div id="legenda-reportes-motorista">
+<strong>📢 Reportes</strong>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#ef4444"></div>Acidente</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#f97316"></div>Radar</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#fbbf24"></div>Obra</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#f59e0b"></div>Perigo</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#d63031"></div>Alto Risco</div>
+</div>
+<div id="info-rota"></div>
+<div id="login-overlay">
+<div class="login-card">
+<h2>🚛 <span>GPS</span> Motorista</h2>
+<p>Acesse sua rota atribuída</p>
+<div class="grupo"><label>Login</label><input type="text" id="login-user" value="jose"></div>
+<div class="grupo"><label>Senha</label><input type="password" id="login-pass" value="motor123"></div>
+<button class="btn-primary" onclick="fazerLoginMotorista()">Entrar</button>
+<div id="login-status" class="status-box">Use jose / motor123</div>
+</div>
+</div>
+<script>
+// ======================================================
+// API BASE – FIXO PARA RENDER
+// ======================================================
+const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
 
-    <script>
-        const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
-        let mapa = null;
-        let tokenJWT = null;
-        let marcadorMotorista = null;
-        let intervalLocalizacao = null;
-        let watchId = null;
-        let ultimaPosicaoLngLat = null; 
-        let ultimoBearing = 0;
-        let modoNavegacaoAtivo = false;
-        let dadosGeoJsonAtual = null; 
-        let temaAtual = 'light'; 
+// ======================================================
+// VARIÁVEIS
+// ======================================================
+let mapa = null, tokenJWT = null, marcadorMotorista = null, watchId = null;
+let ultimaPosicaoLngLat = null, ultimoBearing = 0, modoNavegacaoAtivo = false;
+let dadosGeoJsonAtual = null, temaAtual = 'light', intervalMonitoramento = null;
+let intervalReportes = null, pathCoordinates = [];
+let simulacaoAtiva = false, simulacaoPausada = false, intervalSimulacao = null;
+let indexSimulacao = 0, velocidadeSimulacao = 30;
+let vozFemininaSelecionada = null, marcadoresReportes = [];
+let ultimaLocalizacaoEnviada = 0, envioLocalizacaoEmAndamento = false;
+const INTERVALO_ENVIO_LOCALIZACAO = 5000;
+let incidentesProcessados = new Set(), ultimoRecalculo = 0;
+let COOLDOWN_RECALCULO = 120000, MAX_RECALCULOS = 3, totalRecalculos = 0;
 
-        const estiloLight = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'; 
-        const estiloDark = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'; 
-        const estiloFallbackLight = 'https://tiles.openfreemap.org/styles/liberty';
-        const estiloFallbackDark = 'https://tiles.openfreemap.org/styles/dark-matter';
+const estiloLight = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
+const estiloDark = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const estiloFallbackLight = 'https://tiles.openfreemap.org/styles/liberty';
+const estiloFallbackDark = 'https://tiles.openfreemap.org/styles/dark-matter';
 
-        let pathCoordinates = [];
-        let distanciaTotalKm = 0;
-        let tempoTotalSegundos = 0;
-
-        let vozFemininaSelecionada = null;
-        let lastVoiceIndex = -10; 
-
-        function inicializarVozes() {
-            if (!window.speechSynthesis) return;
-            window.speechSynthesis.onvoiceschanged = () => {
-                const vozes = window.speechSynthesis.getVoices();
-                vozFemininaSelecionada = vozes.find(v => 
-                    v.lang.includes('pt-BR') && 
-                    (v.name.includes('Maria') || v.name.includes('mulher') || v.name.includes('woman') || v.name.includes('female'))
-                );
-                if (!vozFemininaSelecionada) {
-                    vozFemininaSelecionada = vozes.find(v => v.lang.includes('pt') && (v.name.includes('woman') || v.name.includes('female')));
-                }
-                if (!vozFemininaSelecionada) {
-                    vozFemininaSelecionada = vozes.find(v => v.lang.includes('pt'));
-                }
-                console.log("🗣️ Voz de navegação selecionada:", vozFemininaSelecionada ? vozFemininaSelecionada.name : "Padrão do navegador");
-            };
-            if (window.speechSynthesis.getVoices().length > 0) {
-                window.speechSynthesis.onvoiceschanged();
-            }
-        }
-
-        function playBeep() {
-            try {
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                const oscillator = audioCtx.createOscillator();
-                const gainNode = audioCtx.createGain();
-                oscillator.type = 'sine';
-                oscillator.frequency.value = 800;
-                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
-                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-                oscillator.connect(gainNode);
-                gainNode.connect(audioCtx.destination);
-                oscillator.start();
-                oscillator.stop(audioCtx.currentTime + 0.15);
-            } catch (e) {}
-        }
-
-        function speak(text, distance = null) {
-            if (!window.speechSynthesis) return;
-            let finalText = text;
-            if (distance !== null) {
-                const metros = Math.round(distance * 1000);
-                if (metros > 20) {
-                    finalText = `${text} em ${metros} metros`;
-                } else {
-                    finalText = `${text} agora`;
-                }
-            }
-            playBeep();
-            setTimeout(() => {
-                window.speechSynthesis.cancel();
-                const utterance = new SpeechSynthesisUtterance(finalText);
-                utterance.lang = 'pt-BR';
-                utterance.rate = 1.0;    
-                utterance.pitch = 1.0;
-                if (vozFemininaSelecionada) {
-                    utterance.voice = vozFemininaSelecionada;
-                }
-                window.speechSynthesis.speak(utterance);
-            }, 300);
-        }
-
-        function toggleMenuReporte() {
-            const menu = document.getElementById('menu-reporte');
-            if (menu.style.display === 'flex') {
-                menu.style.display = 'none';
-            } else {
-                menu.style.display = 'flex';
-            }
-        }
-
-        async function enviarReporte(tipo) {
-            if (!marcadorMotorista) return;
-            const posicao = marcadorMotorista.getLngLat();
-            if (!posicao) return;
-            const statusBar = document.getElementById('status-bar');
-            document.getElementById('menu-reporte').style.display = 'none';
-            try {
-                const resp = await fetch(`${API_BASE}/reportar`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
-                    body: JSON.stringify({ lat: posicao.lat, lng: posicao.lng, tipo: tipo })
-                });
-                if (!resp.ok) throw new Error('Erro ao enviar reporte');
-                statusBar.innerHTML = `✅ Reporte de "${tipo}" enviado!`;
-                statusBar.className = 'sucesso';
-                speak(`Reporte de ${tipo} enviado`);
-                setTimeout(() => {
-                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                    statusBar.className = 'sucesso';
-                }, 3000);
-            } catch (erro) {
-                statusBar.innerHTML = `❌ Erro: ${erro.message}`;
-                statusBar.className = 'erro';
-                setTimeout(() => {
-                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                    statusBar.className = 'sucesso';
-                }, 3000);
-            }
-        }
-
-        let continuousRecognition = null;
-        let isWaitingForReportType = false;
-        let reportTimeout = null;
-
-        function iniciarEscutaContinua() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) return;
-            if (continuousRecognition) return;
-            continuousRecognition = new SpeechRecognition();
-            continuousRecognition.lang = 'pt-BR';
-            continuousRecognition.continuous = true;
-            continuousRecognition.interimResults = true;
-
-            continuousRecognition.onresult = (event) => {
-                let transcript = '';
-                for (let i = event.resultIndex; i < event.results.length; i++) {
-                    transcript += event.results[i][0].transcript.toLowerCase().trim();
-                }
-                const statusBar = document.getElementById('status-bar');
-                let detectedType = null;
-                if (transcript.includes('radar')) detectedType = 'radar';
-                else if (transcript.includes('acidente')) detectedType = 'acidente';
-                else if (transcript.includes('obra')) detectedType = 'obra';
-                else if (transcript.includes('perigo')) detectedType = 'perigo';
-
-                if (detectedType && (transcript.includes('reporte') || transcript.includes('reportar'))) {
-                    clearTimeout(reportTimeout);
-                    isWaitingForReportType = false;
-                    enviarReporte(detectedType);
-                    return;
-                }
-                if ((transcript.includes('reporte') || transcript.includes('reportar')) && !isWaitingForReportType) {
-                    isWaitingForReportType = true;
-                    statusBar.innerHTML = '🎤 Ocorrência detectada. Fale o tipo: Radar, Acidente, Obra ou Perigo.';
-                    statusBar.className = 'carregando';
-                    playBeep();
-                    clearTimeout(reportTimeout);
-                    reportTimeout = setTimeout(() => {
-                        isWaitingForReportType = false;
-                        statusBar.innerHTML = '⏳ Comando não concluído. Aguardando próxima instrução.';
-                        statusBar.className = 'carregando';
-                        setTimeout(() => {
-                            statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                            statusBar.className = 'sucesso';
-                        }, 2000);
-                    }, 5000);
-                    return;
-                }
-                if (isWaitingForReportType && detectedType) {
-                    clearTimeout(reportTimeout);
-                    isWaitingForReportType = false;
-                    enviarReporte(detectedType);
-                }
-            };
-            continuousRecognition.onerror = (event) => {
-                console.warn('Erro no reconhecimento contínuo:', event.error);
-                if (event.error !== 'no-speech') {
-                    if (continuousRecognition) {
-                        continuousRecognition.stop();
-                        continuousRecognition = null;
-                        setTimeout(iniciarEscutaContinua, 1000);
-                    }
-                }
-            };
-            continuousRecognition.onend = () => {
-                if (continuousRecognition) {
-                    setTimeout(iniciarEscutaContinua, 1000);
-                }
-            };
-            continuousRecognition.start();
-        }
-
-        function initMapa() {
-            if (mapa) return;
-            mapa = new maplibregl.Map({
-                container: 'mapa',
-                style: estiloLight,
-                center: [-46.6333, -23.5505], 
-                zoom: 14,
-                pitch: 0,
-                bearing: 0
-            });
-            mapa.addControl(new maplibregl.NavigationControl());
-            document.getElementById('btn-iniciar-3d').addEventListener('click', iniciarNavegacao3D);
-            document.getElementById('btn-tema-mapa').addEventListener('click', alternarTemaMapa);
-            document.getElementById('btn-centralizar').addEventListener('click', centralizarNoCarro);
-            document.getElementById('btn-reportar').addEventListener('click', toggleMenuReporte);
-            
-            mapa.on('style.load', function() { if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual); });
-            mapa.on('error', function(e) {
-                if (e.error && e.error.status === 404) {
-                    if (temaAtual === 'light') mapa.setStyle(estiloFallbackLight);
-                    else mapa.setStyle(estiloFallbackDark);
-                }
-            });
-        }
-
-        async function fazerLoginMotorista() {
-            const login = document.getElementById('login-user').value;
-            const senha = document.getElementById('login-pass').value;
-            const statusDiv = document.getElementById('login-status');
-            statusDiv.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Autenticando...';
-            statusDiv.className = 'status-box carregando';
-            try {
-                const resp = await fetch(`${API_BASE}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login, senha }) });
-                const data = await resp.json();
-                if (!resp.ok) throw new Error(data.erro || 'Erro no login');
-                if (data.usuario.tipo !== 'motorista') throw new Error('Acesso negado.');
-                tokenJWT = data.token;
-                document.getElementById('login-overlay').classList.add('hidden');
-
-                solicitarPermissoesAntecipadas();
-                initMapa(); 
-                await carregarRotaDoMotorista();
-            } catch (erro) { statusDiv.innerHTML = `❌ ${erro.message}`; statusDiv.className = 'status-box erro'; }
-        }
-
-        function solicitarPermissoesAntecipadas() {
-            try { iniciarEscutaContinua(); } catch(e) {}
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => { ultimaPosicaoLngLat = [pos.coords.longitude, pos.coords.latitude]; },
-                    (err) => { console.log("⏳ Permissão de GPS em processo:", err.message); },
-                    { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-                );
-            }
-        }
-
-        async function carregarRotaDoMotorista() {
-            const statusBar = document.getElementById('status-bar');
-            try {
-                statusBar.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Buscando rota...';
-                statusBar.className = 'carregando';
-                const resp = await fetch(`${API_BASE}/rotas/minha-rota`, { headers: { 'Authorization': tokenJWT } });
-                if (resp.status === 404) { statusBar.innerHTML = '❌ Rota não encontrada.'; statusBar.className = 'erro'; return; }
-                if (!resp.ok) throw new Error('Erro ao buscar rota');
-                const dados = await resp.json();
-                dadosGeoJsonAtual = dados.dados_geojson; 
-                mapa.once('load', function() {
-                    try {
-                        desenharRota(dadosGeoJsonAtual);
-                        mostrarInformacoesRota(dadosGeoJsonAtual, dados);
-                        document.getElementById('btn-iniciar-3d').style.display = 'flex';
-                        document.getElementById('btn-tema-mapa').style.display = 'flex';
-                        document.getElementById('btn-centralizar').style.display = 'flex';
-                        document.getElementById('btn-reportar').style.display = 'flex';
-                        statusBar.innerHTML = `<i class="fas fa-check-circle"></i> Rota "${dados.nome || 'Sem nome'}" carregada!`;
-                        statusBar.className = 'sucesso';
-                    } catch (innerError) {
-                        console.error('ERRO PROTEGIDO AO DESENHAR ROTA:', innerError);
-                        statusBar.innerHTML = `⚠️ Erro ao desenhar a rota. O app não fechou!`;
-                        statusBar.className = 'erro';
-                    }
-                });
-            } catch (erro) {
-                console.error('❌ ERRO GRAVE AO CARREGAR ROTA:', erro);
-                statusBar.innerHTML = `❌ Erro fatal: ${erro.message}. O app foi protegido.`;
-                statusBar.className = 'erro';
-            }
-        }
-
-        function desenharRota(geoJson) {
-            if (!geoJson || !mapa) return;
-            try {
-                if (mapa.getLayer('rota-layer')) mapa.removeLayer('rota-layer');
-                if (mapa.getSource('rota-src')) mapa.removeSource('rota-src');
-
-                const coords = geoJson.features[0].geometry.coordinates;
-                if (!coords || coords.length === 0) return;
-                pathCoordinates = coords;
-
-                const inicio = coords[0]; const fim = coords[coords.length - 1];
-                
-                mapa.addSource('rota-src', { type: 'geojson', data: geoJson });
-
-                mapa.addLayer({
-                    id: 'rota-layer-glow', type: 'line', source: 'rota-src',
-                    paint: {
-                        'line-color': '#3b82f6',
-                        'line-width': 22,
-                        'line-opacity': 0.2,
-                        'line-blur': 15
-                    }
-                });
-                mapa.addLayer({
-                    id: 'rota-layer', type: 'line', source: 'rota-src',
-                    paint: {
-                        'line-color': '#3b82f6',
-                        'line-width': 14,
-                        'line-opacity': 0.9,
-                        'line-offset': 0
-                    }
-                });
-
-                if (marcadorMotorista) { marcadorMotorista.remove(); marcadorMotorista = null; }
-                const elOrigem = document.createElement('div');
-                elOrigem.innerHTML = '<div style="background:#22c55e; color:white; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; border:3px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.3);"><i class="fas fa-flag-checkered"></i></div>';
-                new maplibregl.Marker({ element: elOrigem }).setLngLat(inicio).addTo(mapa);
-                const elDestino = document.createElement('div');
-                elDestino.innerHTML = '<div style="background:#ef4444; color:white; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; border:3px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.3);"><i class="fas fa-location-dot"></i></div>';
-                new maplibregl.Marker({ element: elDestino }).setLngLat(fim).addTo(mapa);
-                
-                const elMotorista = document.createElement('div');
-                elMotorista.innerHTML = `
-                    <div style="background:#3b82f6; color:white; width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:22px; border:4px solid white; box-shadow: 0 6px 16px rgba(0,0,0,0.4); transform: rotate(0deg);">
-                        <i class="fas fa-location-arrow" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));"></i>
-                    </div>
-                `;
-                marcadorMotorista = new maplibregl.Marker({ element: elMotorista }).setLngLat(inicio).addTo(mapa);
-                ultimaPosicaoLngLat = inicio;
-                const bounds = new maplibregl.LngLatBounds();
-                coords.forEach(coord => bounds.extend(coord));
-                mapa.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-            } catch (erro) { console.error('❌ ERRO INTERNO DA ROTA:', erro.message); throw erro; }
-        }
-
-        function alternarTemaMapa() {
-            const btn = document.getElementById('btn-tema-mapa');
-            if (temaAtual === 'light') {
-                temaAtual = 'dark'; btn.innerHTML = '<i class="fas fa-sun"></i>'; mapa.setStyle(estiloDark);
-            } else {
-                temaAtual = 'light'; btn.innerHTML = '<i class="fas fa-moon"></i>'; mapa.setStyle(estiloLight);
-            }
-        }
-
-        function centralizarNoCarro() {
-            if (!marcadorMotorista) return;
-            const posicao = marcadorMotorista.getLngLat();
-            if (posicao) {
-                if (modoNavegacaoAtivo) {
-                    mapa.jumpTo({
-                        center: posicao,
-                        zoom: 19,
-                        pitch: 65,
-                        bearing: ultimoBearing
-                    });
-                } else {
-                    mapa.jumpTo({
-                        center: posicao,
-                        zoom: 15,
-                        pitch: 0,
-                        bearing: 0
-                    });
-                }
-            }
-        }
-
-        function calcularDistancia(lat1, lon1, lat2, lon2) {
-            const R = 6371; 
-            const dLat = (lat2 - lat1) * (Math.PI / 180);
-            const dLon = (lon2 - lon1) * (Math.PI / 180);
-            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                      Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
-                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            return R * c;
-        }
-
-        function atualizarMetricasRestantes() {
-            if (!modoNavegacaoAtivo || !marcadorMotorista) return;
-        }
-
-        let gpsTimeout = null;
-        let gpsInicializado = false;
-        let primeiraConexaoGps = true; // Flag para evitar o loop de "Gps conectado"
-
-        function iniciarGPSReal() {
-            if (gpsInicializado) return;
-            if (!navigator.geolocation) {
-                alert("Seu navegador não suporta geolocalização.");
-                return;
-            }
-            gpsInicializado = true;
-            const statusBar = document.getElementById('status-bar');
-            statusBar.innerHTML = '📡 Conectando ao GPS...';
-            statusBar.className = 'carregando';
-
-            gpsTimeout = setTimeout(() => {
-                statusBar.innerHTML = '⚠️ Sinal de GPS não encontrado. Usando simulação.';
-                statusBar.className = 'erro';
-                if(watchId) {
-                    navigator.geolocation.clearWatch(watchId);
-                    watchId = null;
-                }
-                if (ultimaPosicaoLngLat && modoNavegacaoAtivo) {
-                    try {
-                        mapa.jumpTo({
-                            center: ultimaPosicaoLngLat,
-                            bearing: ultimoBearing,
-                            pitch: 65,
-                            zoom: 19
-                        });
-                    } catch(e) {}
-                }
-                setTimeout(() => {
-                    statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                    statusBar.className = 'sucesso';
-                }, 2000);
-            }, 8000);
-
-            try {
-                watchId = navigator.geolocation.watchPosition(
-                    (position) => {
-                        if (gpsTimeout) {
-                            clearTimeout(gpsTimeout);
-                            gpsTimeout = null;
-                        }
-
-                        // Só mostra a mensagem de conectado na PRIMEIRA vez que o sinal chegar
-                        if (primeiraConexaoGps) {
-                            statusBar.innerHTML = '📡 GPS conectado!';
-                            statusBar.className = 'sucesso';
-                            setTimeout(() => {
-                                statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                                statusBar.className = 'sucesso';
-                            }, 1500);
-                            primeiraConexaoGps = false;
-                        }
-
-                        const lat = position.coords.latitude;
-                        const lng = position.coords.longitude;
-                        const novaPosicao = [lng, lat];
-                        
-                        // 🔹 FILTRO ANTI-TREMOR: Se moveu menos de 5 metros, ignora e não mexe na câmera
-                        if (ultimaPosicaoLngLat) {
-                            const distMetros = calcularDistancia(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng) * 1000;
-                            if (distMetros < 5.0) {
-                                return; // Para a execução aqui, evitando o tremor
-                            }
-                        }
-
-                        marcadorMotorista.setLngLat(novaPosicao);
-                        document.getElementById('velocidade-valor').textContent = '5';
-
-                        if (modoNavegacaoAtivo && mapa.loaded()) {
-                            try {
-                                if (ultimaPosicaoLngLat) {
-                                    const bearing = calcularBearing(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
-                                    ultimoBearing = bearing;
-                                    marcadorMotorista._element.querySelector('div').style.transform = `rotate(${bearing}deg)`;
-                                    
-                                    // 🔹 TROCAMOS O JUMPTO PELO EASETO PARA SUAVIZAR O MOVIMENTO
-                                    mapa.easeTo({
-                                        center: novaPosicao,
-                                        bearing: bearing,
-                                        pitch: 65,
-                                        zoom: 19,
-                                        duration: 300 // Tempo de transição suave
-                                    });
-                                } else {
-                                    mapa.jumpTo({
-                                        center: novaPosicao,
-                                        bearing: 0,
-                                        pitch: 65,
-                                        zoom: 19
-                                    });
-                                }
-                                document.getElementById('velocimetro').style.display = 'flex';
-                            } catch (e) {
-                                console.warn('Erro ao reposicionar mapa via GPS:', e);
-                            }
-                        }
-                        ultimaPosicaoLngLat = novaPosicao;
-                    },
-                    (error) => {
-                        console.warn("❌ Erro no GPS:", error.message);
-                        let msg = "⚠️ Erro no GPS. ";
-                        if (error.code === error.PERMISSION_DENIED) msg += "Permissão negada.";
-                        else if (error.code === error.POSITION_UNAVAILABLE) msg += "Sinal indisponível.";
-                        else if (error.code === error.TIMEOUT) msg += "Tempo limite excedido.";
-                        document.getElementById('status-bar').innerHTML = msg;
-                        document.getElementById('status-bar').className = 'erro';
-                    },
-                    {
-                        enableHighAccuracy: true,
-                        maximumAge: 0,
-                        timeout: 15000
-                    }
-                );
-            } catch (e) {
-                console.error('Erro ao iniciar o watchPosition (protegido):', e);
-                statusBar.innerHTML = '⚠️ Erro de hardware do GPS. Modo 3D ativo sem rastreio.';
-                statusBar.className = 'erro';
-                gpsInicializado = false;
-            }
-        }
-
-        function iniciarNavegacao3D() {
-            if (!marcadorMotorista) return;
-            try {
-                const btn = document.getElementById('btn-iniciar-3d');
-                btn.innerHTML = '<i class="fas fa-circle-notch fa-spin"></i> Carregando...';
-                btn.disabled = true;
-                const statusBar = document.getElementById('status-bar');
-                const estiloAtual = temaAtual === 'light' ? estiloLight : estiloDark;
-                mapa.setStyle(estiloAtual);
-
-                setTimeout(() => {
-                    try {
-                        if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual);
-                        modoNavegacaoAtivo = true;
-                        btn.style.display = 'none';
-                        const posicao = marcadorMotorista.getLngLat();
-                        if (posicao) {
-                            mapa.flyTo({
-                                center: posicao,
-                                zoom: 19,
-                                pitch: 65,
-                                bearing: 0,
-                                duration: 2500
-                            });
-                        }
-                        statusBar.innerHTML = '🚛 Modo Visão de Rua Ativado!';
-                        statusBar.className = 'sucesso';
-                        document.getElementById('velocimetro').style.display = 'flex';
-                        setTimeout(() => {
-                            iniciarGPSReal();
-                        }, 3000);
-                    } catch (innerError) {
-                        console.error('Erro protegido durante inicialização 3D:', innerError);
-                        statusBar.innerHTML = '⚠️ Erro ao ativar 3D. Mantendo 2D.';
-                        statusBar.className = 'erro';
-                        btn.innerHTML = 'Tentar Novamente';
-                        btn.disabled = false;
-                    }
-                }, 2000); 
-            } catch (outerError) {
-                console.error('Erro crítico no botão 3D:', outerError);
-                document.getElementById('status-bar').innerHTML = '❌ Crash protegido. Reinicie o app.';
-                document.getElementById('status-bar').className = 'erro';
-            }
-        }
-
-        function calcularBearing(lat1, lon1, lat2, lon2) {
-            const dLon = (lon2 - lon1) * (Math.PI / 180);
-            const y = Math.sin(dLon) * Math.cos(lat2 * (Math.PI / 180));
-            const x = Math.cos(lat1 * (Math.PI / 180)) * Math.sin(lat2 * (Math.PI / 180)) - Math.sin(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.cos(dLon);
-            let bearing = (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
-            return bearing;
-        }
-
-        function mostrarInformacoesRota(geoJson, dadosRota) {
-            const infoDiv = document.getElementById('info-rota');
-            const segmento = geoJson.features[0].properties.segments[0];
-            if (!segmento) return infoDiv.style.display = 'none';
-            const dist = (segmento.distance / 1000).toFixed(1);
-            const dur = segmento.duration;
-            const h = Math.floor(dur / 3600);
-            const m = Math.floor((dur % 3600) / 60);
-            const origem = dadosRota.origem || 'Origem'; const destino = dadosRota.destino || 'Destino';
-            let restricoesHtml = '';
-            if (dadosRota.restricoes) {
-                const r = dadosRota.restricoes;
-                restricoesHtml = `<div class="restricoes-box"><i class="fas fa-arrows-up-down"></i> ${r.altura}m &nbsp;|&nbsp; <i class="fas fa-weight-scale"></i> ${r.peso}t &nbsp;|&nbsp; <i class="fas fa-arrows-left-right"></i> ${r.comprimento}m</div>`;
-            }
-            infoDiv.innerHTML = `
-                <div class="route-header"><i class="fas fa-circle-check" style="color:#22c55e;"></i> <span class="orig-dest">${origem}</span> <i class="fas fa-arrow-right" style="color:#52525b; font-size:12px;"></i> <span class="orig-dest">${destino}</span></div>
-                <div class="info-grid">
-                    <div class="info-item"><i class="fas fa-route"></i> <span class="val">${dist}</span> km</div>
-                    <div class="info-item"><i class="far fa-clock"></i> <span class="val">${h}h ${m}min</span></div>
-                </div>
-                ${restricoesHtml}
-                <div id="progresso-viagem"><div class="barra"></div></div>
-            `;
-            infoDiv.style.display = 'block';
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
-                fazerLoginMotorista();
-            }
+// ======================================================
+// VOZ E UTILIDADES
+// ======================================================
+function inicializarVozes() {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.onvoiceschanged = () => {
+        const vozes = window.speechSynthesis.getVoices();
+        vozFemininaSelecionada = vozes.find(v => v.lang.includes('pt-BR')) || vozes.find(v => v.lang.includes('pt'));
+    };
+    if (window.speechSynthesis.getVoices().length > 0) window.speechSynthesis.onvoiceschanged();
+}
+function playBeep() {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.value = 800;
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.start();
+        oscillator.stop(audioCtx.currentTime + 0.15);
+    } catch(e) {}
+}
+function speak(text) {
+    if (!window.speechSynthesis) return;
+    playBeep();
+    setTimeout(() => {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'pt-BR';
+        utterance.rate = 1;
+        if (vozFemininaSelecionada) utterance.voice = vozFemininaSelecionada;
+        window.speechSynthesis.speak(utterance);
+    }, 300);
+}
+function calcularDistancia(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+function calcularBearing(lat1, lon1, lat2, lon2) {
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI / 180);
+    const x = Math.cos(lat1 * Math.PI / 180) * Math.sin(lat2 * Math.PI / 180) - Math.sin(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.cos(dLon);
+    return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+function encontrarIndiceMaisProximo(lat, lng, inicio = 0) {
+    if (!pathCoordinates || pathCoordinates.length === 0) return -1;
+    let melhor = -1, menor = Infinity;
+    for (let i = Math.max(0, inicio); i < pathCoordinates.length; i++) {
+        const c = pathCoordinates[i];
+        const d = calcularDistancia(lat, lng, c[1], c[0]);
+        if (d < menor) { menor = d; melhor = i; }
+    }
+    return melhor;
+}
+function encontrarIndiceAtual() {
+    if (!marcadorMotorista) return 0;
+    const pos = marcadorMotorista.getLngLat();
+    return Math.max(0, encontrarIndiceMaisProximo(pos.lat, pos.lng));
+}
+function encontrarReentrada(idxIncidente, distanciaDesejadaKm = 1.5) {
+    if (idxIncidente < 0 || idxIncidente >= pathCoordinates.length) return -1;
+    let acumulada = 0;
+    for (let i = idxIncidente + 1; i < pathCoordinates.length; i++) {
+        const ant = pathCoordinates[i-1], atu = pathCoordinates[i];
+        acumulada += calcularDistancia(ant[1], ant[0], atu[1], atu[0]);
+        if (acumulada >= distanciaDesejadaKm) return i;
+    }
+    return pathCoordinates.length - 1;
+}
+async function enviarLocalizacaoServidor(lat, lon) {
+    if (!tokenJWT) return;
+    const agora = Date.now();
+    if (agora - ultimaLocalizacaoEnviada < INTERVALO_ENVIO_LOCALIZACAO || envioLocalizacaoEmAndamento) return;
+    envioLocalizacaoEmAndamento = true;
+    try {
+        const resp = await fetch(`${API_BASE}/localizacao`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({ lat: Number(lat), lon: Number(lon) })
         });
+        if (resp.ok) ultimaLocalizacaoEnviada = agora;
+    } catch(e) { console.warn(e); }
+    finally { envioLocalizacaoEmAndamento = false; }
+}
 
-        window.onload = function() {
-            inicializarVozes();
+// ======================================================
+// MAPA E LOGIN
+// ======================================================
+function initMapa() {
+    if (mapa) return;
+    mapa = new maplibregl.Map({
+        container: 'mapa',
+        style: estiloLight,
+        center: [-46.6333, -23.5505],
+        zoom: 14,
+        pitch: 0,
+        bearing: 0
+    });
+    mapa.addControl(new maplibregl.NavigationControl());
+    document.getElementById('btn-iniciar-3d').addEventListener('click', iniciarNavegacao3D);
+    document.getElementById('btn-tema-mapa').addEventListener('click', alternarTemaMapa);
+    document.getElementById('btn-centralizar').addEventListener('click', centralizarNoCarro);
+    document.getElementById('btn-reportar').addEventListener('click', toggleMenuReporte);
+    mapa.on('style.load', () => { if (dadosGeoJsonAtual) desenharRota(dadosGeoJsonAtual, false); });
+}
+async function fazerLoginMotorista() {
+    const login = document.getElementById('login-user').value;
+    const senha = document.getElementById('login-pass').value;
+    const status = document.getElementById('login-status');
+    status.innerHTML = '🔄 Autenticando...';
+    try {
+        const resp = await fetch(`${API_BASE}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login, senha })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro no login');
+        if (data.usuario.tipo !== 'motorista') throw new Error('Acesso negado');
+        tokenJWT = data.token;
+        document.getElementById('login-overlay').classList.add('hidden');
+        initMapa();
+        await carregarRotaDoMotorista();
+        if (intervalReportes) clearInterval(intervalReportes);
+        intervalReportes = setInterval(() => { if (tokenJWT && mapa) carregarReportesMotorista(); }, 30000);
+    } catch(erro) {
+        status.innerHTML = '❌ ' + erro.message;
+    }
+}
+async function carregarRotaDoMotorista() {
+    const statusBar = document.getElementById('status-bar');
+    try {
+        statusBar.innerHTML = '🔄 Buscando rota...';
+        statusBar.className = 'carregando';
+        const resp = await fetch(`${API_BASE}/rotas/minha-rota`, { headers: { 'Authorization': tokenJWT } });
+        if (resp.status === 404) { await carregarRotaTeste(); return; }
+        if (!resp.ok) throw new Error('Erro ao buscar rota');
+        const dados = await resp.json();
+        dadosGeoJsonAtual = dados.dados_geojson;
+        const executar = () => {
+            desenharRota(dadosGeoJsonAtual);
+            mostrarInformacoesRota(dadosGeoJsonAtual, dados);
+            ativarInterface();
+            statusBar.innerHTML = `✅ Rota "${dados.nome || 'Sem nome'}" carregada!`;
+            statusBar.className = 'sucesso';
+            setTimeout(carregarReportesMotorista, 3000);
         };
-    </script>
+        if (mapa.loaded()) executar(); else mapa.once('load', executar);
+    } catch(erro) { console.error(erro); await carregarRotaTeste(); }
+}
+async function carregarRotaTeste() {
+    const resp = await fetch(`${API_BASE}/teste-rota`);
+    const dados = await resp.json();
+    dadosGeoJsonAtual = dados;
+    const executar = () => {
+        desenharRota(dadosGeoJsonAtual);
+        mostrarInformacoesRota(dadosGeoJsonAtual, dados);
+        ativarInterface();
+    };
+    if (mapa.loaded()) executar(); else mapa.once('load', executar);
+}
+function ativarInterface() {
+    document.getElementById('btn-iniciar-3d').style.display = 'flex';
+    document.getElementById('btn-tema-mapa').style.display = 'flex';
+    document.getElementById('btn-centralizar').style.display = 'flex';
+    document.getElementById('btn-reportar').style.display = 'flex';
+    document.getElementById('controles-simulacao').style.display = 'flex';
+    document.getElementById('legenda-reportes-motorista').style.display = 'block';
+}
+function desenharRota(geoJson, reposicionarMotorista = true) {
+    if (!geoJson || !mapa) return;
+    if (mapa.getLayer('rota-layer')) mapa.removeLayer('rota-layer');
+    if (mapa.getLayer('rota-layer-glow')) mapa.removeLayer('rota-layer-glow');
+    if (mapa.getSource('rota-src')) mapa.removeSource('rota-src');
+    const coords = geoJson.features?.[0]?.geometry?.coordinates;
+    if (!coords || coords.length === 0) return;
+    pathCoordinates = coords;
+    mapa.addSource('rota-src', { type: 'geojson', data: geoJson });
+    mapa.addLayer({ id: 'rota-layer-glow', type: 'line', source: 'rota-src', paint: { 'line-color': '#3b82f6', 'line-width': 22, 'line-opacity': 0.2, 'line-blur': 15 } });
+    mapa.addLayer({ id: 'rota-layer', type: 'line', source: 'rota-src', paint: { 'line-color': '#3b82f6', 'line-width': 14, 'line-opacity': 0.9 } });
+    if (!marcadorMotorista) {
+        const el = document.createElement('div');
+        el.innerHTML = `<div style="background:#3b82f6;color:white;width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;border:4px solid white;box-shadow:0 6px 16px rgba(0,0,0,.4);"><i class="fas fa-location-arrow"></i></div>`;
+        marcadorMotorista = new maplibregl.Marker({ element: el }).setLngLat(coords[0]).addTo(mapa);
+        ultimaPosicaoLngLat = coords[0];
+    } else if (reposicionarMotorista) {
+        marcadorMotorista.setLngLat(coords[0]);
+        ultimaPosicaoLngLat = coords[0];
+    }
+    if (reposicionarMotorista) {
+        const bounds = new maplibregl.LngLatBounds();
+        coords.forEach(c => bounds.extend(c));
+        mapa.fitBounds(bounds, { padding: 60, maxZoom: 14 });
+    }
+}
+function mostrarInformacoesRota(geoJson, dadosRota) {
+    const div = document.getElementById('info-rota');
+    const segmento = geoJson.features?.[0]?.properties?.segments?.[0];
+    if (!segmento) { div.style.display = 'none'; return; }
+    const dist = (segmento.distance / 1000).toFixed(1);
+    const dur = segmento.duration;
+    const h = Math.floor(dur / 3600);
+    const m = Math.floor((dur % 3600) / 60);
+    div.innerHTML = `<div class="route-header"><span class="orig-dest">${dadosRota.origem || 'Origem'}</span> → <span class="orig-dest">${dadosRota.destino || 'Destino'}</span></div>
+        <div class="info-grid"><div class="info-item">🛣️ <span class="val">${dist}</span> km</div><div class="info-item">⏱️ <span class="val">${h}h ${m}min</span></div></div>
+        <div id="progresso-viagem"><div class="barra"></div></div>`;
+    div.style.display = 'block';
+}
+function alternarTemaMapa() {
+    temaAtual = temaAtual === 'light' ? 'dark' : 'light';
+    mapa.setStyle(temaAtual === 'light' ? estiloLight : estiloDark);
+}
+function centralizarNoCarro() {
+    if (!marcadorMotorista) return;
+    const pos = marcadorMotorista.getLngLat();
+    mapa.jumpTo({ center: pos, zoom: modoNavegacaoAtivo ? 19 : 15, pitch: modoNavegacaoAtivo ? 65 : 0, bearing: modoNavegacaoAtivo ? ultimoBearing : 0 });
+}
+function iniciarNavegacao3D() {
+    if (!marcadorMotorista) return;
+    modoNavegacaoAtivo = true;
+    document.getElementById('btn-iniciar-3d').style.display = 'none';
+    document.getElementById('velocimetro').style.display = 'flex';
+    const pos = marcadorMotorista.getLngLat();
+    mapa.flyTo({ center: pos, zoom: 19, pitch: 65, bearing: 0, duration: 1500 });
+    iniciarGPSReal();
+    iniciarMonitoramentoRota();
+}
+function iniciarGPSReal() {
+    if (gpsInicializado) return;
+    if (!navigator.geolocation) { alert('Seu navegador não suporta GPS.'); return; }
+    gpsInicializado = true;
+    watchId = navigator.geolocation.watchPosition(
+        (position) => {
+            const lat = position.coords.latitude, lng = position.coords.longitude;
+            const novaPosicao = [lng, lat];
+            enviarLocalizacaoServidor(lat, lng);
+            if (position.coords.speed !== null && Number.isFinite(position.coords.speed)) {
+                document.getElementById('velocidade-valor').textContent = Math.round(position.coords.speed * 3.6);
+            }
+            if (ultimaPosicaoLngLat) {
+                const distMetros = calcularDistancia(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng) * 1000;
+                if (distMetros < 3) return;
+            }
+            if (ultimaPosicaoLngLat) {
+                ultimoBearing = calcularBearing(ultimaPosicaoLngLat[1], ultimaPosicaoLngLat[0], lat, lng);
+            }
+            marcadorMotorista.setLngLat(novaPosicao);
+            if (marcadorMotorista._element) {
+                const interno = marcadorMotorista._element.querySelector('div');
+                if (interno) interno.style.transform = `rotate(${ultimoBearing}deg)`;
+            }
+            if (modoNavegacaoAtivo && mapa.loaded()) {
+                mapa.easeTo({ center: novaPosicao, bearing: ultimoBearing, pitch: 65, zoom: 19, duration: 300 });
+            }
+            ultimaPosicaoLngLat = novaPosicao;
+        },
+        (error) => { console.warn('Erro GPS:', error); },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    );
+}
+function toggleMenuReporte() {
+    const menu = document.getElementById('menu-reporte');
+    menu.style.display = menu.style.display === 'flex' ? 'none' : 'flex';
+}
+async function enviarReporte(tipo) {
+    if (!marcadorMotorista) return;
+    const pos = marcadorMotorista.getLngLat();
+    document.getElementById('menu-reporte').style.display = 'none';
+    try {
+        const resp = await fetch(`${API_BASE}/reportar`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({ lat: pos.lat, lng: pos.lng, tipo })
+        });
+        if (!resp.ok) throw new Error('Erro ao enviar reporte');
+        speak(`Reporte de ${tipo} enviado`);
+        await carregarReportesMotorista();
+    } catch(erro) { console.error(erro); }
+}
+
+// ======================================================
+// REPORTES COLABORATIVOS
+// ======================================================
+async function carregarReportesMotorista() {
+    if (!tokenJWT || !mapa) return;
+    try {
+        const resp = await fetch(`${API_BASE}/reportes`, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) return;
+        const reportes = await resp.json();
+        marcadoresReportes.forEach(m => m.remove());
+        marcadoresReportes = [];
+        const cores = { radar:'#f97316', acidente:'#ef4444', obra:'#fbbf24', perigo:'#f59e0b', risco:'#d63031' };
+        const icones = { radar:'📡', acidente:'🚗', obra:'🚧', perigo:'⚠️', risco:'🔴' };
+        const idxAtual = encontrarIndiceAtual();
+        let melhorReporte = null, melhorIndice = -1, melhorDistanciaRota = Infinity;
+        for (const r of reportes) {
+            const el = document.createElement('div');
+            el.innerHTML = `<div style="background:${cores[r.tipo] || '#fff'};color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid white;">${icones[r.tipo] || '!'}</div>`;
+            const marker = new maplibregl.Marker({ element: el }).setLngLat([r.lng, r.lat]).addTo(mapa);
+            marcadoresReportes.push(marker);
+            if (!['acidente','perigo','risco'].includes(r.tipo)) continue;
+            const idxReporte = encontrarIndiceMaisProximo(Number(r.lat), Number(r.lng), idxAtual);
+            if (idxReporte < 0) continue;
+            const coordRota = pathCoordinates[idxReporte];
+            const distanciaRota = calcularDistancia(Number(r.lat), Number(r.lng), coordRota[1], coordRota[0]);
+            if (distanciaRota < 1 && idxReporte >= idxAtual && distanciaRota < melhorDistanciaRota) {
+                melhorReporte = r;
+                melhorIndice = idxReporte;
+                melhorDistanciaRota = distanciaRota;
+            }
+        }
+        if (melhorReporte && modoNavegacaoAtivo) {
+            console.log(`🚨 Reporte ${melhorReporte.tipo} detectado à frente.`);
+            await recalcularDesvioLocal(
+                { lat: marcadorMotorista.getLngLat().lat, lng: marcadorMotorista.getLngLat().lng },
+                { id: melhorReporte.id, tipo: melhorReporte.tipo, lat: Number(melhorReporte.lat), lng: Number(melhorReporte.lng) }
+            );
+        }
+    } catch(erro) { console.warn('Erro ao carregar reportes:', erro); }
+}
+async function verificarReportesCriticosSimulacao() {
+    if (!tokenJWT || !simulacaoAtiva || pathCoordinates.length === 0) return;
+    try {
+        const resp = await fetch(`${API_BASE}/reportes`, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) return;
+        const reportes = await resp.json();
+        const idxAtual = Math.max(0, indexSimulacao);
+        let melhor = null, melhorDist = Infinity;
+        for (const r of reportes) {
+            if (!['acidente','perigo','risco'].includes(r.tipo)) continue;
+            const idxReporte = encontrarIndiceMaisProximo(Number(r.lat), Number(r.lng), idxAtual);
+            if (idxReporte < idxAtual) continue;
+            const c = pathCoordinates[idxReporte];
+            const distRota = calcularDistancia(Number(r.lat), Number(r.lng), c[1], c[0]);
+            const pos = marcadorMotorista.getLngLat();
+            const distMotorista = calcularDistancia(pos.lat, pos.lng, Number(r.lat), Number(r.lng));
+            if (distRota < 1 && distMotorista < 1 && distMotorista < melhorDist) {
+                melhor = r;
+                melhorDist = distMotorista;
+            }
+        }
+        if (melhor) {
+            const pos = marcadorMotorista.getLngLat();
+            await recalcularDesvioLocal(
+                { lat: pos.lat, lng: pos.lng },
+                { id: melhor.id, tipo: melhor.tipo, lat: Number(melhor.lat), lng: Number(melhor.lng) }
+            );
+        }
+    } catch(erro) { console.warn(erro); }
+}
+
+// ======================================================
+// RECALCULAR DESVIO
+// ======================================================
+async function recalcularDesvioLocal(posicaoAtual, incidente) {
+    const statusBar = document.getElementById('status-bar');
+    const agora = Date.now();
+    if (agora - ultimoRecalculo < COOLDOWN_RECALCULO || totalRecalculos >= MAX_RECALCULOS) return;
+    let latIncidente = Number(incidente.lat), lngIncidente = Number(incidente.lng);
+    if ((!Number.isFinite(latIncidente) || !Number.isFinite(lngIncidente)) && incidente.geometry) {
+        if (incidente.geometry.type === 'Point') {
+            lngIncidente = Number(incidente.geometry.coordinates[0]);
+            latIncidente = Number(incidente.geometry.coordinates[1]);
+        }
+    }
+    if (!Number.isFinite(latIncidente) || !Number.isFinite(lngIncidente)) { console.warn('⚠️ Incidente sem coordenada.'); return; }
+    const incidenteKey = incidente.id ? `reporte-${incidente.id}` : `${latIncidente.toFixed(5)}-${lngIncidente.toFixed(5)}`;
+    if (incidentesProcessados.has(incidenteKey)) return;
+    const idxSaida = encontrarIndiceMaisProximo(posicaoAtual.lat, posicaoAtual.lng);
+    const idxIncidente = encontrarIndiceMaisProximo(latIncidente, lngIncidente, Math.max(0, idxSaida));
+    if (idxSaida < 0 || idxIncidente < 0 || idxIncidente < idxSaida) return;
+    const idxReentrada = encontrarReentrada(idxIncidente, 1.5);
+    if (idxReentrada <= idxIncidente) return;
+    const pontoSaida = pathCoordinates[idxSaida];
+    const pontoReentrada = pathCoordinates[idxReentrada];
+    const pontoIncidente = [lngIncidente, latIncidente];
+    console.log(`🔄 Recalculando desvio: saída=${idxSaida}, incidente=${idxIncidente}, reentrada=${idxReentrada}`);
+    statusBar.innerHTML = '🔄 Calculando rota alternativa...';
+    statusBar.className = 'carregando';
+    try {
+        const resp = await fetch(`${API_BASE}/api/recalcular-desvio`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({ pontoSaida, pontoIncidente, pontoReentrada, raioBloqueio: 180, perfil: 'driving-hgv', altura: 4.2, peso: 15, comprimento: 12 })
+        });
+        const resposta = await resp.json();
+        if (!resp.ok) throw new Error(resposta.erro || 'Falha ao recalcular');
+        const coordsDesvio = resposta.features?.[0]?.geometry?.coordinates;
+        if (!coordsDesvio || coordsDesvio.length < 2) throw new Error('Rota alternativa inválida');
+        const rotaAntes = pathCoordinates.slice(0, idxSaida);
+        const rotaDepois = pathCoordinates.slice(idxReentrada + 1);
+        const novaRota = [...rotaAntes, ...coordsDesvio, ...rotaDepois];
+        const novoGeoJson = { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: novaRota }, properties: resposta.features?.[0]?.properties || {} }] };
+        if (mapa.getSource('rota-src')) {
+            mapa.getSource('rota-src').setData(novoGeoJson);
+        } else {
+            desenharRota(novoGeoJson, false);
+        }
+        pathCoordinates = novaRota;
+        dadosGeoJsonAtual = novoGeoJson;
+        if (simulacaoAtiva) {
+            const pos = marcadorMotorista.getLngLat();
+            indexSimulacao = Math.max(0, encontrarIndiceMaisProximo(pos.lat, pos.lng));
+        }
+        incidentesProcessados.add(incidenteKey);
+        ultimoRecalculo = agora;
+        totalRecalculos++;
+        console.log(`✅ Desvio aplicado! ${totalRecalculos}/${MAX_RECALCULOS}`);
+        statusBar.innerHTML = `✅ Nova rota aplicada! ${totalRecalculos}/${MAX_RECALCULOS}`;
+        statusBar.className = 'sucesso';
+        speak('Desviando do incidente à frente');
+        setTimeout(() => {
+            statusBar.innerHTML = '🚛 Navegação ativa';
+            statusBar.className = 'sucesso';
+        }, 2500);
+    } catch(erro) {
+        console.error('❌ Erro no desvio:', erro);
+        statusBar.innerHTML = `❌ Erro no desvio: ${erro.message}`;
+        statusBar.className = 'erro';
+    }
+}
+function iniciarMonitoramentoRota() {
+    if (intervalMonitoramento) clearInterval(intervalMonitoramento);
+    intervalMonitoramento = setInterval(verificarIncidentesNaRota, 60000);
+}
+async function verificarIncidentesNaRota() {
+    if (!marcadorMotorista || pathCoordinates.length === 0) return;
+    const pos = marcadorMotorista.getLngLat();
+    const raio = 0.1;
+    try {
+        const url = `${API_BASE}/api/traffic?top=${pos.lat+raio}&bottom=${pos.lat-raio}&left=${pos.lng-raio}&right=${pos.lng+raio}`;
+        const resp = await fetch(url, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) return;
+        const dados = await resp.json();
+        const incidentes = dados.incidents || [];
+        let melhor = null, menorDist = Infinity;
+        for (const inc of incidentes) {
+            if (inc.geometry?.type === 'Point') {
+                const lng = Number(inc.geometry.coordinates[0]);
+                const lat = Number(inc.geometry.coordinates[1]);
+                const dist = calcularDistancia(pos.lat, pos.lng, lat, lng);
+                if (dist < 5 && dist < menorDist) { menorDist = dist; melhor = { ...inc, lat, lng }; }
+            }
+        }
+        if (melhor) await recalcularDesvioLocal({ lat: pos.lat, lng: pos.lng }, melhor);
+    } catch(erro) { console.warn('Erro TomTom:', erro); }
+}
+
+// ======================================================
+// SIMULAÇÃO
+// ======================================================
+function iniciarSimulacao(velocidade, intervaloMs = 2000) {
+    if (!pathCoordinates || pathCoordinates.length < 2) return;
+    if (simulacaoAtiva) pararSimulacao();
+    if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; gpsInicializado = false; }
+    simulacaoAtiva = true;
+    simulacaoPausada = false;
+    velocidadeSimulacao = velocidade;
+    indexSimulacao = 0;
+    const inicio = pathCoordinates[0];
+    marcadorMotorista.setLngLat(inicio);
+    ultimaPosicaoLngLat = inicio;
+    document.getElementById('velocimetro').style.display = 'flex';
+    let ultimaVerificacao = 0;
+    intervalSimulacao = setInterval(() => {
+        if (simulacaoPausada) return;
+        if (Date.now() - ultimaVerificacao > 5000) {
+            ultimaVerificacao = Date.now();
+            verificarReportesCriticosSimulacao();
+        }
+        const totalPontos = pathCoordinates.length;
+        if (indexSimulacao >= totalPontos - 1) {
+            pararSimulacao();
+            speak('Destino alcançado');
+            return;
+        }
+        const passos = Math.max(1, Math.floor((velocidade / 3.6) * (intervaloMs / 1000) * 0.3));
+        indexSimulacao = Math.min(indexSimulacao + passos, totalPontos - 1);
+        const ponto = pathCoordinates[indexSimulacao];
+        if (!ponto) return;
+        const lng = ponto[0], lat = ponto[1];
+        const anterior = pathCoordinates[Math.max(0, indexSimulacao - passos)];
+        if (anterior) ultimoBearing = calcularBearing(anterior[1], anterior[0], lat, lng);
+        marcadorMotorista.setLngLat([lng, lat]);
+        ultimaPosicaoLngLat = [lng, lat];
+        document.getElementById('velocidade-valor').textContent = Math.round(velocidadeSimulacao);
+        enviarLocalizacaoServidor(lat, lng);
+        const barra = document.querySelector('#progresso-viagem .barra');
+        if (barra) barra.style.width = (indexSimulacao / Math.max(1, totalPontos - 1) * 100) + '%';
+        if (modoNavegacaoAtivo) {
+            mapa.easeTo({ center: [lng, lat], bearing: ultimoBearing, pitch: 65, zoom: 19, duration: 500 });
+        }
+    }, intervaloMs);
+}
+function pausarSimulacao() {
+    if (!simulacaoAtiva) return;
+    simulacaoPausada = !simulacaoPausada;
+}
+function pararSimulacao() {
+    if (intervalSimulacao) { clearInterval(intervalSimulacao); intervalSimulacao = null; }
+    simulacaoAtiva = false;
+    simulacaoPausada = false;
+    document.getElementById('velocidade-valor').textContent = '0';
+    document.getElementById('velocimetro').style.display = 'none';
+}
+function iniciarDemonstracao() {
+    iniciarSimulacao(10, 2000);
+}
+let gpsInicializado = false;
+
+// ======================================================
+// EVENTOS
+// ======================================================
+document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
+        fazerLoginMotorista();
+    }
+    if (e.key === 's' || e.key === 'S') {
+        if (!simulacaoAtiva) iniciarSimulacao(30);
+        else pausarSimulacao();
+    }
+    if (e.key === 'p' || e.key === 'P') {
+        pararSimulacao();
+    }
+});
+window.onload = function() { inicializarVozes(); };
+</script>
 </body>
 </html>
