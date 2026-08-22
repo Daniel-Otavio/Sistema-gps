@@ -1,841 +1,589 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard Gestão - GPS Caminhão</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            background: #0f0f1a;
-            color: white;
-        }
-
-        /* --- MAPA --- */
-        #mapa {
-            position: fixed;
-            left: 380px;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            z-index: 1;
-        }
-
-        /* --- SIDEBAR (painel de controle) --- */
-        .sidebar {
-            position: fixed;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            width: 380px;
-            background: linear-gradient(180deg, #1a1a2e 0%, #0f0f1a 100%);
-            padding: 24px 20px;
-            z-index: 1000;
-            overflow-y: auto;
-            box-shadow: 2px 0 20px rgba(0,0,0,0.8);
-            border-right: 1px solid #2a2a3e;
-        }
-
-        .sidebar h1 {
-            font-size: 24px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 4px;
-        }
-        .sidebar h1::before { content: "📊"; font-size: 28px; }
-        .sidebar .subtitle {
-            font-size: 13px;
-            color: #ff6600;
-            border-bottom: 1px solid #2a2a3e;
-            padding-bottom: 16px;
-            margin-bottom: 20px;
-        }
-
-        /* --- NAVEGAÇÃO POR ABAS --- */
-        .tab-nav {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #2a2a3e;
-            padding-bottom: 10px;
-        }
-        .tab-btn {
-            background: transparent;
-            border: none;
-            color: #888;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            padding: 8px 16px;
-            border-radius: 8px;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .tab-btn:hover { color: #fff; background: #2a2a3e; }
-        .tab-btn.active {
-            color: #ff6600;
-            background: rgba(255, 102, 0, 0.15);
-        }
-        
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-
-        /* --- GRUPOS DE INPUT --- */
-        .grupo {
-            margin-bottom: 16px;
-        }
-        .grupo label {
-            display: block;
-            font-size: 12px;
-            color: #aaa;
-            margin-bottom: 4px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .grupo input, .grupo select {
-            width: 100%;
-            padding: 10px 12px;
-            border-radius: 8px;
-            border: 1px solid #2a2a3e;
-            background: #0a0a12;
-            color: white;
-            font-size: 14px;
-            transition: border 0.2s;
-        }
-        .grupo input:focus, .grupo select:focus {
-            outline: none;
-            border-color: #ff6600;
-        }
-        .grupo select option { background: #1a1a2e; }
-
-        /* --- BOTÕES --- */
-        .btn-primary {
-            width: 100%;
-            padding: 12px;
-            background: #ff6600;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: transform 0.1s, background 0.2s;
-            margin-top: 8px;
-        }
-        .btn-primary:hover { background: #e05a00; transform: scale(1.01); }
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .btn-success {
-            background: #00b894;
-        }
-        .btn-success:hover { background: #00a381; }
-
-        .btn-secondary {
-            background: #6c757d;
-        }
-        .btn-secondary:hover { background: #5a6268; }
-
-        /* --- STATUS BOX --- */
-        .status-box {
-            margin-top: 16px;
-            padding: 10px;
-            background: #0a0a12;
-            border-radius: 8px;
-            font-size: 13px;
-            text-align: center;
-            border-left: 3px solid #ff6600;
-            min-height: 40px;
-        }
-        .status-box.sucesso { border-left-color: #00b894; color: #00b894; }
-        .status-box.erro { border-left-color: #d63031; color: #d63031; }
-        .status-box.carregando { border-left-color: #fdcb6e; color: #fdcb6e; }
-
-        /* --- LOGIN OVERLAY --- */
-        #login-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.9);
-            backdrop-filter: blur(8px);
-            z-index: 9999;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-direction: column;
-        }
-        #login-overlay.hidden { display: none; }
-
-        .login-card {
-            background: #1a1a2e;
-            padding: 40px 36px;
-            border-radius: 20px;
-            width: 100%;
-            max-width: 380px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.8);
-            border: 1px solid #2a2a3e;
-        }
-        .login-card h2 {
-            font-size: 28px;
-            margin-bottom: 8px;
-        }
-        .login-card h2 span { color: #ff6600; }
-        .login-card p.sub {
-            color: #aaa;
-            margin-bottom: 24px;
-            font-size: 14px;
-        }
-        .login-card .grupo { margin-bottom: 20px; }
-        .login-card .btn-primary { margin-top: 0; }
-
-        /* --- Responsivo --- */
-        @media (max-width: 768px) {
-            .sidebar { width: 100%; height: 50%; bottom: auto; position: relative; }
-            #mapa { left: 0; top: 50%; height: 50%; position: relative; }
-            body { overflow: auto; }
-        }
-
-        /* Scrollbar estilizada */
-        .sidebar::-webkit-scrollbar { width: 4px; }
-        .sidebar::-webkit-scrollbar-track { background: #0a0a12; }
-        .sidebar::-webkit-scrollbar-thumb { background: #ff6600; border-radius: 4px; }
-
-        .user-info {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: #0a0a12;
-            padding: 8px 12px;
-            border-radius: 8px;
-            margin-bottom: 16px;
-            font-size: 13px;
-        }
-        .user-info .logout-btn {
-            background: none;
-            border: none;
-            color: #d63031;
-            cursor: pointer;
-            font-weight: bold;
-        }
-        .user-info .logout-btn:hover { text-decoration: underline; }
-
-        .marker-icon { font-size: 30px; line-height: 30px; text-align: center; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5)); }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Gestão - GPS Caminhão</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; color:white; }
+#mapa { position:fixed; left:380px; top:0; right:0; bottom:0; z-index:1; }
+.sidebar { position:fixed; left:0; top:0; bottom:0; width:380px; background:linear-gradient(180deg,#1a1a2e 0%,#0f0f1a 100%); padding:24px 20px; z-index:1000; overflow-y:auto; box-shadow:2px 0 20px rgba(0,0,0,.8); border-right:1px solid #2a2a3e; }
+.sidebar h1 { font-size:24px; margin-bottom:4px; }
+.sidebar .subtitle { font-size:13px; color:#ff6600; border-bottom:1px solid #2a2a3e; padding-bottom:16px; margin-bottom:20px; }
+.user-info { display:flex; justify-content:space-between; align-items:center; background:#0a0a12; padding:8px 12px; border-radius:8px; margin-bottom:16px; font-size:13px; }
+.logout-btn { background:none; border:none; color:#d63031; cursor:pointer; font-weight:bold; }
+.tab-nav { display:flex; gap:6px; margin-bottom:20px; border-bottom:1px solid #2a2a3e; padding-bottom:10px; flex-wrap:wrap; }
+.tab-btn { background:transparent; border:none; color:#888; font-size:12px; font-weight:600; cursor:pointer; padding:8px 10px; border-radius:8px; transition:all .2s; }
+.tab-btn:hover { color:#fff; background:#2a2a3e; }
+.tab-btn.active { color:#ff6600; background:rgba(255,102,0,.15); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+.grupo { margin-bottom:16px; }
+.grupo label { display:block; font-size:12px; color:#aaa; margin-bottom:4px; font-weight:600; text-transform:uppercase; }
+.grupo input,.grupo select { width:100%; padding:10px 12px; border-radius:8px; border:1px solid #2a2a3e; background:#0a0a12; color:white; font-size:14px; }
+.grupo input:focus,.grupo select:focus { outline:none; border-color:#ff6600; }
+.btn-primary { width:100%; padding:12px; background:#ff6600; color:white; border:none; border-radius:8px; font-size:15px; font-weight:bold; cursor:pointer; transition:.2s; margin-top:8px; }
+.btn-primary:hover { background:#e05a00; }
+.btn-success { background:#00b894; }
+.btn-success:hover { background:#00a381; }
+.btn-secondary { background:#6c757d; }
+.btn-danger { background:#d63031; }
+.btn-tomtom { background:#33ccff; color:#000; }
+.status-box { margin-top:16px; padding:10px; background:#0a0a12; border-radius:8px; font-size:13px; text-align:center; border-left:3px solid #ff6600; min-height:40px; }
+.status-box.sucesso { border-left-color:#00b894; color:#00b894; }
+.status-box.erro { border-left-color:#d63031; color:#d63031; }
+.status-box.carregando { border-left-color:#fdcb6e; color:#fdcb6e; }
+#login-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.92); backdrop-filter:blur(8px); z-index:9999; display:flex; align-items:center; justify-content:center; }
+#login-overlay.hidden { display:none; }
+.login-card { background:#1a1a2e; padding:40px 36px; border-radius:20px; width:100%; max-width:380px; box-shadow:0 20px 60px rgba(0,0,0,.8); border:1px solid #2a2a3e; }
+.login-card h2 { font-size:28px; margin-bottom:8px; }
+.login-card h2 span { color:#ff6600; }
+.login-card p { color:#aaa; margin-bottom:24px; }
+.frota-card { background:#0a0a12; border:1px solid #2a2a3e; border-radius:10px; padding:11px 12px; margin-bottom:8px; cursor:pointer; transition:all .2s; }
+.frota-card:hover { border-color:#ff6600; transform:translateX(2px); }
+.frota-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.frota-nome { font-weight:700; font-size:14px; }
+.frota-status { font-size:10px; font-weight:700; padding:3px 8px; border-radius:12px; }
+.frota-status.online { background:rgba(34,197,94,.15); color:#22c55e; }
+.frota-status.offline { background:rgba(161,161,170,.15); color:#a1a1aa; }
+.frota-detalhes { margin-top:6px; color:#a1a1aa; font-size:11px; line-height:1.5; }
+.resumo-frota { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:12px; }
+.resumo-item { background:#0a0a12; border:1px solid #2a2a3e; border-radius:8px; padding:8px 4px; text-align:center; }
+.resumo-item strong { display:block; font-size:18px; color:#ff6600; }
+.resumo-item span { color:#888; font-size:9px; }
+#tabela-reportes { overflow-x:auto; max-height:400px; overflow-y:auto; border-radius:8px; border:1px solid #2a2a3e; margin-bottom:12px; }
+#tabela-reportes table { width:100%; border-collapse:collapse; font-size:12px; color:#f4f4f5; }
+#tabela-reportes thead { background:#2a2a3e; position:sticky; top:0; z-index:10; }
+#tabela-reportes th { padding:8px; text-align:left; }
+#tabela-reportes td { padding:7px 8px; border-bottom:1px solid #2a2a3e; }
+.badge-reporte { display:inline-block; padding:2px 7px; border-radius:12px; font-size:10px; font-weight:700; }
+.badge-radar { background:#f97316; }
+.badge-acidente { background:#ef4444; }
+.badge-obra { background:#fbbf24; color:#000; }
+.badge-perigo { background:#f59e0b; color:#000; }
+.badge-risco { background:#d63031; }
+.legenda-mapa { position:fixed; z-index:2000; background:rgba(15,15,26,.94); backdrop-filter:blur(5px); padding:10px 12px; border-radius:10px; border:1px solid #2a2a3e; box-shadow:0 4px 12px rgba(0,0,0,.6); font-size:11px; color:#f4f4f5; }
+#legenda-geral { bottom:20px; right:20px; }
+.legenda-titulo { font-size:12px; font-weight:700; margin-bottom:6px; }
+.legenda-item { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
+.cor-bolinha { width:10px; height:10px; border-radius:50%; }
+@media(max-width:768px){ .sidebar { width:100%; height:52%; bottom:auto; position:fixed; } #mapa { left:0; top:52%; height:48%; } #legenda-geral { bottom:10px; right:10px; font-size:9px; } }
+</style>
 </head>
 <body>
 
-    <!-- ============================================= -->
-    <!-- TELA DE LOGIN (OVERLAY) -->
-    <!-- ============================================= -->
-    <div id="login-overlay">
-        <div class="login-card">
-            <h2>🚛 <span>GPS</span> Gestão</h2>
-            <p class="sub">Acesse o painel de controle de rotas</p>
-            <div class="grupo">
-                <label>👤 Login</label>
-                <input type="text" id="login-user" placeholder="admin" value="admin">
-            </div>
-            <div class="grupo">
-                <label>🔒 Senha</label>
-                <input type="password" id="login-pass" placeholder="••••••••" value="admin123">
-            </div>
-            <button class="btn-primary" onclick="fazerLogin()">Entrar no Sistema</button>
-            <div id="login-status" class="status-box" style="margin-top: 16px;">Use admin / admin123</div>
-        </div>
-    </div>
-
-    <!-- ============================================= -->
-    <!-- SIDEBAR (PAINEL DE CONTROLE) -->
-    <!-- ============================================= -->
-    <div class="sidebar" id="sidebar-principal">
-        <h1>Gestão de Rotas</h1>
-        <div class="subtitle">Atribuir rotas para motoristas</div>
-
-        <div class="user-info" id="user-info-area">
-            <span>👤 <span id="nome-admin">Admin</span></span>
-            <button class="logout-btn" onclick="fazerLogout()">Sair</button>
-        </div>
-
-        <!-- ============================================= -->
-        <!-- NAVEGAÇÃO ENTRE ABAS (Rotas / Motoristas)  -->
-        <!-- ============================================= -->
-        <div class="tab-nav">
-            <button class="tab-btn active" onclick="trocarAba('rotas')">🗺️ Rotas</button>
-            <button class="tab-btn" onclick="trocarAba('motoristas')">👤 Cadastrar</button>
-        </div>
-
-        <!-- ============================================= -->
-        <!-- ABA 1: CRIAÇÃO DE ROTAS                      -->
-        <!-- ============================================= -->
-        <div id="tab-rotas" class="tab-content active">
-            
-            <div class="grupo">
-                <label>👨‍✈️ Nome do Motorista</label>
-                <input type="text" id="nome-motorista" placeholder="Digite o nome do motorista" value="José Silva">
-                <div style="font-size: 11px; color: #888; margin-top: 4px;">O sistema buscará o ID automaticamente ao salvar.</div>
-            </div>
-
-            <div class="grupo">
-                <label>🚗 Tipo de Veículo</label>
-                <select id="tipo-veiculo" onchange="toggleRestricoes()">
-                    <option value="driving-car">Carro (Sem restrições)</option>
-                    <option value="driving-hgv" selected>Caminhão (Com restrições)</option>
-                </select>
-                <div style="font-size: 11px; color: #888; margin-top: 4px;">Use "Carro" para testar rotas locais e evitar bloqueios.</div>
-            </div>
-
-            <div class="grupo">
-                <label>⚙️ Preferência de Rota</label>
-                <select id="preferencia-rota">
-                    <option value="fastest">Mais Rápida (Padrão)</option>
-                    <option value="shortest">Mais Curta</option>
-                    <option value="recommended">Recomendada</option>
-                </select>
-            </div>
-
-            <hr style="border-color: #2a2a3e; margin: 16px 0;">
-
-            <div class="grupo">
-                <label>📌 Nome da Rota</label>
-                <input type="text" id="nome-rota" placeholder="Ex: Entrega SP - RJ" value="Rota Teste 01">
-            </div>
-            <div class="grupo">
-                <label>📍 Origem</label>
-                <input type="text" id="origem" placeholder="Cidade ou endereço" value="São Paulo, SP">
-            </div>
-            <div class="grupo">
-                <label>🏁 Destino</label>
-                <input type="text" id="destino" placeholder="Cidade ou endereço" value="Rio de Janeiro, RJ">
-            </div>
-
-            <!-- Campos de Restrição (Escondidos se for Carro) -->
-            <div id="container-restricoes">
-                <div class="grupo">
-                    <label>📏 Altura (m)</label>
-                    <input type="number" id="altura" value="4.2" step="0.1" min="0.1" max="6">
-                </div>
-                <div class="grupo">
-                    <label>⚖️ Peso (t)</label>
-                    <input type="number" id="peso" value="15" step="1" min="0.1" max="74">
-                </div>
-                <div class="grupo">
-                    <label>📐 Comprimento (m)</label>
-                    <input type="number" id="comprimento" value="12" step="0.5" min="0.1" max="30">
-                </div>
-            </div>
-
-            <button class="btn-primary" id="btn-calcular" onclick="calcularRota()">
-                🗺️ Calcular Rota e Visualizar
-            </button>
-
-            <button class="btn-primary btn-success" id="btn-salvar" onclick="salvarRota()" style="display: none; margin-top: 10px;">
-                💾 Salvar Rota no Banco
-            </button>
-
-            <hr style="border-color: #2a2a3e; margin: 16px 0;">
-
-            <button class="btn-primary btn-danger" onclick="testarListarRotas()" style="background: #d63031;">
-                👁️ Verificar Rotas Salvas (Debug)
-            </button>
-
-            <div id="status-dashboard" class="status-box">Preencha os dados e calcule a rota.</div>
-        </div>
-
-        <!-- ============================================= -->
-        <!-- ABA 2: CADASTRO DE MOTORISTAS                -->
-        <!-- ============================================= -->
-        <div id="tab-motoristas" class="tab-content">
-            <h2 style="font-size: 18px; margin-bottom: 16px;">➕ Cadastrar Novo Motorista</h2>
-            
-            <div class="grupo">
-                <label>👤 Nome do Motorista</label>
-                <input type="text" id="novo-nome" placeholder="Ex: Daniel Otavio">
-            </div>
-            <div class="grupo">
-                <label>🔑 Login</label>
-                <input type="text" id="novo-login" placeholder="Ex: daniel">
-            </div>
-            <div class="grupo">
-                <label>🔒 Senha</label>
-                <input type="password" id="novo-senha" placeholder="Crie uma senha">
-            </div>
-            <div class="grupo" style="margin-bottom: 0;">
-                <button class="btn-primary btn-secondary" onclick="cadastrarMotorista()">
-                    ✅ Cadastrar Motorista
-                </button>
-            </div>
-            <div id="status-cadastro" class="status-box" style="margin-top: 12px;">Preencha os dados para cadastrar.</div>
-        </div>
-
-    </div>
-
-    <!-- ============================================= -->
-    <!-- MAPA -->
-    <!-- ============================================= -->
-    <div id="mapa"></div>
-
-    <!-- ============================================= -->
-    <!-- SCRIPTS -->
-    <!-- ============================================= -->
-    <script>
-        // =============================================
-        // VARIÁVEIS GLOBAIS
-        // =============================================
-        let mapa = null;
-        let rotaAtual = null;
-        let marcadorOrigem = null;
-        let marcadorDestino = null;
-        let tokenJWT = null;
-        let dadosUsuario = null;
-        let geoJsonCalculado = null;
-        let motoristasList = []; 
-
-        const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
-        const ORS_API_KEY = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImE4YTFkNjA1ODZkMDQwYTk4NWM4YzI0OGRmMWM2MmIxIiwiaCI6Im11cm11cjY0In0=';
-
-        // =============================================
-        // FUNÇÕES DE NAVEGAÇÃO
-        // =============================================
-        function trocarAba(aba) {
-            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-            document.querySelector(`.tab-btn[onclick="trocarAba('${aba}')"]`).classList.add('active');
-            document.getElementById(`tab-${aba}`).classList.add('active');
-        }
-
-        function toggleRestricoes() {
-            const tipoVeiculo = document.getElementById('tipo-veiculo').value;
-            const containerRestricoes = document.getElementById('container-restricoes');
-            if (tipoVeiculo === 'driving-car') {
-                containerRestricoes.style.display = 'none';
-            } else {
-                containerRestricoes.style.display = 'block';
-            }
-        }
-
-        function initMapa() {
-            if (mapa) return;
-            mapa = L.map('mapa').setView([-23.5505, -46.6333], 13);
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap',
-                maxZoom: 19
-            }).addTo(mapa);
-        }
-
-        // =============================================
-        // LOGIN
-        // =============================================
-        async function fazerLogin() {
-            const login = document.getElementById('login-user').value;
-            const senha = document.getElementById('login-pass').value;
-            const statusDiv = document.getElementById('login-status');
-
-            if (!login || !senha) {
-                statusDiv.textContent = '❌ Preencha login e senha!';
-                statusDiv.className = 'status-box erro';
-                return;
-            }
-
-            statusDiv.textContent = '🔄 Autenticando...';
-            statusDiv.className = 'status-box carregando';
-
-            try {
-                const resp = await fetch(`${API_BASE}/login`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ login, senha })
-                });
-
-                const data = await resp.json();
-
-                if (!resp.ok) {
-                    throw new Error(data.erro || 'Erro no login');
-                }
-
-                if (data.usuario.tipo !== 'admin') {
-                    throw new Error('Acesso negado. Apenas administradores.');
-                }
-
-                tokenJWT = data.token;
-                dadosUsuario = data.usuario;
-                document.getElementById('nome-admin').textContent = dadosUsuario.nome;
-
-                document.getElementById('login-overlay').classList.add('hidden');
-                document.getElementById('login-status').textContent = '✅ Login realizado!';
-                document.getElementById('login-status').className = 'status-box sucesso';
-
-                initMapa();
-                await carregarMotoristas();
-                
-                toggleRestricoes();
-                atualizarStatus('Dashboard pronto. Crie uma rota!', 'sucesso');
-
-            } catch (erro) {
-                statusDiv.textContent = `❌ ${erro.message}`;
-                statusDiv.className = 'status-box erro';
-                console.error(erro);
-            }
-        }
-
-        function fazerLogout() {
-            tokenJWT = null;
-            dadosUsuario = null;
-            geoJsonCalculado = null;
-            motoristasList = [];
-            document.getElementById('login-overlay').classList.remove('hidden');
-            document.getElementById('login-status').textContent = 'Sessão encerrada. Faça login novamente.';
-            document.getElementById('login-status').className = 'status-box';
-            if (rotaAtual) { mapa.removeLayer(rotaAtual); rotaAtual = null; }
-            if (marcadorOrigem) { mapa.removeLayer(marcadorOrigem); marcadorOrigem = null; }
-            if (marcadorDestino) { mapa.removeLayer(marcadorDestino); marcadorDestino = null; }
-            document.getElementById('btn-salvar').style.display = 'none';
-        }
-
-        async function carregarMotoristas() {
-            try {
-                const resp = await fetch(`${API_BASE}/motoristas`, {
-                    headers: { 'Authorization': tokenJWT }
-                });
-                if (!resp.ok) throw new Error('Erro ao buscar motoristas');
-                motoristasList = await resp.json();
-                console.log('📋 Lista de motoristas carregada:', motoristasList);
-            } catch (erro) {
-                console.error(erro);
-                atualizarStatus('Erro ao carregar motoristas: ' + erro.message, 'erro');
-            }
-        }
-
-        async function cadastrarMotorista() {
-            const nome = document.getElementById('novo-nome').value.trim();
-            const login = document.getElementById('novo-login').value.trim();
-            const senha = document.getElementById('novo-senha').value.trim();
-            const statusDiv = document.getElementById('status-cadastro');
-
-            if (!nome || !login || !senha) {
-                statusDiv.textContent = '❌ Preencha todos os campos!';
-                statusDiv.className = 'status-box erro';
-                return;
-            }
-
-            statusDiv.textContent = '🔄 Cadastrando motorista...';
-            statusDiv.className = 'status-box carregando';
-
-            try {
-                const resp = await fetch(`${API_BASE}/motoristas`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': tokenJWT
-                    },
-                    body: JSON.stringify({ nome, login, senha, tipo: 'motorista' })
-                });
-
-                const data = await resp.json();
-
-                if (!resp.ok) {
-                    throw new Error(data.erro || 'Erro ao cadastrar');
-                }
-
-                statusDiv.textContent = `✅ Motorista "${nome}" cadastrado com sucesso!`;
-                statusDiv.className = 'status-box sucesso';
-
-                document.getElementById('novo-nome').value = '';
-                document.getElementById('novo-login').value = '';
-                document.getElementById('novo-senha').value = '';
-
-                await carregarMotoristas();
-                atualizarStatus(`Motorista "${nome}" cadastrado! Já pode ser selecionado.`, 'sucesso');
-
-            } catch (erro) {
-                statusDiv.textContent = `❌ Erro: ${erro.message}`;
-                statusDiv.className = 'status-box erro';
-                console.error(erro);
-            }
-        }
-
-        async function calcularRota() {
-            let altura = parseFloat(document.getElementById('altura').value);
-            let peso = parseFloat(document.getElementById('peso').value);
-            let comprimento = parseFloat(document.getElementById('comprimento').value);
-            const origem = document.getElementById('origem').value;
-            const destino = document.getElementById('destino').value;
-            const preferencia = document.getElementById('preferencia-rota').value;
-            const perfil = document.getElementById('tipo-veiculo').value;
-
-            if (isNaN(altura) || altura === 0) altura = 2.5;
-            if (isNaN(peso) || peso === 0) peso = 10;
-            if (isNaN(comprimento) || comprimento === 0) comprimento = 10;
-
-            if (!origem || !destino) {
-                atualizarStatus('Preencha origem e destino!', 'erro');
-                return;
-            }
-
-            atualizarStatus('🔄 Geocodificando endereços...', 'carregando');
-            document.getElementById('btn-salvar').style.display = 'none';
-
-            try {
-                const coordsOrigem = await geocodificar(origem);
-                const coordsDestino = await geocodificar(destino);
-                if (!coordsOrigem || !coordsDestino) {
-                    throw new Error('Não foi possível encontrar as coordenadas dos locais');
-                }
-
-                atualizarStatus('🔄 Calculando rota na OpenRouteService...', 'carregando');
-
-                const rota = await chamarAPIRota(coordsOrigem, coordsDestino, altura, peso, comprimento, preferencia, perfil);
-                
-                if (!rota || !rota.features || rota.features.length === 0) {
-                    throw new Error('Nenhuma rota encontrada para esses parâmetros');
-                }
-
-                geoJsonCalculado = rota;
-                desenharRota(rota);
-
-                const seg = rota.features[0].properties.segments[0];
-                const dist = (seg.distance / 1000).toFixed(1);
-                const dur = seg.duration;
-                const h = Math.floor(dur / 3600);
-                const m = Math.floor((dur % 3600) / 60);
-                atualizarStatus(`✅ Rota calculada! Distância: ${dist}km, Tempo: ${h}h ${m}min.`, 'sucesso');
-
-                document.getElementById('btn-salvar').style.display = 'block';
-
-            } catch (erro) {
-                console.error(erro);
-                const detalheApi = erro.detalheORS ? ` (${erro.detalheORS})` : '';
-                atualizarStatus('❌ Erro ao calcular rota: ' + erro.message + detalheApi, 'erro');
-                document.getElementById('btn-salvar').style.display = 'none';
-            }
-        }
-
-        // =============================================
-        // SALVAR ROTA (COM TRATAMENTO DE ERROS)
-        // =============================================
-        async function salvarRota() {
-            if (!geoJsonCalculado) {
-                atualizarStatus('Calcule a rota primeiro antes de salvar!', 'erro');
-                return;
-            }
-
-            const nome = document.getElementById('nome-rota').value || 'Rota sem nome';
-            const origem = document.getElementById('origem').value;
-            const destino = document.getElementById('destino').value;
-            const altura = parseFloat(document.getElementById('altura').value);
-            const peso = parseFloat(document.getElementById('peso').value);
-            const comprimento = parseFloat(document.getElementById('comprimento').value);
-            const nomeMotorista = document.getElementById('nome-motorista').value.trim();
-
-            if (!nomeMotorista) {
-                atualizarStatus('Digite o nome do motorista!', 'erro');
-                return;
-            }
-
-            const motoristaEncontrado = motoristasList.find(m => m.nome.toLowerCase() === nomeMotorista.toLowerCase());
-            if (!motoristaEncontrado) {
-                atualizarStatus(`❌ Motorista "${nomeMotorista}" não encontrado no sistema.`, 'erro');
-                return;
-            }
-
-            const restricoes = { altura, peso, comprimento };
-
-            const payload = {
-                nome,
-                origem,
-                destino,
-                restricoes,
-                dados_geojson: geoJsonCalculado,
-                id_motorista: motoristaEncontrado.id
-            };
-
-            console.log("📦 Enviando payload da rota:", payload);
-
-            atualizarStatus('🔄 Salvando rota no banco de dados...', 'carregando');
-
-            try {
-                const resp = await fetch(`${API_BASE}/rotas`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': tokenJWT
-                    },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await resp.json();
-
-                if (!resp.ok) {
-                    console.error("❌ Erro do Backend ao salvar:", data);
-                    atualizarStatus(`❌ Erro: ${data.erro || 'Erro desconhecido no servidor.'}`, 'erro');
-                    return;
-                }
-
-                atualizarStatus(`✅ Rota "${nome}" salva para ${nomeMotorista} com sucesso! ID: ${data.id}`, 'sucesso');
-                document.getElementById('btn-salvar').style.display = 'none';
-                geoJsonCalculado = null;
-
-            } catch (erro) {
-                console.error("❌ Erro de rede ou parse:", erro);
-                atualizarStatus(`❌ Erro ao salvar rota: ${erro.message}`, 'erro');
-            }
-        }
-
-        // =============================================
-        // 🔍 FUNÇÃO DE DEBUG (LISTAR ROTAS)
-        // =============================================
-        async function testarListarRotas() {
-            const statusDiv = document.getElementById('status-dashboard');
-            statusDiv.innerHTML = '🔄 Buscando rotas no servidor...';
-            statusDiv.className = 'status-box carregando';
-
-            try {
-                const resp = await fetch(`${API_BASE}/rotas`, {
-                    headers: { 'Authorization': tokenJWT }
-                });
-
-                if (!resp.ok) throw new Error('Erro ao buscar rotas');
-                const rotas = await resp.json();
-
-                if (rotas.length === 0) {
-                    statusDiv.innerHTML = '📭 Nenhuma rota encontrada no banco.';
-                    statusDiv.className = 'status-box erro';
-                    return;
-                }
-
-                let texto = `✅ ${rotas.length} rota(s) encontradas:<br><br>`;
-                rotas.forEach(r => {
-                    texto += `🔹 <strong>${r.nome}</strong><br>`;
-                    texto += `&nbsp;&nbsp;ID: ${r.id} | Motorista ID: ${r.id_motorista} | Status: ${r.status}<br>`;
-                    texto += `&nbsp;&nbsp;Origem: ${r.origem} -> Destino: ${r.destino}<br><br>`;
-                });
-
-                statusDiv.innerHTML = texto;
-                statusDiv.className = 'status-box sucesso';
-
-            } catch (erro) {
-                console.error(erro);
-                statusDiv.innerHTML = `❌ Erro: ${erro.message}`;
-                statusDiv.className = 'status-box erro';
-            }
-        }
-
-        // =============================================
-        // FUNÇÕES AUXILIARES
-        // =============================================
-        async function geocodificar(endereco) {
-            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(endereco)}&limit=1`;
-            const resp = await fetch(url, { headers: { 'User-Agent': 'GPS-Caminhao-Dashboard/1.0' } });
-            const data = await resp.json();
-            if (data && data.length > 0) {
-                return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
-            }
-            return null;
-        }
-
-        async function chamarAPIRota(origem, destino, altura, peso, comprimento, preferencia, perfil) {
-            const url = `https://api.openrouteservice.org/v2/directions/${perfil}/geojson`;
-            
-            const body = {
-                coordinates: [
-                    [origem.lon, origem.lat],
-                    [destino.lon, destino.lat]
-                ],
-                preference: preferencia || 'fastest'
-            };
-
-            if (perfil === 'driving-hgv') {
-                body.options = {
-                    profile_params: {
-                        restrictions: {
-                            height: altura,
-                            weight: peso,
-                            length: comprimento,
-                            width: 2.6
-                        }
-                    }
-                };
-            }
-            
-            const resp = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': ORS_API_KEY
-                },
-                body: JSON.stringify(body)
-            });
-
-            if (!resp.ok) {
-                let detalheErro = `Erro ${resp.status}`;
-                try {
-                    const erroJson = await resp.json();
-                    if (erroJson.error && erroJson.error.message) {
-                        detalheErro += `: ${erroJson.error.message}`;
-                    }
-                } catch (e) {}
-                const erro = new Error(`API ORS retornou ${detalheErro}`);
-                erro.detalheORS = detalheErro;
-                throw erro;
-            }
-            return await resp.json();
-        }
-
-        function desenharRota(rotaData) {
-            if (rotaAtual) { mapa.removeLayer(rotaAtual); rotaAtual = null; }
-            if (marcadorOrigem) { mapa.removeLayer(marcadorOrigem); marcadorOrigem = null; }
-            if (marcadorDestino) { mapa.removeLayer(marcadorDestino); marcadorDestino = null; }
-
-            if (!rotaData) return;
-
-            const geometria = rotaData.features[0].geometry;
-            rotaAtual = L.geoJSON(geometria, {
-                color: '#ff6600',
-                weight: 6,
-                opacity: 0.9,
-                dashArray: '10, 10'
-            }).addTo(mapa);
-
-            const coords = rotaData.features[0].geometry.coordinates;
-            const inicio = coords[0];
-            const fim = coords[coords.length - 1];
-
-            marcadorOrigem = L.marker([inicio[1], inicio[0]], {
-                icon: L.divIcon({ html: '🚛', className: 'marker-icon', iconSize: [30, 30] })
-            }).addTo(mapa).bindPopup('📍 Origem');
-
-            marcadorDestino = L.marker([fim[1], fim[0]], {
-                icon: L.divIcon({ html: '🏁', className: 'marker-icon', iconSize: [30, 30] })
-            }).addTo(mapa).bindPopup('🏁 Destino');
-
-            const bounds = rotaAtual.getBounds();
-            mapa.fitBounds(bounds, { padding: [50, 50] });
-        }
-
-        function atualizarStatus(msg, tipo) {
-            const div = document.getElementById('status-dashboard');
-            div.textContent = msg;
-            div.className = 'status-box ' + (tipo || '');
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
-                fazerLogin();
-            }
+<div id="login-overlay">
+<div class="login-card">
+<h2>🚛 <span>GPS</span> Gestão</h2>
+<p>Painel de controle da frota</p>
+<div class="grupo"><label>👤 Login</label><input type="text" id="login-user" value="admin"></div>
+<div class="grupo"><label>🔒 Senha</label><input type="password" id="login-pass" value="admin123"></div>
+<button class="btn-primary" onclick="fazerLogin()">Entrar no Sistema</button>
+<div id="login-status" class="status-box">Use admin / admin123</div>
+</div>
+</div>
+
+<div class="sidebar">
+<h1>🚛 Gestão de Rotas</h1>
+<div class="subtitle">Gestão e monitoramento da frota</div>
+<div class="user-info">
+<span>👤 <span id="nome-admin">Admin</span></span>
+<button class="logout-btn" onclick="fazerLogout()">Sair</button>
+</div>
+<div class="tab-nav">
+<button class="tab-btn active" onclick="trocarAba('rotas')">🗺️ Rotas</button>
+<button class="tab-btn" onclick="trocarAba('frota')">🚚 Frota</button>
+<button class="tab-btn" onclick="trocarAba('reportes')">📍 Reportes</button>
+<button class="tab-btn" onclick="trocarAba('motoristas')">👤 Cadastrar</button>
+</div>
+<div id="tab-rotas" class="tab-content active">
+<div class="grupo"><label>👨‍✈️ Nome do Motorista</label><input type="text" id="nome-motorista" value="Motorista José"></div>
+<div class="grupo"><label>🚗 Tipo de Veículo</label><select id="tipo-veiculo" onchange="toggleRestricoes()"><option value="driving-car">Carro</option><option value="driving-hgv" selected>Caminhão</option></select></div>
+<div class="grupo"><label>⚙️ Preferência</label><select id="preferencia-rota"><option value="fastest">Mais Rápida</option><option value="shortest">Mais Curta</option></select></div>
+<hr style="border-color:#2a2a3e;margin:16px 0;">
+<div class="grupo"><label>📌 Nome da Rota</label><input type="text" id="nome-rota" value="Rota Teste 01"></div>
+<div class="grupo"><label>📍 Origem</label><input type="text" id="origem" value="Linhares, ES"></div>
+<div class="grupo"><label>🏁 Destino</label><input type="text" id="destino" value="Vitória, ES"></div>
+<div id="container-restricoes">
+<div class="grupo"><label>📏 Altura (m)</label><input type="number" id="altura" value="4.2"></div>
+<div class="grupo"><label>⚖️ Peso (t)</label><input type="number" id="peso" value="15"></div>
+<div class="grupo"><label>📐 Comprimento (m)</label><input type="number" id="comprimento" value="12"></div>
+</div>
+<button class="btn-primary" onclick="calcularRota()">🗺️ Calcular Rota</button>
+<button class="btn-primary btn-success" id="btn-salvar" onclick="salvarRota()" style="display:none;">💾 Salvar Rota</button>
+<div class="grupo" style="margin-top:20px;"><label>🎯 Filtrar Incidentes</label><select id="filtro-tomtom"><option value="completo">Modo Completo</option><option value="transito" selected>Modo Trânsito</option></select></div>
+<button class="btn-primary btn-tomtom" onclick="carregarTomTom()">📡 Atualizar Trânsito</button>
+<div id="status-dashboard" class="status-box">Dashboard pronto.</div>
+</div>
+<div id="tab-frota" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:5px;">🚚 Frota em Tempo Real</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:12px;">Só aparecem no mapa veículos que enviaram GPS nos últimos 60 segundos.</p>
+<div class="resumo-frota"><div class="resumo-item"><strong id="total-veiculos">0</strong><span>NO MAPA</span></div><div class="resumo-item"><strong id="total-online">0</strong><span>ONLINE</span></div><div class="resumo-item"><strong id="total-sem-gps">0</strong><span>SEM GPS</span></div></div>
+<button class="btn-primary btn-success" onclick="carregarLocalizacoes(true)">🎯 Centralizar Frota</button>
+<div id="lista-frota" style="margin-top:12px;"><div style="color:#888;text-align:center;padding:20px;">📡 Aguardando localização...</div></div>
+<div id="status-frota" class="status-box">Atualização automática a cada 5 segundos.</div>
+</div>
+<div id="tab-reportes" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:12px;">📍 Reportes</h2>
+<div style="display:flex;gap:8px;margin-bottom:12px;">
+<button class="btn-primary btn-success" onclick="carregarReportes(true)" style="flex:1;">🔄 Atualizar</button>
+<button class="btn-primary btn-danger" onclick="limparReportes()" style="flex:1;">🗑️ Limpar</button>
+</div>
+<div id="tabela-reportes"><table><thead><tr><th>Motorista</th><th>Tipo</th><th>Local</th></tr></thead><tbody id="corpo-reportes"><tr><td colspan="3" style="text-align:center;padding:20px;color:#888;">Nenhum reporte.</td></tr></tbody></table></div>
+<div id="status-reportes" class="status-box">Aguardando...</div>
+</div>
+<div id="tab-motoristas" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:16px;">➕ Cadastrar Motorista</h2>
+<div class="grupo"><label>👤 Nome</label><input type="text" id="novo-nome"></div>
+<div class="grupo"><label>Login</label><input type="text" id="novo-login"></div>
+<div class="grupo"><label>Senha</label><input type="password" id="novo-senha"></div>
+<button class="btn-primary btn-secondary" onclick="cadastrarMotorista()">✅ Cadastrar</button>
+<div id="status-cadastro" class="status-box">Preencha os dados.</div>
+</div>
+</div>
+
+<div id="mapa"></div>
+<div id="legenda-geral" class="legenda-mapa">
+<div class="legenda-titulo">🗺️ Mapa</div>
+<div class="legenda-item">🚛 Veículo ativo</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#22c55e;"></div>GPS recente</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#ef4444;"></div>Acidente</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#f97316;"></div>Radar</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#fbbf24;"></div>Obra</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#f59e0b;"></div>Perigo</div>
+<div class="legenda-item"><div class="cor-bolinha" style="background:#d63031;"></div>Alto risco</div>
+</div>
+
+<script>
+// ======================================================
+// API BASE – FIXO PARA RENDER
+// ======================================================
+const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
+
+// ======================================================
+// VARS
+// ======================================================
+let mapa = null, tokenJWT = null, dadosUsuario = null, rotaAtual = null;
+let marcadorOrigem = null, marcadorDestino = null, geoJsonCalculado = null;
+let motoristasList = [], camadaCalor = null, camadaTomTom = null;
+let marcadoresFrotaLayer = null, intervalFrota = null, primeiraCargaFrota = true;
+const INTERVALO_FROTA = 5000;
+const LIMITE_ATUALIZACAO_MAPA = 60;
+let marcadoresReportesLayer = null, intervalReportes = null;
+
+// ======================================================
+// MAP
+// ======================================================
+function initMapa() {
+    if (mapa) return;
+    mapa = L.map('mapa').setView([-19.394, -40.064], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap', maxZoom: 19 }).addTo(mapa);
+    marcadoresFrotaLayer = L.layerGroup().addTo(mapa);
+    marcadoresReportesLayer = L.layerGroup().addTo(mapa);
+}
+
+// ======================================================
+// TABS
+// ======================================================
+function trocarAba(aba) {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.tab-btn[onclick="trocarAba('${aba}')"]`)?.classList.add('active');
+    document.getElementById(`tab-${aba}`)?.classList.add('active');
+    if (aba === 'frota') carregarLocalizacoes(true);
+    if (aba === 'reportes') carregarReportes(true);
+}
+
+// ======================================================
+// LOGIN / LOGOUT
+// ======================================================
+async function fazerLogin() {
+    const login = document.getElementById('login-user').value;
+    const senha = document.getElementById('login-pass').value;
+    const status = document.getElementById('login-status');
+    try {
+        status.innerHTML = '🔄 Autenticando...';
+        const resp = await fetch(`${API_BASE}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login, senha })
         });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro no login');
+        if (data.usuario.tipo !== 'admin') throw new Error('Apenas administradores');
+        tokenJWT = data.token;
+        dadosUsuario = data.usuario;
+        document.getElementById('nome-admin').textContent = dadosUsuario.nome;
+        document.getElementById('login-overlay').classList.add('hidden');
+        initMapa();
+        await carregarMotoristas();
+        iniciarMonitoramentoFrota();
+        iniciarMonitoramentoReportes();
+        await carregarLocalizacoes(true);
+        await carregarReportes(false);
+        atualizarStatus('✅ Dashboard conectado.', 'sucesso');
+        status.innerHTML = '✅ Login realizado!';
+        status.className = 'status-box sucesso';
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+function fazerLogout() {
+    tokenJWT = null;
+    if (intervalFrota) { clearInterval(intervalFrota); intervalFrota = null; }
+    if (intervalReportes) { clearInterval(intervalReportes); intervalReportes = null; }
+    if (marcadoresFrotaLayer) marcadoresFrotaLayer.clearLayers();
+    if (marcadoresReportesLayer) marcadoresReportesLayer.clearLayers();
+    primeiraCargaFrota = true;
+    document.getElementById('login-overlay').classList.remove('hidden');
+}
 
-        window.onload = function() {
-            document.getElementById('login-status').textContent = 'Use admin / admin123 para testar';
-        };
-    </script>
+// ======================================================
+// MOTORISTAS / CADASTRO
+// ======================================================
+async function carregarMotoristas() {
+    try {
+        const resp = await fetch(`${API_BASE}/motoristas`, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) throw new Error('Erro ao carregar motoristas');
+        motoristasList = await resp.json();
+    } catch(erro) { console.error(erro); }
+}
+async function cadastrarMotorista() {
+    const nome = document.getElementById('novo-nome').value.trim();
+    const login = document.getElementById('novo-login').value.trim();
+    const senha = document.getElementById('novo-senha').value.trim();
+    const status = document.getElementById('status-cadastro');
+    if (!nome || !login || !senha) { status.innerHTML = '❌ Preencha todos os campos.'; return; }
+    try {
+        const resp = await fetch(`${API_BASE}/motoristas`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({ nome, login, senha })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro');
+        status.innerHTML = `✅ ${nome} cadastrado!`;
+        status.className = 'status-box sucesso';
+        await carregarMotoristas();
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+// ======================================================
+// SQLITE DATE HELPER
+// ======================================================
+function dataSqliteParaDate(valor) {
+    if (!valor) return null;
+    let texto = String(valor);
+    if (!texto.includes('T')) texto = texto.replace(' ', 'T') + 'Z';
+    const data = new Date(texto);
+    return isNaN(data.getTime()) ? null : data;
+}
+
+// ======================================================
+// FROTA
+// ======================================================
+function iniciarMonitoramentoFrota() {
+    if (intervalFrota) clearInterval(intervalFrota);
+    intervalFrota = setInterval(() => { if (tokenJWT && mapa) carregarLocalizacoes(false); }, INTERVALO_FROTA);
+}
+async function carregarLocalizacoes(centralizar = false) {
+    if (!tokenJWT || !mapa) return;
+    const lista = document.getElementById('lista-frota');
+    const status = document.getElementById('status-frota');
+    try {
+        const resp = await fetch(`${API_BASE}/localizacoes`, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const dados = await resp.json();
+        marcadoresFrotaLayer.clearLayers();
+        const agora = Date.now();
+        const veiculosAtivos = dados.filter(m => {
+            const lat = Number(m.lat), lon = Number(m.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+            if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
+            if (Math.abs(lat) < 0.0001 && Math.abs(lon) < 0.0001) return false;
+            const data = dataSqliteParaDate(m.ultima_atualizacao);
+            if (!data) return false;
+            const segundos = Math.floor((agora - data.getTime()) / 1000);
+            if (segundos < -5 || segundos > LIMITE_ATUALIZACAO_MAPA) return false;
+            return true;
+        });
+        const totalSemGps = Math.max(0, dados.length - veiculosAtivos.length);
+        let html = '';
+        const bounds = [];
+        for (const motorista of veiculosAtivos) {
+            const lat = Number(motorista.lat), lon = Number(motorista.lon);
+            const data = dataSqliteParaDate(motorista.ultima_atualizacao);
+            const segundos = data ? Math.max(0, Math.floor((agora - data.getTime()) / 1000)) : 0;
+            const icon = L.divIcon({
+                className: '',
+                html: `<div style="width:46px;height:46px;background:#22c55e;border:3px solid white;border-radius:50%;box-shadow:0 4px 14px rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;font-size:24px;">🚛</div>`,
+                iconSize: [46,46], iconAnchor: [23,23], popupAnchor: [0,-24]
+            });
+            const marker = L.marker([lat, lon], { icon }).bindPopup(`
+                <div style="min-width:190px;">
+                    <strong style="font-size:15px;">🚛 ${motorista.nome}</strong><br><br>
+                    🟢 <strong>ONLINE</strong><br><br>
+                    📍 ${lat.toFixed(6)}, ${lon.toFixed(6)}<br><br>
+                    🕒 ${data ? data.toLocaleString('pt-BR') : ''}<br>
+                    📡 ${segundos}s atrás
+                </div>
+            `);
+            marker.addTo(marcadoresFrotaLayer);
+            html += `<div class="frota-card" onclick="focarMotorista(${lat},${lon})">
+                <div class="frota-top"><span class="frota-nome">🚛 ${motorista.nome}</span><span class="frota-status online">ONLINE</span></div>
+                <div class="frota-detalhes">📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}<br>📡 ${segundos}s atrás</div>
+            </div>`;
+            bounds.push([lat, lon]);
+        }
+        document.getElementById('total-veiculos').textContent = veiculosAtivos.length;
+        document.getElementById('total-online').textContent = veiculosAtivos.length;
+        document.getElementById('total-sem-gps').textContent = totalSemGps;
+        if (veiculosAtivos.length === 0) {
+            lista.innerHTML = `<div style="text-align:center;padding:20px;color:#888;">📡 Nenhum motorista com GPS recente.<br><br>O caminhão só aparece se tiver enviado posição nos últimos ${LIMITE_ATUALIZACAO_MAPA}s.</div>`;
+            status.innerHTML = `📡 Nenhum veículo ativo • ${totalSemGps} sem GPS recente`;
+            status.className = 'status-box carregando';
+            return;
+        }
+        lista.innerHTML = html;
+        status.innerHTML = `✅ ${veiculosAtivos.length} veículo(s) ativo(s) no mapa`;
+        status.className = 'status-box sucesso';
+        if ((centralizar || primeiraCargaFrota) && bounds.length > 0) {
+            if (bounds.length === 1) mapa.setView(bounds[0], 16);
+            else mapa.fitBounds(L.latLngBounds(bounds), { padding: [60,60] });
+            primeiraCargaFrota = false;
+        }
+    } catch(erro) {
+        console.error('Erro ao carregar frota:', erro);
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+function focarMotorista(lat, lon) {
+    if (!mapa) return;
+    mapa.flyTo([lat, lon], 17, { duration: .8 });
+    marcadoresFrotaLayer.eachLayer(marker => {
+        if (!marker.getLatLng) return;
+        const p = marker.getLatLng();
+        if (Math.abs(p.lat - lat) < .000001 && Math.abs(p.lng - lon) < .000001) marker.openPopup();
+    });
+}
+
+// ======================================================
+// REPORTES
+// ======================================================
+function iniciarMonitoramentoReportes() {
+    if (intervalReportes) clearInterval(intervalReportes);
+    intervalReportes = setInterval(() => { if (tokenJWT && mapa) carregarReportes(false); }, 15000);
+}
+async function carregarReportes(centralizar = false) {
+    if (!tokenJWT || !mapa) return;
+    const tbody = document.getElementById('corpo-reportes');
+    const status = document.getElementById('status-reportes');
+    try {
+        const resp = await fetch(`${API_BASE}/reportes`, { headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const reportes = await resp.json();
+        marcadoresReportesLayer.clearLayers();
+        if (!reportes.length) {
+            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:20px;color:#888;">Nenhum reporte encontrado.</td></tr>`;
+            status.innerHTML = '📭 Nenhum reporte.';
+            return;
+        }
+        const cores = { radar:'#f97316', acidente:'#ef4444', obra:'#fbbf24', perigo:'#f59e0b', risco:'#d63031' };
+        const icones = { radar:'📡', acidente:'🚗', obra:'🚧', perigo:'⚠️', risco:'🔴' };
+        const nomes = { radar:'Radar', acidente:'Acidente', obra:'Obra', perigo:'Perigo', risco:'Alto Risco' };
+        let html = '';
+        const bounds = [];
+        for (const r of reportes) {
+            const lat = Number(r.lat), lng = Number(r.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+            if (Math.abs(lat) < 0.0001 && Math.abs(lng) < 0.0001) continue;
+            const tipo = nomes[r.tipo] || r.tipo;
+            const cor = cores[r.tipo] || '#ffffff';
+            const emoji = icones[r.tipo] || '📍';
+            let dataTexto = r.data_hora || 'Sem horário';
+            try {
+                const d = dataSqliteParaDate(r.data_hora);
+                if (d) dataTexto = d.toLocaleString('pt-BR');
+            } catch(e) {}
+            const icon = L.divIcon({
+                className: '',
+                html: `<div style="background:${cor};width:34px;height:34px;border-radius:50%;border:3px solid white;box-shadow:0 3px 10px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:17px;">${emoji}</div>`,
+                iconSize: [34,34], iconAnchor: [17,17]
+            });
+            const marker = L.marker([lat, lng], { icon }).bindPopup(`
+                <strong>${emoji} ${tipo}</strong><br><br>
+                👤 ${r.motorista}<br>
+                🕒 ${dataTexto}<br>
+                📍 ${lat.toFixed(6)}, ${lng.toFixed(6)}
+            `);
+            marker.addTo(marcadoresReportesLayer);
+            html += `<tr style="cursor:pointer;" onclick="focarReporte(${lat},${lng})">
+                <td>${r.motorista}</td>
+                <td><span class="badge-reporte badge-${r.tipo}">${emoji} ${tipo}</span></td>
+                <td>📍 ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><small style="color:#888;">${dataTexto}</small></td>
+            </tr>`;
+            bounds.push([lat, lng]);
+        }
+        tbody.innerHTML = html;
+        status.innerHTML = `✅ ${reportes.length} reporte(s).`;
+        status.className = 'status-box sucesso';
+        if (centralizar && bounds.length > 0) {
+            mapa.fitBounds(L.latLngBounds(bounds), { padding: [60,60] });
+        }
+    } catch(erro) {
+        console.error(erro);
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+function focarReporte(lat, lng) {
+    mapa.flyTo([lat, lng], 17);
+    marcadoresReportesLayer.eachLayer(marker => {
+        if (!marker.getLatLng) return;
+        const p = marker.getLatLng();
+        if (Math.abs(p.lat - lat) < .000001 && Math.abs(p.lng - lng) < .000001) marker.openPopup();
+    });
+}
+async function limparReportes() {
+    if (!confirm('Deseja apagar todos os reportes?')) return;
+    try {
+        const resp = await fetch(`${API_BASE}/reportes`, { method: 'DELETE', headers: { 'Authorization': tokenJWT } });
+        if (!resp.ok) throw new Error('Erro ao limpar reportes');
+        marcadoresReportesLayer.clearLayers();
+        await carregarReportes(false);
+    } catch(erro) { alert(erro.message); }
+}
+
+// ======================================================
+// ROTAS (CALCULAR / SALVAR)
+// ======================================================
+async function geocodificar(endereco) {
+    const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(endereco)}&limit=1`);
+    const dados = await resp.json();
+    if (!dados || !dados.length) return null;
+    return { lat: Number(dados[0].lat), lon: Number(dados[0].lon) };
+}
+async function calcularRota() {
+    const status = document.getElementById('status-dashboard');
+    try {
+        status.innerHTML = '🔄 Geocodificando...';
+        const origem = await geocodificar(document.getElementById('origem').value);
+        const destino = await geocodificar(document.getElementById('destino').value);
+        if (!origem || !destino) throw new Error('Origem ou destino não encontrado');
+        const perfil = document.getElementById('tipo-veiculo').value;
+        const resp = await fetch(`${API_BASE}/api/calcular-rota`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({
+                origem, destino,
+                altura: Number(document.getElementById('altura').value),
+                peso: Number(document.getElementById('peso').value),
+                comprimento: Number(document.getElementById('comprimento').value),
+                perfil,
+                preferencia: document.getElementById('preferencia-rota').value
+            })
+        });
+        const rota = await resp.json();
+        if (!resp.ok) throw new Error(rota.erro || 'Erro');
+        geoJsonCalculado = rota;
+        desenharRota(rota);
+        document.getElementById('btn-salvar').style.display = 'block';
+        atualizarStatus('✅ Rota calculada!', 'sucesso');
+    } catch(erro) {
+        atualizarStatus(`❌ ${erro.message}`, 'erro');
+    }
+}
+function desenharRota(rotaData) {
+    if (rotaAtual) mapa.removeLayer(rotaAtual);
+    const coords = rotaData.features?.[0]?.geometry?.coordinates;
+    if (!coords || !coords.length) return;
+    rotaAtual = L.geoJSON(rotaData.features[0].geometry, { color: '#ff6600', weight: 6, opacity: .9 }).addTo(mapa);
+    mapa.fitBounds(rotaAtual.getBounds(), { padding: [50,50] });
+}
+async function salvarRota() {
+    if (!geoJsonCalculado) return;
+    const nomeMotorista = document.getElementById('nome-motorista').value.trim();
+    const motorista = motoristasList.find(m => m.nome.toLowerCase() === nomeMotorista.toLowerCase());
+    if (!motorista) { atualizarStatus('Motorista não encontrado', 'erro'); return; }
+    try {
+        const resp = await fetch(`${API_BASE}/rotas`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({
+                nome: document.getElementById('nome-rota').value,
+                origem: document.getElementById('origem').value,
+                destino: document.getElementById('destino').value,
+                restricoes: {
+                    altura: Number(document.getElementById('altura').value),
+                    peso: Number(document.getElementById('peso').value),
+                    comprimento: Number(document.getElementById('comprimento').value)
+                },
+                dados_geojson: geoJsonCalculado,
+                id_motorista: motorista.id
+            })
+        });
+        if (!resp.ok) throw new Error('Erro ao salvar rota');
+        atualizarStatus(`✅ Rota salva para ${motorista.nome}!`, 'sucesso');
+    } catch(erro) {
+        atualizarStatus(`❌ ${erro.message}`, 'erro');
+    }
+}
+
+// ======================================================
+// TOMTOM
+// ======================================================
+async function carregarTomTom() {
+    if (!mapa) return;
+    try {
+        if (camadaCalor) { mapa.removeLayer(camadaCalor); camadaCalor = null; }
+        if (camadaTomTom) { mapa.removeLayer(camadaTomTom); camadaTomTom = null; }
+        const bounds = mapa.getBounds();
+        const url = `${API_BASE}/api/traffic?top=${bounds.getNorth()}&bottom=${bounds.getSouth()}&left=${bounds.getWest()}&right=${bounds.getEast()}`;
+        const resp = await fetch(url, { headers: { 'Authorization': tokenJWT } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error('Erro TomTom');
+        const pontos = [], markers = [];
+        for (const inc of data.incidents || []) {
+            if (inc.geometry?.type !== 'Point') continue;
+            const lng = Number(inc.geometry.coordinates[0]), lat = Number(inc.geometry.coordinates[1]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+            pontos.push([lat, lng, 1]);
+            markers.push(L.circleMarker([lat, lng], { radius: 6, color: '#33ccff', fillOpacity: .8 }));
+        }
+        if (pontos.length) camadaCalor = L.heatLayer(pontos, { radius: 25, blur: 18 }).addTo(mapa);
+        camadaTomTom = L.layerGroup(markers).addTo(mapa);
+        atualizarStatus(`✅ ${markers.length} incidentes.`, 'sucesso');
+    } catch(erro) {
+        atualizarStatus(`❌ ${erro.message}`, 'erro');
+    }
+}
+
+// ======================================================
+// UTILS
+// ======================================================
+function toggleRestricoes() {
+    document.getElementById('container-restricoes').style.display =
+        document.getElementById('tipo-veiculo').value === 'driving-car' ? 'none' : 'block';
+}
+function atualizarStatus(mensagem, tipo) {
+    const div = document.getElementById('status-dashboard');
+    div.innerHTML = mensagem;
+    div.className = 'status-box ' + (tipo || '');
+}
+document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !document.getElementById('login-overlay').classList.contains('hidden')) {
+        fazerLogin();
+    }
+});
+</script>
 </body>
 </html>
