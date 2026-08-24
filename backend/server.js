@@ -1,5 +1,8 @@
 // backend/server.js
+// GPS Caminhão - PostgreSQL + cadastro por placa + confirmação por e-mail (Brevo)
+
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
@@ -11,6 +14,7 @@ const NodeCache = require('node-cache');
 const helmet = require('helmet');
 const compression = require('compression');
 const { Pool } = require('pg');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -21,27 +25,16 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const ORS_API_KEY = process.env.ORS_API_KEY;
 const TOMTOM_API_KEY = process.env.TOMTOM_API_KEY;
 const JWT_SECRET = process.env.JWT_SECRET;
+const BREVO_API_KEY = process.env.BREVO_API_KEY;
+const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
+const EMAIL_NOME = process.env.EMAIL_NOME || 'GPS Caminhão';
 
-if (!DATABASE_URL) {
-    console.error(
-        '❌ DATABASE_URL não configurada!'
-    );
-}
-if (!ORS_API_KEY) {
-    console.warn(
-        '⚠️ ORS_API_KEY não configurada!'
-    );
-}
-if (!TOMTOM_API_KEY) {
-    console.warn(
-        '⚠️ TOMTOM_API_KEY não configurada!'
-    );
-}
-if (!JWT_SECRET) {
-    console.warn(
-        '⚠️ JWT_SECRET não configurada!'
-    );
-}
+if (!DATABASE_URL) console.error('❌ DATABASE_URL não configurada!');
+if (!JWT_SECRET) console.error('❌ JWT_SECRET não configurada!');
+if (!ORS_API_KEY) console.warn('⚠️ ORS_API_KEY não configurada!');
+if (!TOMTOM_API_KEY) console.warn('⚠️ TOMTOM_API_KEY não configurada!');
+if (!BREVO_API_KEY) console.warn('⚠️ BREVO_API_KEY não configurada!');
+if (!EMAIL_REMETENTE) console.warn('⚠️ EMAIL_REMETENTE não configurado!');
 
 // ======================================================
 // POSTGRESQL
@@ -53,279 +46,278 @@ const pool = new Pool({
     connectionTimeoutMillis: 10000
 });
 
-pool.on(
-    'error',
-    err => {
-        console.error(
-            '❌ Erro inesperado no PostgreSQL:',
-            err
-        );
-    }
-);
+pool.on('error', err => {
+    console.error('❌ Erro inesperado no PostgreSQL:', err);
+});
 
 // ======================================================
 // MIDDLEWARES
 // ======================================================
-app.use(
-    helmet()
-);
-app.use(
-    compression()
-);
-app.use(
-    cors({
-        origin:
-            process.env.ALLOWED_ORIGINS
-                ?
-                process.env.ALLOWED_ORIGINS
-                    .split(',')
-                :
-                '*'
-    })
-);
-app.use(
-    express.json()
-);
+app.use(helmet());
+app.use(compression());
+app.use(cors({
+    origin: process.env.ALLOWED_ORIGINS
+        ? process.env.ALLOWED_ORIGINS.split(',')
+        : '*'
+}));
+app.use(express.json({ limit: '2mb' }));
 
 // ======================================================
-// CRIAR TABELAS POSTGRESQL
+// HELPERS
+// ======================================================
+function normalizarEmail(email) {
+    return String(email || '').trim().toLowerCase();
+}
+
+function normalizarPlaca(placa) {
+    return String(placa || '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '');
+}
+
+function gerarCodigo() {
+    return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+async function enviarEmailCodigo({ nome, email, codigo, placa }) {
+    if (!BREVO_API_KEY || !EMAIL_REMETENTE) {
+        throw new Error('Serviço de e-mail não configurado');
+    }
+
+    const htmlContent = `
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+            <div style="max-width:520px;margin:30px auto;background:#fff;border-radius:14px;padding:30px;box-shadow:0 5px 20px rgba(0,0,0,.08);">
+                <h2 style="color:#1e293b;margin:0 0 12px;">🚛 GPS Caminhão</h2>
+                <p style="color:#334155;">Olá, <strong>${nome}</strong>.</p>
+                <p style="color:#334155;">Recebemos uma solicitação para criar sua conta de motorista para o veículo <strong>${placa}</strong>.</p>
+                <p style="color:#334155;">Seu código de confirmação é:</p>
+                <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#2563eb;text-align:center;padding:20px;background:#eff6ff;border-radius:12px;margin:18px 0;">${codigo}</div>
+                <p style="color:#64748b;font-size:13px;">O código expira em <strong>10 minutos</strong>.</p>
+                <p style="color:#64748b;font-size:13px;">Se você não solicitou este cadastro, ignore esta mensagem.</p>
+            </div>
+        </body>
+        </html>
+    `;
+
+    await axios.post(
+        'https://api.brevo.com/v3/smtp/email',
+        {
+            sender: { name: EMAIL_NOME, email: EMAIL_REMETENTE },
+            to: [{ email, name: nome }],
+            subject: 'Código de confirmação - GPS Caminhão',
+            htmlContent
+        },
+        {
+            headers: {
+                'api-key': BREVO_API_KEY,
+                'Content-Type': 'application/json',
+                Accept: 'application/json'
+            },
+            timeout: 15000
+        }
+    );
+}
+
+// ======================================================
+// BANCO / MIGRAÇÕES
 // ======================================================
 async function criarTabelas() {
-    console.log(
-        '🔄 Verificando banco PostgreSQL...'
-    );
+    console.log('🔄 Verificando/migrando banco PostgreSQL...');
 
-    // ==================================================
-    // USUÁRIOS
-    // ==================================================
+    // Usuários existentes
     await pool.query(`
         CREATE TABLE IF NOT EXISTS usuarios (
             id SERIAL PRIMARY KEY,
             nome VARCHAR(255) NOT NULL,
-            tipo VARCHAR(20)
-                NOT NULL
-                CHECK (
-                    tipo IN (
-                        'admin',
-                        'motorista'
-                    )
-                ),
-            login VARCHAR(255)
-                UNIQUE
-                NOT NULL,
+            tipo VARCHAR(20) NOT NULL CHECK (tipo IN ('admin','motorista')),
+            login VARCHAR(255) UNIQUE NOT NULL,
             senha TEXT NOT NULL,
-            created_at TIMESTAMPTZ
-                DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     `);
 
-    // ==================================================
-    // ROTAS
-    // ==================================================
+    // Veículos
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS veiculos (
+            id SERIAL PRIMARY KEY,
+            placa VARCHAR(10) UNIQUE NOT NULL,
+            frota VARCHAR(50),
+            modelo VARCHAR(150),
+            ativo BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Novos campos em usuários
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255)`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email_verificado BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS id_veiculo INTEGER`);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email_unico
+        ON usuarios(LOWER(email))
+        WHERE email IS NOT NULL
+    `);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usuario_veiculo_unico
+        ON usuarios(id_veiculo)
+        WHERE id_veiculo IS NOT NULL AND tipo = 'motorista'
+    `);
+
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_usuario_veiculo'
+            ) THEN
+                ALTER TABLE usuarios
+                ADD CONSTRAINT fk_usuario_veiculo
+                FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$;
+    `);
+
+    // Cadastros pendentes de confirmação
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS cadastros_pendentes (
+            id SERIAL PRIMARY KEY,
+            nome VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            id_veiculo INTEGER NOT NULL,
+            codigo_hash TEXT NOT NULL,
+            codigo_expira_em TIMESTAMPTZ NOT NULL,
+            email_verificado BOOLEAN DEFAULT FALSE,
+            verificado_em TIMESTAMPTZ,
+            tentativas INTEGER DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_cadastro_veiculo
+                FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id)
+                ON DELETE CASCADE
+        )
+    `);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_cadastro_veiculo_unico
+        ON cadastros_pendentes(id_veiculo)
+    `);
+
+    // Rotas
     await pool.query(`
         CREATE TABLE IF NOT EXISTS rotas (
             id SERIAL PRIMARY KEY,
             nome TEXT,
             origem TEXT,
             destino TEXT,
-            restricoes JSONB
-                DEFAULT '{}'::jsonb,
+            restricoes JSONB DEFAULT '{}'::jsonb,
             dados_geojson JSONB,
             id_motorista INTEGER,
-            status VARCHAR(30)
-                DEFAULT 'pendente'
-                CHECK (
-                    status IN (
-                        'pendente',
-                        'em_andamento',
-                        'concluida'
-                    )
-                ),
-            criada_em TIMESTAMPTZ
-                DEFAULT CURRENT_TIMESTAMP,
+            id_veiculo INTEGER,
+            status VARCHAR(30) DEFAULT 'pendente'
+                CHECK (status IN ('pendente','em_andamento','concluida')),
+            criada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_rotas_motorista
-                FOREIGN KEY (
-                    id_motorista
-                )
+                FOREIGN KEY (id_motorista)
                 REFERENCES usuarios(id)
+                ON DELETE SET NULL,
+            CONSTRAINT fk_rotas_veiculo
+                FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id)
                 ON DELETE SET NULL
         )
     `);
 
-    // ==================================================
-    // LOCALIZAÇÕES
-    // ==================================================
+    // Se a tabela rotas já existia antes, adiciona o campo novo
+    await pool.query(`ALTER TABLE rotas ADD COLUMN IF NOT EXISTS id_veiculo INTEGER`);
+
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_rotas_veiculo'
+            ) THEN
+                ALTER TABLE rotas
+                ADD CONSTRAINT fk_rotas_veiculo
+                FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$;
+    `);
+
+    // Localizações
     await pool.query(`
         CREATE TABLE IF NOT EXISTS localizacoes (
             id SERIAL PRIMARY KEY,
-            id_motorista INTEGER
-                UNIQUE
-                NOT NULL,
-            lat DOUBLE PRECISION
-                NOT NULL,
-            lon DOUBLE PRECISION
-                NOT NULL,
-            ultima_atualizacao TIMESTAMPTZ
-                DEFAULT CURRENT_TIMESTAMP,
+            id_motorista INTEGER UNIQUE NOT NULL,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            ultima_atualizacao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_localizacoes_motorista
-                FOREIGN KEY (
-                    id_motorista
-                )
+                FOREIGN KEY (id_motorista)
                 REFERENCES usuarios(id)
                 ON DELETE CASCADE
         )
     `);
 
-    // ==================================================
-    // REPORTES
-    // ==================================================
+    // Reportes
     await pool.query(`
         CREATE TABLE IF NOT EXISTS reportes (
             id SERIAL PRIMARY KEY,
-            id_motorista INTEGER
-                NOT NULL,
-            tipo VARCHAR(30)
-                NOT NULL,
-            lat DOUBLE PRECISION
-                NOT NULL,
-            lng DOUBLE PRECISION
-                NOT NULL,
-            data_hora TIMESTAMPTZ
-                DEFAULT CURRENT_TIMESTAMP,
+            id_motorista INTEGER NOT NULL,
+            tipo VARCHAR(30) NOT NULL,
+            lat DOUBLE PRECISION NOT NULL,
+            lng DOUBLE PRECISION NOT NULL,
+            data_hora TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT fk_reportes_motorista
-                FOREIGN KEY (
-                    id_motorista
-                )
+                FOREIGN KEY (id_motorista)
                 REFERENCES usuarios(id)
                 ON DELETE CASCADE
         )
     `);
 
-    // ==================================================
-    // ÍNDICES
-    // ==================================================
-    await pool.query(`
-        CREATE INDEX IF NOT EXISTS
-        idx_rotas_motorista
-        ON rotas(id_motorista)
-    `);
-    await pool.query(`
-        CREATE INDEX IF NOT EXISTS
-        idx_reportes_motorista
-        ON reportes(id_motorista)
-    `);
-    await pool.query(`
-        CREATE INDEX IF NOT EXISTS
-        idx_reportes_data
-        ON reportes(data_hora DESC)
-    `);
+    // Índices
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_motorista ON rotas(id_motorista)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_veiculo ON rotas(id_veiculo)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reportes_motorista ON reportes(id_motorista)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reportes_data ON reportes(data_hora DESC)`);
 
-    // ==================================================
-    // USUÁRIOS PADRÃO
-    // ==================================================
-    const senhaAdmin =
-        bcrypt.hashSync(
-            'admin123',
-            10
-        );
-    const senhaMotorista =
-        bcrypt.hashSync(
-            'motor123',
-            10
-        );
+    // Usuários padrão mantidos para compatibilidade/teste
+    const senhaAdmin = bcrypt.hashSync('admin123', 10);
+    const senhaMotorista = bcrypt.hashSync('motor123', 10);
 
     await pool.query(
-        `
-        INSERT INTO usuarios
-        (
-            nome,
-            tipo,
-            login,
-            senha
-        )
-        VALUES
-        (
-            $1,
-            $2,
-            $3,
-            $4
-        )
-        ON CONFLICT (login)
-        DO NOTHING
-        `,
-        [
-            'Administrador',
-            'admin',
-            'admin',
-            senhaAdmin
-        ]
+        `INSERT INTO usuarios (nome,tipo,login,senha,email_verificado)
+         VALUES ($1,$2,$3,$4,TRUE)
+         ON CONFLICT (login) DO NOTHING`,
+        ['Administrador', 'admin', 'admin', senhaAdmin]
     );
 
     await pool.query(
-        `
-        INSERT INTO usuarios
-        (
-            nome,
-            tipo,
-            login,
-            senha
-        )
-        VALUES
-        (
-            $1,
-            $2,
-            $3,
-            $4
-        )
-        ON CONFLICT (login)
-        DO NOTHING
-        `,
-        [
-            'Motorista José',
-            'motorista',
-            'jose',
-            senhaMotorista
-        ]
+        `INSERT INTO usuarios (nome,tipo,login,senha,email_verificado)
+         VALUES ($1,$2,$3,$4,TRUE)
+         ON CONFLICT (login) DO NOTHING`,
+        ['Motorista José', 'motorista', 'jose', senhaMotorista]
     );
 
-    console.log(
-        '✅ PostgreSQL preparado!'
-    );
-    console.log(
-        '🧑‍💼 Admin: admin / admin123'
-    );
-    console.log(
-        '🚛 Motorista: jose / motor123'
-    );
+    console.log('✅ PostgreSQL preparado!');
 }
 
-// ======================================================
-// TESTAR POSTGRESQL
-// ======================================================
 async function testarBanco() {
     try {
-        const result =
-            await pool.query(
-                'SELECT NOW() AS agora'
-            );
-        console.log(
-            '✅ PostgreSQL conectado!'
-        );
-        console.log(
-            '🕒 Banco:',
-            result.rows[0].agora
-        );
+        const result = await pool.query('SELECT NOW() AS agora');
+        console.log('✅ PostgreSQL conectado!');
+        console.log('🕒 Banco:', result.rows[0].agora);
         return true;
-    }
-    catch (
-        erro
-    ) {
-        console.error(
-            '❌ Erro ao conectar no PostgreSQL:'
-        );
-        console.error(
-            erro.message
-        );
+    } catch (erro) {
+        console.error('❌ Erro ao conectar no PostgreSQL:', erro.message);
         return false;
     }
 }
@@ -333,1911 +325,1036 @@ async function testarBanco() {
 // ======================================================
 // AUTENTICAÇÃO
 // ======================================================
-function autenticar(
-    req,
-    res,
-    next
-) {
-    const token =
-        req.headers[
-            'authorization'
-        ];
+function autenticar(req, res, next) {
+    const header = req.headers.authorization;
+    if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
 
-    if (!token) {
-        return res
-            .status(401)
-            .json({
-                erro:
-                    'Token não fornecido'
-            });
-    }
+    const token = header.startsWith('Bearer ') ? header.slice(7) : header;
 
-    jwt.verify(
-        token,
-        JWT_SECRET,
-        (
-            err,
-            decoded
-        ) => {
-            if (err) {
-                return res
-                    .status(401)
-                    .json({
-                        erro:
-                            'Token inválido'
-                    });
-            }
-            req.usuario =
-                decoded;
-            next();
-        }
-    );
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) return res.status(401).json({ erro: 'Token inválido' });
+        req.usuario = decoded;
+        next();
+    });
 }
 
 // ======================================================
 // RATE LIMIT
 // ======================================================
-const globalLimiter =
-    rateLimit({
-        windowMs:
-            15 * 60 * 1000,
-        max:
-            300,
-        message: {
-            erro:
-                'Muitas requisições.'
-        }
-    });
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    message: { erro: 'Muitas requisições.' }
+});
 
-const heavyLimiter =
-    rateLimit({
-        windowMs:
-            5 * 60 * 1000,
-        max:
-            50,
-        message: {
-            erro:
-                'Limite excedido.'
-        }
-    });
+const heavyLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    max: 50,
+    message: { erro: 'Limite excedido.' }
+});
 
-app.use(
-    globalLimiter
-);
+const cadastroLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { erro: 'Muitas tentativas de cadastro. Aguarde alguns minutos.' }
+});
+
+app.use(globalLimiter);
 
 // ======================================================
 // JOI
 // ======================================================
 const schemas = {
-    login:
-        Joi.object({
-            login:
-                Joi.string()
-                    .required(),
-            senha:
-                Joi.string()
-                    .required()
-        }),
-    motorista:
-        Joi.object({
-            nome:
-                Joi.string()
-                    .min(3)
-                    .required(),
-            login:
-                Joi.string()
-                    .min(3)
-                    .required(),
-            senha:
-                Joi.string()
-                    .min(4)
-                    .required(),
-            tipo:
-                Joi.string()
-                    .valid(
-                        'motorista'
-                    )
-                    .optional()
-        }),
-    rota:
-        Joi.object({
-            nome:
-                Joi.string()
-                    .min(1)
-                    .required(),
-            origem:
-                Joi.string()
-                    .required(),
-            destino:
-                Joi.string()
-                    .required(),
-            restricoes:
-                Joi.object()
-                    .optional(),
-            dados_geojson:
-                Joi.object()
-                    .required(),
-            id_motorista:
-                Joi.number()
-                    .integer()
-                    .positive()
-                    .required()
-        }),
-    calcularRota:
-        Joi.object({
-            origem:
-                Joi.object({
-                    lat:
-                        Joi.number()
-                            .min(-90)
-                            .max(90)
-                            .required(),
-                    lon:
-                        Joi.number()
-                            .min(-180)
-                            .max(180)
-                            .required()
-                }).required(),
-            destino:
-                Joi.object({
-                    lat:
-                        Joi.number()
-                            .min(-90)
-                            .max(90)
-                            .required(),
-                    lon:
-                        Joi.number()
-                            .min(-180)
-                            .max(180)
-                            .required()
-                }).required(),
-            altura:
-                Joi.number()
-                    .positive()
-                    .optional(),
-            peso:
-                Joi.number()
-                    .positive()
-                    .optional(),
-            comprimento:
-                Joi.number()
-                    .positive()
-                    .optional(),
-            perfil:
-                Joi.string()
-                    .valid(
-                        'driving-car',
-                        'driving-hgv'
-                    )
-                    .required(),
-            preferencia:
-                Joi.string()
-                    .valid(
-                        'fastest',
-                        'shortest',
-                        'recommended'
-                    )
-                    .optional()
-        }),
-    recalcularDesvio:
-        Joi.object({
-            pontoSaida:
-                Joi.array()
-                    .items(
-                        Joi.number()
-                    )
-                    .length(2)
-                    .required(),
-            pontoIncidente:
-                Joi.array()
-                    .items(
-                        Joi.number()
-                    )
-                    .length(2)
-                    .required(),
-            pontoReentrada:
-                Joi.array()
-                    .items(
-                        Joi.number()
-                    )
-                    .length(2)
-                    .required(),
-            raioBloqueio:
-                Joi.number()
-                    .min(50)
-                    .max(1000)
-                    .optional(),
-            perfil:
-                Joi.string()
-                    .valid(
-                        'driving-car',
-                        'driving-hgv'
-                    )
-                    .optional(),
-            altura:
-                Joi.number()
-                    .positive()
-                    .optional(),
-            peso:
-                Joi.number()
-                    .positive()
-                    .optional(),
-            comprimento:
-                Joi.number()
-                    .positive()
-                    .optional()
-        }),
-    localizacao:
-        Joi.object({
-            lat:
-                Joi.number()
-                    .min(-90)
-                    .max(90)
-                    .required(),
-            lon:
-                Joi.number()
-                    .min(-180)
-                    .max(180)
-                    .required()
-        }),
-    status:
-        Joi.object({
-            status:
-                Joi.string()
-                    .valid(
-                        'pendente',
-                        'em_andamento',
-                        'concluida'
-                    )
-                    .required()
-        }),
-    traffic:
-        Joi.object({
-            top:
-                Joi.number()
-                    .min(-90)
-                    .max(90)
-                    .required(),
-            bottom:
-                Joi.number()
-                    .min(-90)
-                    .max(90)
-                    .required(),
-            left:
-                Joi.number()
-                    .min(-180)
-                    .max(180)
-                    .required(),
-            right:
-                Joi.number()
-                    .min(-180)
-                    .max(180)
-                    .required()
-        }),
-    reporte:
-        Joi.object({
-            lat:
-                Joi.number()
-                    .min(-90)
-                    .max(90)
-                    .required(),
-            lng:
-                Joi.number()
-                    .min(-180)
-                    .max(180)
-                    .required(),
-            tipo:
-                Joi.string()
-                    .valid(
-                        'radar',
-                        'acidente',
-                        'obra',
-                        'perigo',
-                        'risco'
-                    )
-                    .required()
-        })
+    login: Joi.object({
+        login: Joi.string().required(),
+        senha: Joi.string().required()
+    }),
+
+    iniciarCadastro: Joi.object({
+        nome: Joi.string().trim().min(3).max(150).required(),
+        email: Joi.string().email().required(),
+        placa: Joi.string().min(6).max(10).required()
+    }),
+
+    verificarCadastro: Joi.object({
+        email: Joi.string().email().required(),
+        codigo: Joi.string().pattern(/^\d{6}$/).required()
+    }),
+
+    criarSenha: Joi.object({
+        email: Joi.string().email().required(),
+        senha: Joi.string().min(6).max(100).required()
+    }),
+
+    veiculo: Joi.object({
+        placa: Joi.string().min(6).max(10).required(),
+        frota: Joi.string().allow('').optional(),
+        modelo: Joi.string().allow('').optional()
+    }),
+
+    motorista: Joi.object({
+        nome: Joi.string().min(3).required(),
+        login: Joi.string().min(3).required(),
+        senha: Joi.string().min(4).required(),
+        tipo: Joi.string().valid('motorista').optional()
+    }),
+
+    rota: Joi.object({
+        nome: Joi.string().min(1).required(),
+        origem: Joi.string().required(),
+        destino: Joi.string().required(),
+        restricoes: Joi.object().optional(),
+        dados_geojson: Joi.object().required(),
+        id_motorista: Joi.number().integer().positive().optional(),
+        id_veiculo: Joi.number().integer().positive().optional()
+    }),
+
+    calcularRota: Joi.object({
+        origem: Joi.object({
+            lat: Joi.number().min(-90).max(90).required(),
+            lon: Joi.number().min(-180).max(180).required()
+        }).required(),
+        destino: Joi.object({
+            lat: Joi.number().min(-90).max(90).required(),
+            lon: Joi.number().min(-180).max(180).required()
+        }).required(),
+        altura: Joi.number().positive().optional(),
+        peso: Joi.number().positive().optional(),
+        comprimento: Joi.number().positive().optional(),
+        perfil: Joi.string().valid('driving-car', 'driving-hgv').required(),
+        preferencia: Joi.string().valid('fastest', 'shortest', 'recommended').optional()
+    }),
+
+    recalcularDesvio: Joi.object({
+        pontoSaida: Joi.array().items(Joi.number()).length(2).required(),
+        pontoIncidente: Joi.array().items(Joi.number()).length(2).required(),
+        pontoReentrada: Joi.array().items(Joi.number()).length(2).required(),
+        raioBloqueio: Joi.number().min(50).max(1000).optional(),
+        perfil: Joi.string().valid('driving-car', 'driving-hgv').optional(),
+        altura: Joi.number().positive().optional(),
+        peso: Joi.number().positive().optional(),
+        comprimento: Joi.number().positive().optional()
+    }),
+
+    localizacao: Joi.object({
+        lat: Joi.number().min(-90).max(90).required(),
+        lon: Joi.number().min(-180).max(180).required()
+    }),
+
+    status: Joi.object({
+        status: Joi.string().valid('pendente', 'em_andamento', 'concluida').required()
+    }),
+
+    traffic: Joi.object({
+        top: Joi.number().min(-90).max(90).required(),
+        bottom: Joi.number().min(-90).max(90).required(),
+        left: Joi.number().min(-180).max(180).required(),
+        right: Joi.number().min(-180).max(180).required()
+    }),
+
+    reporte: Joi.object({
+        lat: Joi.number().min(-90).max(90).required(),
+        lng: Joi.number().min(-180).max(180).required(),
+        tipo: Joi.string().valid('radar', 'acidente', 'obra', 'perigo', 'risco').required()
+    })
 };
 
-// ======================================================
-// VALIDAR BODY
-// ======================================================
-function validar(
-    schema
-) {
-    return (
-        req,
-        res,
-        next
-    ) => {
-        const {
-            error,
-            value
-        } =
-            schema.validate(
-                req.body,
-                {
-                    abortEarly:
-                        false
-                }
-            );
-
+function validar(schema) {
+    return (req, res, next) => {
+        const { error, value } = schema.validate(req.body, { abortEarly: false });
         if (error) {
-            return res
-                .status(400)
-                .json({
-                    erro:
-                        'Dados inválidos',
-                    detalhes:
-                        error.details
-                            .map(
-                                d =>
-                                    d.message
-                            )
-                            .join(', ')
-                });
+            return res.status(400).json({
+                erro: 'Dados inválidos',
+                detalhes: error.details.map(d => d.message).join(', ')
+            });
         }
+        req.body = value;
+        next();
+    };
+}
 
-        req.body =
-            value;
+function validarQuery(schema) {
+    return (req, res, next) => {
+        const { error, value } = schema.validate(req.query, { abortEarly: false, convert: true });
+        if (error) {
+            return res.status(400).json({
+                erro: 'Parâmetros inválidos',
+                detalhes: error.details.map(d => d.message).join(', ')
+            });
+        }
+        req.query = value;
         next();
     };
 }
 
 // ======================================================
-// VALIDAR QUERY
+// CACHE DE ROTAS
 // ======================================================
-function validarQuery(
-    schema
-) {
-    return (
-        req,
-        res,
-        next
-    ) => {
-        const {
-            error,
-            value
-        } =
-            schema.validate(
-                req.query,
-                {
-                    abortEarly:
-                        false,
-                    convert:
-                        true
-                }
-            );
+const routeCache = new NodeCache({ stdTTL: 3600, checkperiod: 120 });
 
-        if (error) {
-            return res
-                .status(400)
-                .json({
-                    erro:
-                        'Parâmetros inválidos',
-                    detalhes:
-                        error.details
-                            .map(
-                                d =>
-                                    d.message
-                            )
-                            .join(', ')
-                });
-        }
-
-        req.query =
-            value;
-        next();
-    };
-}
-
-// ======================================================
-// CACHE
-// ======================================================
-const routeCache =
-    new NodeCache({
-        stdTTL:
-            3600,
-        checkperiod:
-            120
-    });
-
-function gerarChaveRota(
-    origem,
-    destino,
-    perfil,
-    preferencia,
-    altura,
-    peso,
-    comprimento
-) {
+function gerarChaveRota(origem, destino, perfil, preferencia, altura, peso, comprimento) {
     return JSON.stringify({
         origem,
         destino,
         perfil,
-        preferencia:
-            preferencia ||
-            'fastest',
-        altura:
-            altura ||
-            0,
-        peso:
-            peso ||
-            0,
-        comprimento:
-            comprimento ||
-            0
+        preferencia: preferencia || 'fastest',
+        altura: altura || 0,
+        peso: peso || 0,
+        comprimento: comprimento || 0
     });
 }
 
 // ======================================================
-// ROTA TESTE
+// HOME / HEALTH / ROTA TESTE
 // ======================================================
-app.get(
-    '/teste-rota',
-    (
-        req,
-        res
-    ) => {
+app.get('/', (req, res) => {
+    res.json({
+        mensagem: '🚀 GPS Caminhão API',
+        banco: 'PostgreSQL',
+        email: !!BREVO_API_KEY,
+        status: 'online'
+    });
+});
+
+app.get('/health', async (req, res) => {
+    try {
+        const resultado = await pool.query('SELECT NOW() AS agora');
         res.json({
-            type:
-                'FeatureCollection',
-            features: [
-                {
-                    type:
-                        'Feature',
-                    geometry: {
-                        type:
-                            'LineString',
-                        coordinates: [
-                            [
-                                -46.6333,
-                                -23.5505
-                            ],
-                            [
-                                -46.5000,
-                                -23.4000
-                            ],
-                            [
-                                -46.2000,
-                                -23.1000
-                            ],
-                            [
-                                -45.8000,
-                                -22.8000
-                            ],
-                            [
-                                -45.2000,
-                                -22.6000
-                            ],
-                            [
-                                -44.5000,
-                                -22.5000
-                            ],
-                            [
-                                -44.0000,
-                                -22.8000
-                            ],
-                            [
-                                -43.5000,
-                                -23.0000
-                            ],
-                            [
-                                -43.2075,
-                                -22.9028
-                            ]
-                        ]
-                    },
-                    properties: {
-                        segments: [
-                            {
-                                distance:
-                                    435000,
-                                duration:
-                                    16200
-                            }
-                        ]
-                    }
-                }
-            ],
-            origem:
-                'São Paulo, SP',
-            destino:
-                'Rio de Janeiro, RJ',
-            restricoes: {
-                altura:
-                    4.2,
-                peso:
-                    15,
-                comprimento:
-                    12
+            status: 'ok',
+            banco: 'postgresql',
+            database: 'conectado',
+            brevo: BREVO_API_KEY ? 'configurado' : 'não configurado',
+            timestamp: resultado.rows[0].agora
+        });
+    } catch (erro) {
+        res.status(500).json({ status: 'erro', database: 'desconectado', erro: erro.message });
+    }
+});
+
+app.get('/teste-rota', (req, res) => {
+    res.json({
+        type: 'FeatureCollection',
+        features: [{
+            type: 'Feature',
+            geometry: {
+                type: 'LineString',
+                coordinates: [
+                    [-40.064, -19.394],
+                    [-40.10, -19.50],
+                    [-40.15, -19.70],
+                    [-40.20, -19.90],
+                    [-40.25, -20.10],
+                    [-40.338, -20.319]
+                ]
+            },
+            properties: {
+                segments: [{ distance: 140000, duration: 7200 }]
             }
-        });
-    }
-);
-
-// ======================================================
-// HOME
-// ======================================================
-app.get(
-    '/',
-    (
-        req,
-        res
-    ) => {
-        res.json({
-            mensagem:
-                '🚀 GPS Caminhão API',
-            banco:
-                'PostgreSQL',
-            status:
-                'online'
-        });
-    }
-);
-
-// ======================================================
-// HEALTH
-// ======================================================
-app.get(
-    '/health',
-    async (
-        req,
-        res
-    ) => {
-        try {
-            const resultado =
-                await pool.query(
-                    'SELECT NOW() AS agora'
-                );
-            res.json({
-                status:
-                    'ok',
-                banco:
-                    'postgresql',
-                database:
-                    'conectado',
-                timestamp:
-                    resultado
-                        .rows[0]
-                        .agora
-            });
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    status:
-                        'erro',
-                    database:
-                        'desconectado',
-                    erro:
-                        erro.message
-                });
-        }
-    }
-);
+        }],
+        origem: 'Linhares, ES',
+        destino: 'Vitória, ES',
+        restricoes: { altura: 4.2, peso: 15, comprimento: 12 }
+    });
+});
 
 // ======================================================
 // LOGIN
 // ======================================================
-app.post(
-    '/login',
-    validar(
-        schemas.login
-    ),
-    async (
-        req,
-        res
-    ) => {
+app.post('/login', validar(schemas.login), async (req, res) => {
+    try {
+        const identificador = req.body.login.trim();
+
+        const resultado = await pool.query(`
+            SELECT
+                u.id, u.nome, u.tipo, u.login, u.senha,
+                u.email, u.email_verificado, u.id_veiculo,
+                v.placa, v.frota, v.modelo, v.ativo AS veiculo_ativo
+            FROM usuarios u
+            LEFT JOIN veiculos v ON v.id = u.id_veiculo
+            WHERE LOWER(u.login) = LOWER($1)
+               OR LOWER(COALESCE(u.email,'')) = LOWER($1)
+            LIMIT 1
+        `, [identificador]);
+
+        const user = resultado.rows[0];
+        if (!user) return res.status(401).json({ erro: 'Usuário não encontrado' });
+
+        if (user.tipo === 'motorista' && user.email && !user.email_verificado) {
+            return res.status(403).json({ erro: 'Confirme seu e-mail antes de acessar o aplicativo' });
+        }
+
+        if (user.tipo === 'motorista' && user.id_veiculo && user.veiculo_ativo === false) {
+            return res.status(403).json({ erro: 'O veículo vinculado à sua conta está bloqueado' });
+        }
+
+        const senhaCorreta = bcrypt.compareSync(req.body.senha, user.senha);
+        if (!senhaCorreta) return res.status(401).json({ erro: 'Senha incorreta' });
+
+        const token = jwt.sign({
+            id: user.id,
+            login: user.login,
+            tipo: user.tipo,
+            id_veiculo: user.id_veiculo || null
+        }, JWT_SECRET, { expiresIn: '8h' });
+
+        res.json({
+            token,
+            usuario: {
+                id: user.id,
+                nome: user.nome,
+                tipo: user.tipo,
+                email: user.email,
+                id_veiculo: user.id_veiculo,
+                placa: user.placa,
+                frota: user.frota,
+                modelo: user.modelo
+            }
+        });
+    } catch (erro) {
+        console.error('❌ Erro login:', erro);
+        res.status(500).json({ erro: 'Erro interno no login' });
+    }
+});
+
+// ======================================================
+// CADASTRO DO MOTORISTA - ETAPA 1
+// ======================================================
+app.post('/cadastro/iniciar', cadastroLimiter, validar(schemas.iniciarCadastro), async (req, res) => {
+    try {
+        const nome = req.body.nome.trim();
+        const email = normalizarEmail(req.body.email);
+        const placa = normalizarPlaca(req.body.placa);
+
+        const resultadoVeiculo = await pool.query(`
+            SELECT id, placa, frota, modelo, ativo
+            FROM veiculos
+            WHERE placa = $1
+            LIMIT 1
+        `, [placa]);
+
+        const veiculo = resultadoVeiculo.rows[0];
+        if (!veiculo) return res.status(403).json({ erro: 'Placa não cadastrada no sistema' });
+        if (!veiculo.ativo) return res.status(403).json({ erro: 'Este veículo está bloqueado' });
+
+        const placaEmUso = await pool.query(`
+            SELECT id FROM usuarios
+            WHERE tipo = 'motorista' AND id_veiculo = $1
+            LIMIT 1
+        `, [veiculo.id]);
+
+        if (placaEmUso.rows.length > 0) {
+            return res.status(409).json({ erro: 'Esta placa já está vinculada a outro motorista' });
+        }
+
+        const pendenteOutraPessoa = await pool.query(`
+            SELECT id, email
+            FROM cadastros_pendentes
+            WHERE id_veiculo = $1 AND LOWER(email) <> LOWER($2)
+            LIMIT 1
+        `, [veiculo.id, email]);
+
+        if (pendenteOutraPessoa.rows.length > 0) {
+            return res.status(409).json({ erro: 'Já existe um cadastro em andamento para esta placa' });
+        }
+
+        const emailExistente = await pool.query(`
+            SELECT id FROM usuarios
+            WHERE LOWER(COALESCE(email,'')) = LOWER($1)
+               OR LOWER(login) = LOWER($1)
+            LIMIT 1
+        `, [email]);
+
+        if (emailExistente.rows.length > 0) {
+            return res.status(409).json({ erro: 'Este e-mail já possui uma conta' });
+        }
+
+        const codigo = gerarCodigo();
+        const codigoHash = bcrypt.hashSync(codigo, 10);
+        const expiracao = new Date(Date.now() + 10 * 60 * 1000);
+
+        await pool.query(`
+            INSERT INTO cadastros_pendentes
+                (nome,email,id_veiculo,codigo_hash,codigo_expira_em,email_verificado,tentativas,created_at)
+            VALUES ($1,$2,$3,$4,$5,FALSE,0,CURRENT_TIMESTAMP)
+            ON CONFLICT (email)
+            DO UPDATE SET
+                nome = EXCLUDED.nome,
+                id_veiculo = EXCLUDED.id_veiculo,
+                codigo_hash = EXCLUDED.codigo_hash,
+                codigo_expira_em = EXCLUDED.codigo_expira_em,
+                email_verificado = FALSE,
+                verificado_em = NULL,
+                tentativas = 0,
+                created_at = CURRENT_TIMESTAMP
+        `, [nome, email, veiculo.id, codigoHash, expiracao]);
+
         try {
-            const resultado =
-                await pool.query(
-                    `
-                    SELECT
-                        id,
-                        nome,
-                        tipo,
-                        login,
-                        senha
-                    FROM usuarios
-                    WHERE
-                        login = $1
-                    LIMIT 1
-                    `,
-                    [
-                        req.body.login
-                    ]
-                );
-            const user =
-                resultado.rows[0];
-
-            if (!user) {
-                return res
-                    .status(401)
-                    .json({
-                        erro:
-                            'Usuário não encontrado'
-                    });
-            }
-
-            const senhaCorreta =
-                bcrypt.compareSync(
-                    req.body.senha,
-                    user.senha
-                );
-
-            if (
-                !senhaCorreta
-            ) {
-                return res
-                    .status(401)
-                    .json({
-                        erro:
-                            'Senha incorreta'
-                    });
-            }
-
-            const token =
-                jwt.sign(
-                    {
-                        id:
-                            user.id,
-                        login:
-                            user.login,
-                        tipo:
-                            user.tipo
-                    },
-                    JWT_SECRET,
-                    {
-                        expiresIn:
-                            '8h'
-                    }
-                );
-
-            res.json({
-                token,
-                usuario: {
-                    id:
-                        user.id,
-                    nome:
-                        user.nome,
-                    tipo:
-                        user.tipo
-                }
+            await enviarEmailCodigo({ nome, email, codigo, placa });
+        } catch (erroEmail) {
+            console.error('❌ Brevo:', erroEmail.response?.data || erroEmail.message);
+            return res.status(502).json({
+                erro: 'Não foi possível enviar o e-mail de confirmação',
+                detalhe: erroEmail.response?.data?.message || erroEmail.message
             });
         }
-        catch (
-            erro
-        ) {
-            console.error(
-                '❌ Erro login:',
-                erro
-            );
-            res
-                .status(500)
-                .json({
-                    erro:
-                        'Erro interno no login'
-                });
-        }
+
+        console.log(`📧 Código enviado para ${email} / placa ${placa}`);
+        res.json({
+            mensagem: 'Código enviado para seu e-mail',
+            email,
+            placa,
+            expira_em_minutos: 10
+        });
+    } catch (erro) {
+        console.error('❌ Cadastro iniciar:', erro);
+        res.status(500).json({ erro: 'Erro ao iniciar cadastro' });
     }
-);
+});
 
 // ======================================================
-// LISTAR MOTORISTAS
+// CADASTRO DO MOTORISTA - ETAPA 2
 // ======================================================
-app.get(
-    '/motoristas',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
+app.post('/cadastro/verificar', cadastroLimiter, validar(schemas.verificarCadastro), async (req, res) => {
+    try {
+        const email = normalizarEmail(req.body.email);
+        const codigo = req.body.codigo;
+
+        const resultado = await pool.query(`
+            SELECT * FROM cadastros_pendentes
+            WHERE LOWER(email) = LOWER($1)
+            LIMIT 1
+        `, [email]);
+
+        const cadastro = resultado.rows[0];
+        if (!cadastro) return res.status(404).json({ erro: 'Cadastro não encontrado' });
+        if (cadastro.tentativas >= 5) {
+            return res.status(429).json({ erro: 'Muitas tentativas incorretas. Solicite um novo código.' });
+        }
+        if (new Date() > new Date(cadastro.codigo_expira_em)) {
+            return res.status(410).json({ erro: 'Código expirado. Solicite um novo código.' });
         }
 
-        try {
-            const resultado =
-                await pool.query(`
-                    SELECT
-                        id,
-                        nome,
-                        login,
-                        tipo
-                    FROM usuarios
-                    WHERE
-                        tipo =
-                        'motorista'
-                    ORDER BY
-                        nome ASC
-                `);
-            res.json(
-                resultado.rows
-            );
+        const codigoCorreto = bcrypt.compareSync(codigo, cadastro.codigo_hash);
+        if (!codigoCorreto) {
+            await pool.query(`
+                UPDATE cadastros_pendentes
+                SET tentativas = tentativas + 1
+                WHERE id = $1
+            `, [cadastro.id]);
+
+            return res.status(400).json({ erro: 'Código incorreto' });
         }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+
+        await pool.query(`
+            UPDATE cadastros_pendentes
+            SET email_verificado = TRUE,
+                verificado_em = CURRENT_TIMESTAMP,
+                tentativas = 0
+            WHERE id = $1
+        `, [cadastro.id]);
+
+        res.json({ mensagem: 'E-mail confirmado com sucesso', email_verificado: true });
+    } catch (erro) {
+        console.error('❌ Verificar código:', erro);
+        res.status(500).json({ erro: 'Erro ao confirmar código' });
     }
-);
+});
 
 // ======================================================
-// CADASTRAR MOTORISTA
+// CADASTRO DO MOTORISTA - ETAPA 3
 // ======================================================
-app.post(
-    '/motoristas',
-    autenticar,
-    validar(
-        schemas.motorista
-    ),
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
+app.post('/cadastro/criar-senha', cadastroLimiter, validar(schemas.criarSenha), async (req, res) => {
+    const client = await pool.connect();
+
+    try {
+        const email = normalizarEmail(req.body.email);
+        await client.query('BEGIN');
+
+        const resultado = await client.query(`
+            SELECT cp.*, v.placa, v.ativo
+            FROM cadastros_pendentes cp
+            JOIN veiculos v ON v.id = cp.id_veiculo
+            WHERE LOWER(cp.email) = LOWER($1)
+            LIMIT 1
+            FOR UPDATE
+        `, [email]);
+
+        const cadastro = resultado.rows[0];
+
+        if (!cadastro) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Cadastro não encontrado' });
         }
 
-        try {
-            const existe =
-                await pool.query(
-                    `
-                    SELECT id
-                    FROM usuarios
-                    WHERE
-                        login = $1
-                    LIMIT 1
-                    `,
-                    [
-                        req.body.login
-                    ]
-                );
+        if (!cadastro.email_verificado) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ erro: 'Confirme seu e-mail primeiro' });
+        }
 
-            if (
-                existe.rows.length >
-                0
-            ) {
-                return res
-                    .status(400)
-                    .json({
-                        erro:
-                            'Login já em uso'
-                    });
+        if (!cadastro.ativo) {
+            await client.query('ROLLBACK');
+            return res.status(403).json({ erro: 'O veículo não está mais autorizado' });
+        }
+
+        if (!cadastro.verificado_em || Date.now() - new Date(cadastro.verificado_em).getTime() > 30 * 60 * 1000) {
+            await client.query('ROLLBACK');
+            return res.status(410).json({ erro: 'Confirmação expirada. Solicite um novo código.' });
+        }
+
+        const placaEmUso = await client.query(`
+            SELECT id FROM usuarios
+            WHERE tipo = 'motorista' AND id_veiculo = $1
+            LIMIT 1
+        `, [cadastro.id_veiculo]);
+
+        if (placaEmUso.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ erro: 'Esta placa foi vinculada a outra conta' });
+        }
+
+        const senhaHash = bcrypt.hashSync(req.body.senha, 10);
+
+        const novoUsuario = await client.query(`
+            INSERT INTO usuarios
+                (nome,tipo,login,senha,email,email_verificado,id_veiculo)
+            VALUES ($1,'motorista',$2,$3,$4,TRUE,$5)
+            RETURNING id,nome,login,email,id_veiculo
+        `, [cadastro.nome, email, senhaHash, email, cadastro.id_veiculo]);
+
+        await client.query(`DELETE FROM cadastros_pendentes WHERE id = $1`, [cadastro.id]);
+        await client.query('COMMIT');
+
+        console.log(`✅ Conta criada: ${email} / placa ${cadastro.placa}`);
+
+        res.status(201).json({
+            mensagem: 'Conta criada com sucesso',
+            usuario: {
+                id: novoUsuario.rows[0].id,
+                nome: novoUsuario.rows[0].nome,
+                email: novoUsuario.rows[0].email,
+                placa: cadastro.placa
             }
+        });
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        console.error('❌ Criar conta:', erro);
 
-            const senhaHash =
-                bcrypt.hashSync(
-                    req.body.senha,
-                    10
-                );
-
-            const resultado =
-                await pool.query(
-                    `
-                    INSERT INTO usuarios
-                    (
-                        nome,
-                        tipo,
-                        login,
-                        senha
-                    )
-                    VALUES
-                    (
-                        $1,
-                        'motorista',
-                        $2,
-                        $3
-                    )
-                    RETURNING
-                        id,
-                        nome,
-                        login,
-                        tipo
-                    `,
-                    [
-                        req.body.nome,
-                        req.body.login,
-                        senhaHash
-                    ]
-                );
-
-            console.log(
-                `✅ Motorista cadastrado: ${req.body.login}`
-            );
-
-            res
-                .status(201)
-                .json(
-                    resultado.rows[0]
-                );
+        if (erro.code === '23505') {
+            return res.status(409).json({ erro: 'E-mail ou veículo já possui uma conta' });
         }
-        catch (
-            erro
-        ) {
-            console.error(
-                '❌ Cadastro motorista:',
-                erro
-            );
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+
+        res.status(500).json({ erro: 'Erro ao criar conta' });
+    } finally {
+        client.release();
     }
-);
+});
 
 // ======================================================
-// CRIAR ROTA
+// VEÍCULOS
 // ======================================================
-app.post(
-    '/rotas',
-    autenticar,
-    validar(
-        schemas.rota
-    ),
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+app.get('/veiculos', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            const resultado =
-                await pool.query(
-                    `
-                    INSERT INTO rotas
-                    (
-                        nome,
-                        origem,
-                        destino,
-                        restricoes,
-                        dados_geojson,
-                        id_motorista,
-                        status
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4::jsonb,
-                        $5::jsonb,
-                        $6,
-                        'pendente'
-                    )
-                    RETURNING id
-                    `,
-                    [
-                        req.body.nome,
-                        req.body.origem,
-                        req.body.destino,
-                        JSON.stringify(
-                            req.body.restricoes ||
-                            {}
-                        ),
-                        JSON.stringify(
-                            req.body.dados_geojson
-                        ),
-                        req.body.id_motorista
-                    ]
-                );
-
-            res
-                .status(201)
-                .json({
-                    mensagem:
-                        'Rota criada!',
-                    id:
-                        resultado
-                            .rows[0]
-                            .id
-                });
-        }
-        catch (
-            erro
-        ) {
-            console.error(
-                '❌ Erro ao criar rota:',
-                erro
-            );
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                v.id, v.placa, v.frota, v.modelo, v.ativo, v.created_at,
+                u.id AS id_motorista, u.nome AS motorista, u.email
+            FROM veiculos v
+            LEFT JOIN usuarios u
+                ON u.id_veiculo = v.id
+               AND u.tipo = 'motorista'
+            ORDER BY v.placa ASC
+        `);
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
-// ======================================================
-// LISTAR ROTAS
-// ======================================================
-app.get(
-    '/rotas',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+app.post('/veiculos', autenticar, validar(schemas.veiculo), async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            const resultado =
-                await pool.query(`
-                    SELECT *
-                    FROM rotas
-                    ORDER BY
-                        criada_em DESC
-                `);
-            res.json(
-                resultado.rows
-            );
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const placa = normalizarPlaca(req.body.placa);
+        const resultado = await pool.query(`
+            INSERT INTO veiculos (placa,frota,modelo)
+            VALUES ($1,$2,$3)
+            RETURNING *
+        `, [placa, req.body.frota || null, req.body.modelo || null]);
+
+        res.status(201).json(resultado.rows[0]);
+    } catch (erro) {
+        if (erro.code === '23505') return res.status(409).json({ erro: 'Placa já cadastrada' });
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
-// ======================================================
-// REPORTAR
-// ======================================================
-app.post(
-    '/reportar',
-    autenticar,
-    validar(
-        schemas.reporte
-    ),
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'motorista'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
-
-        try {
-            const resultado =
-                await pool.query(
-                    `
-                    INSERT INTO reportes
-                    (
-                        id_motorista,
-                        tipo,
-                        lat,
-                        lng
-                    )
-                    VALUES
-                    (
-                        $1,
-                        $2,
-                        $3,
-                        $4
-                    )
-                    RETURNING id
-                    `,
-                    [
-                        req.usuario.id,
-                        req.body.tipo,
-                        req.body.lat,
-                        req.body.lng
-                    ]
-                );
-
-            res.json({
-                mensagem:
-                    `Reporte de "${req.body.tipo}" enviado!`,
-                id:
-                    resultado
-                        .rows[0]
-                        .id
-            });
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+app.patch('/veiculos/:id/status', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+    if (typeof req.body.ativo !== 'boolean') {
+        return res.status(400).json({ erro: 'Informe ativo como true ou false' });
     }
-);
 
-// ======================================================
-// LISTAR REPORTES
-// ======================================================
-app.get(
-    '/reportes',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        try {
-            const resultado =
-                await pool.query(`
-                    SELECT
-                        r.id,
-                        u.nome
-                            AS motorista,
-                        r.tipo,
-                        r.lat,
-                        r.lng,
-                        r.data_hora
-                    FROM reportes r
-                    JOIN usuarios u
-                        ON
-                            u.id =
-                            r.id_motorista
-                    ORDER BY
-                        r.data_hora DESC
-                `);
-            res.json(
-                resultado.rows
-            );
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const resultado = await pool.query(`
+            UPDATE veiculos
+            SET ativo = $1
+            WHERE id = $2
+            RETURNING *
+        `, [req.body.ativo, req.params.id]);
+
+        if (!resultado.rows.length) return res.status(404).json({ erro: 'Veículo não encontrado' });
+        res.json(resultado.rows[0]);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
 // ======================================================
-// APAGAR REPORTES
+// MOTORISTAS
 // ======================================================
-app.delete(
-    '/reportes',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+app.get('/motoristas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            const resultado =
-                await pool.query(
-                    `DELETE FROM reportes`
-                );
-            res.json({
-                mensagem:
-                    `${resultado.rowCount} reporte(s) removido(s)!`,
-                quantidade:
-                    resultado.rowCount
-            });
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                u.id, u.nome, u.login, u.email, u.tipo,
+                u.email_verificado, u.id_veiculo,
+                v.placa, v.frota, v.modelo
+            FROM usuarios u
+            LEFT JOIN veiculos v ON v.id = u.id_veiculo
+            WHERE u.tipo = 'motorista'
+            ORDER BY u.nome ASC
+        `);
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
-// ======================================================
-// LOCALIZAÇÃO
-// ======================================================
-app.post(
-    '/localizacao',
-    autenticar,
-    validar(
-        schemas.localizacao
-    ),
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'motorista'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+// Cadastro antigo mantido por compatibilidade
+app.post('/motoristas', autenticar, validar(schemas.motorista), async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            await pool.query(
-                `
-                INSERT INTO localizacoes
-                (
-                    id_motorista,
-                    lat,
-                    lon,
-                    ultima_atualizacao
-                )
-                VALUES
-                (
-                    $1,
-                    $2,
-                    $3,
-                    CURRENT_TIMESTAMP
-                )
-                ON CONFLICT
-                    (id_motorista)
-                DO UPDATE SET
-                    lat =
-                        EXCLUDED.lat,
-                    lon =
-                        EXCLUDED.lon,
-                    ultima_atualizacao =
-                        CURRENT_TIMESTAMP
-                `,
-                [
-                    req.usuario.id,
-                    req.body.lat,
-                    req.body.lon
-                ]
-            );
-            res.json({
-                mensagem:
-                    'Localização atualizada'
-            });
-        }
-        catch (
-            erro
-        ) {
-            console.error(
-                '❌ Localização:',
-                erro
-            );
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const existe = await pool.query(`SELECT id FROM usuarios WHERE login = $1 LIMIT 1`, [req.body.login]);
+        if (existe.rows.length) return res.status(400).json({ erro: 'Login já em uso' });
+
+        const senhaHash = bcrypt.hashSync(req.body.senha, 10);
+        const resultado = await pool.query(`
+            INSERT INTO usuarios (nome,tipo,login,senha,email_verificado)
+            VALUES ($1,'motorista',$2,$3,TRUE)
+            RETURNING id,nome,login,tipo
+        `, [req.body.nome, req.body.login, senhaHash]);
+
+        res.status(201).json(resultado.rows[0]);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
 // ======================================================
-// LOCALIZAÇÕES ADMIN
+// ROTAS
 // ======================================================
-app.get(
-    '/localizacoes',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'admin'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+app.post('/rotas', autenticar, validar(schemas.rota), async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            const resultado =
-                await pool.query(`
-                    SELECT
-                        u.id,
-                        u.nome,
-                        l.lat,
-                        l.lon,
-                        l.ultima_atualizacao
-                    FROM usuarios u
-                    LEFT JOIN localizacoes l
-                        ON
-                            l.id_motorista =
-                            u.id
-                    WHERE
-                        u.tipo =
-                        'motorista'
-                    ORDER BY
-                        u.nome ASC
-                `);
-            res.json(
-                resultado.rows
-            );
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    if (!req.body.id_motorista && !req.body.id_veiculo) {
+        return res.status(400).json({ erro: 'Informe o motorista ou o veículo da rota' });
     }
-);
 
-// ======================================================
-// ROTA MOTORISTA
-// ======================================================
-app.get(
-    '/rotas/minha-rota',
-    autenticar,
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'motorista'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+    try {
+        const resultado = await pool.query(`
+            INSERT INTO rotas
+                (nome,origem,destino,restricoes,dados_geojson,id_motorista,id_veiculo,status)
+            VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,'pendente')
+            RETURNING id
+        `, [
+            req.body.nome,
+            req.body.origem,
+            req.body.destino,
+            JSON.stringify(req.body.restricoes || {}),
+            JSON.stringify(req.body.dados_geojson),
+            req.body.id_motorista || null,
+            req.body.id_veiculo || null
+        ]);
 
-        try {
-            const resultado =
-                await pool.query(
-                    `
-                    SELECT *
-                    FROM rotas
-                    WHERE
-                        id_motorista = $1
-                    AND
-                        status IN
-                        (
-                            'pendente',
-                            'em_andamento'
-                        )
-                    ORDER BY
-                        criada_em DESC
-                    LIMIT 1
-                    `,
-                    [
-                        req.usuario.id
-                    ]
-                );
-
-            if (
-                resultado.rows.length ===
-                0
-            ) {
-                return res
-                    .status(404)
-                    .json({
-                        mensagem:
-                            'Nenhuma rota ativa'
-                    });
-            }
-
-            res.json(
-                resultado.rows[0]
-            );
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+        res.status(201).json({ mensagem: 'Rota criada!', id: resultado.rows[0].id });
+    } catch (erro) {
+        console.error('❌ Criar rota:', erro);
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
 
-// ======================================================
-// STATUS DA ROTA
-// ======================================================
-app.patch(
-    '/rotas/:id/status',
-    autenticar,
-    validar(
-        schemas.status
-    ),
-    async (
-        req,
-        res
-    ) => {
-        if (
-            req.usuario.tipo !==
-            'motorista'
-        ) {
-            return res
-                .status(403)
-                .json({
-                    erro:
-                        'Acesso negado'
-                });
-        }
+app.get('/rotas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
 
-        try {
-            const resultado =
-                await pool.query(
-                    `
-                    UPDATE rotas
-                    SET
-                        status = $1
-                    WHERE
-                        id = $2
-                    AND
-                        id_motorista = $3
-                    `,
-                    [
-                        req.body.status,
-                        req.params.id,
-                        req.usuario.id
-                    ]
-                );
-
-            if (
-                resultado.rowCount ===
-                0
-            ) {
-                return res
-                    .status(404)
-                    .json({
-                        erro:
-                            'Rota não encontrada'
-                    });
-            }
-
-            res.json({
-                mensagem:
-                    'Status atualizado'
-            });
-        }
-        catch (
-            erro
-        ) {
-            res
-                .status(500)
-                .json({
-                    erro:
-                        erro.message
-                });
-        }
+    try {
+        const resultado = await pool.query(`
+            SELECT r.*, v.placa, v.frota, v.modelo, u.nome AS motorista
+            FROM rotas r
+            LEFT JOIN veiculos v ON v.id = r.id_veiculo
+            LEFT JOIN usuarios u ON u.id = r.id_motorista
+            ORDER BY r.criada_em DESC
+        `);
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
     }
-);
+});
+
+app.get('/rotas/minha-rota', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const usuario = await pool.query(`SELECT id,id_veiculo FROM usuarios WHERE id = $1 LIMIT 1`, [req.usuario.id]);
+        const user = usuario.rows[0];
+        let resultado;
+
+        if (user?.id_veiculo) {
+            resultado = await pool.query(`
+                SELECT * FROM rotas
+                WHERE id_veiculo = $1
+                  AND status IN ('pendente','em_andamento')
+                ORDER BY criada_em DESC
+                LIMIT 1
+            `, [user.id_veiculo]);
+        } else {
+            resultado = await pool.query(`
+                SELECT * FROM rotas
+                WHERE id_motorista = $1
+                  AND status IN ('pendente','em_andamento')
+                ORDER BY criada_em DESC
+                LIMIT 1
+            `, [req.usuario.id]);
+        }
+
+        if (!resultado.rows.length) return res.status(404).json({ mensagem: 'Nenhuma rota ativa' });
+        res.json(resultado.rows[0]);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.patch('/rotas/:id/status', autenticar, validar(schemas.status), async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const usuario = await pool.query(`SELECT id_veiculo FROM usuarios WHERE id = $1`, [req.usuario.id]);
+        const idVeiculo = usuario.rows[0]?.id_veiculo || null;
+
+        const resultado = await pool.query(`
+            UPDATE rotas
+            SET status = $1
+            WHERE id = $2
+              AND (
+                    id_motorista = $3
+                    OR ($4::INTEGER IS NOT NULL AND id_veiculo = $4)
+                  )
+        `, [req.body.status, req.params.id, req.usuario.id, idVeiculo]);
+
+        if (!resultado.rowCount) return res.status(404).json({ erro: 'Rota não encontrada' });
+        res.json({ mensagem: 'Status atualizado' });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
 
 // ======================================================
-// POLÍGONO DO INCIDENTE
+// REPORTES
 // ======================================================
-function criarPoligonoCircular(
-    lng,
-    lat,
-    raioMetros,
-    pontos = 20
-) {
-    const metrosPorGrauLat =
-        111320;
-    const metrosPorGrauLng =
-        Math.max(
-            1000,
-            111320 *
-            Math.cos(
-                lat *
-                Math.PI /
-                180
-            )
-        );
-    const ring =
-        [];
+app.post('/reportar', autenticar, validar(schemas.reporte), async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
-    for (
-        let i = 0;
-        i < pontos;
-        i++
-    ) {
-        const angulo =
-            (
-                2 *
-                Math.PI *
-                i
-            )
-            /
-            pontos;
-        const dx =
-            Math.cos(
-                angulo
-            )
-            *
-            raioMetros;
-        const dy =
-            Math.sin(
-                angulo
-            )
-            *
-            raioMetros;
+    try {
+        const resultado = await pool.query(`
+            INSERT INTO reportes (id_motorista,tipo,lat,lng)
+            VALUES ($1,$2,$3,$4)
+            RETURNING id
+        `, [req.usuario.id, req.body.tipo, req.body.lat, req.body.lng]);
+
+        res.json({ mensagem: `Reporte de "${req.body.tipo}" enviado!`, id: resultado.rows[0].id });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/reportes', autenticar, async (req, res) => {
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                r.id,
+                u.nome AS motorista,
+                v.placa,
+                r.tipo,
+                r.lat,
+                r.lng,
+                r.data_hora
+            FROM reportes r
+            JOIN usuarios u ON u.id = r.id_motorista
+            LEFT JOIN veiculos v ON v.id = u.id_veiculo
+            ORDER BY r.data_hora DESC
+        `);
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.delete('/reportes', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const resultado = await pool.query(`DELETE FROM reportes`);
+        res.json({
+            mensagem: `${resultado.rowCount} reporte(s) removido(s)!`,
+            quantidade: resultado.rowCount
+        });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+// ======================================================
+// LOCALIZAÇÕES
+// ======================================================
+app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        await pool.query(`
+            INSERT INTO localizacoes (id_motorista,lat,lon,ultima_atualizacao)
+            VALUES ($1,$2,$3,CURRENT_TIMESTAMP)
+            ON CONFLICT (id_motorista)
+            DO UPDATE SET
+                lat = EXCLUDED.lat,
+                lon = EXCLUDED.lon,
+                ultima_atualizacao = CURRENT_TIMESTAMP
+        `, [req.usuario.id, req.body.lat, req.body.lon]);
+
+        res.json({ mensagem: 'Localização atualizada' });
+    } catch (erro) {
+        console.error('❌ Localização:', erro);
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/localizacoes', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                u.id, u.nome,
+                v.placa, v.frota, v.modelo,
+                l.lat, l.lon, l.ultima_atualizacao
+            FROM usuarios u
+            LEFT JOIN veiculos v ON v.id = u.id_veiculo
+            LEFT JOIN localizacoes l ON l.id_motorista = u.id
+            WHERE u.tipo = 'motorista'
+            ORDER BY u.nome ASC
+        `);
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+// ======================================================
+// ORS - POLÍGONO DE INCIDENTE
+// ======================================================
+function criarPoligonoCircular(lng, lat, raioMetros, pontos = 20) {
+    const metrosPorGrauLat = 111320;
+    const metrosPorGrauLng = Math.max(1000, 111320 * Math.cos(lat * Math.PI / 180));
+    const ring = [];
+
+    for (let i = 0; i < pontos; i++) {
+        const angulo = (2 * Math.PI * i) / pontos;
+        const dx = Math.cos(angulo) * raioMetros;
+        const dy = Math.sin(angulo) * raioMetros;
 
         ring.push([
-            lng +
-            dx /
-            metrosPorGrauLng,
-            lat +
-            dy /
-            metrosPorGrauLat
+            lng + dx / metrosPorGrauLng,
+            lat + dy / metrosPorGrauLat
         ]);
     }
 
-    ring.push(
-        [
-            ...ring[0]
-        ]
-    );
-
-    return {
-        type:
-            'Polygon',
-        coordinates: [
-            ring
-        ]
-    };
+    ring.push([...ring[0]]);
+    return { type: 'Polygon', coordinates: [ring] };
 }
 
 // ======================================================
 // CALCULAR ROTA
 // ======================================================
-app.post(
-    '/api/calcular-rota',
-    autenticar,
-    heavyLimiter,
-    validar(
-        schemas.calcularRota
-    ),
-    async (
-        req,
-        res
-    ) => {
-        try {
-            const chave =
-                gerarChaveRota(
-                    req.body.origem,
-                    req.body.destino,
-                    req.body.perfil,
-                    req.body.preferencia,
-                    req.body.altura,
-                    req.body.peso,
-                    req.body.comprimento
-                );
+app.post('/api/calcular-rota', autenticar, heavyLimiter, validar(schemas.calcularRota), async (req, res) => {
+    try {
+        const chave = gerarChaveRota(
+            req.body.origem,
+            req.body.destino,
+            req.body.perfil,
+            req.body.preferencia,
+            req.body.altura,
+            req.body.peso,
+            req.body.comprimento
+        );
 
-            const cacheado =
-                routeCache.get(
-                    chave
-                );
+        const cacheado = routeCache.get(chave);
+        if (cacheado) return res.json(cacheado);
 
-            if (
-                cacheado
-            ) {
-                return res.json(
-                    cacheado
-                );
-            }
+        const body = {
+            coordinates: [
+                [req.body.origem.lon, req.body.origem.lat],
+                [req.body.destino.lon, req.body.destino.lat]
+            ],
+            preference: req.body.preferencia || 'fastest'
+        };
 
-            const body = {
-                coordinates: [
-                    [
-                        req.body
-                            .origem
-                            .lon,
-                        req.body
-                            .origem
-                            .lat
-                    ],
-                    [
-                        req.body
-                            .destino
-                            .lon,
-                        req.body
-                            .destino
-                            .lat
-                    ]
-                ],
-                preference:
-                    req.body.preferencia ||
-                    'fastest'
+        if (req.body.perfil === 'driving-hgv') {
+            body.options = {
+                profile_params: {
+                    restrictions: {
+                        height: req.body.altura || 4.2,
+                        weight: req.body.peso || 15,
+                        length: req.body.comprimento || 12,
+                        width: 2.6
+                    }
+                }
             };
+        }
 
-            if (
-                req.body.perfil ===
-                'driving-hgv'
-            ) {
-                body.options = {
-                    profile_params: {
-                        restrictions: {
-                            height:
-                                req.body.altura ||
-                                4.2,
-                            weight:
-                                req.body.peso ||
-                                15,
-                            length:
-                                req.body.comprimento ||
-                                12,
-                            width:
-                                2.6
-                        }
-                    }
-                };
+        const response = await axios.post(
+            `https://api.openrouteservice.org/v2/directions/${req.body.perfil}/geojson`,
+            body,
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: ORS_API_KEY
+                },
+                timeout: 20000
             }
+        );
 
-            const response =
-                await axios.post(
-                    `https://api.openrouteservice.org/v2/directions/${req.body.perfil}/geojson`,
-                    body,
-                    {
-                        headers: {
-                            'Content-Type':
-                                'application/json',
-                            'Authorization':
-                                ORS_API_KEY
-                        },
-                        timeout:
-                            20000
-                    }
-                );
-
-            routeCache.set(
-                chave,
-                response.data
-            );
-
-            res.json(
-                response.data
-            );
-        }
-        catch (
-            error
-        ) {
-            console.error(
-                '❌ ORS:',
-                error.response?.data ||
-                error.message
-            );
-            res
-                .status(
-                    error.response?.status ||
-                    500
-                )
-                .json({
-                    erro:
-                        'Falha ao calcular rota',
-                    detalhe:
-                        error.response?.data ||
-                        error.message
-                });
-        }
+        routeCache.set(chave, response.data);
+        res.json(response.data);
+    } catch (error) {
+        console.error('❌ ORS:', JSON.stringify(error.response?.data || error.message, null, 2));
+        res.status(error.response?.status || 500).json({
+            erro: 'Falha ao calcular rota',
+            detalhe: error.response?.data || error.message
+        });
     }
-);
+});
 
 // ======================================================
 // RECALCULAR DESVIO
 // ======================================================
-app.post(
-    '/api/recalcular-desvio',
-    autenticar,
-    heavyLimiter,
-    validar(
-        schemas.recalcularDesvio
-    ),
-    async (
-        req,
-        res
-    ) => {
-        try {
-            const perfil =
-                req.body.perfil ||
-                'driving-hgv';
-            const [
-                lngIncidente,
-                latIncidente
-            ] =
-                req.body.pontoIncidente;
-            const raio =
-                req.body.raioBloqueio ||
-                180;
+app.post('/api/recalcular-desvio', autenticar, heavyLimiter, validar(schemas.recalcularDesvio), async (req, res) => {
+    try {
+        const perfil = req.body.perfil || 'driving-hgv';
+        const [lngIncidente, latIncidente] = req.body.pontoIncidente;
+        const raio = req.body.raioBloqueio || 180;
+        const zonaBloqueada = criarPoligonoCircular(lngIncidente, latIncidente, raio);
 
-            const zonaBloqueada =
-                criarPoligonoCircular(
-                    lngIncidente,
-                    latIncidente,
-                    raio
-                );
+        const options = { avoid_polygons: zonaBloqueada };
 
-            const options = {
-                avoid_polygons:
-                    zonaBloqueada
+        if (perfil === 'driving-hgv') {
+            options.profile_params = {
+                restrictions: {
+                    height: req.body.altura || 4.2,
+                    weight: req.body.peso || 15,
+                    length: req.body.comprimento || 12,
+                    width: 2.6
+                }
             };
+        }
 
-            if (
-                perfil ===
-                'driving-hgv'
-            ) {
-                options.profile_params = {
-                    restrictions: {
-                        height:
-                            req.body.altura ||
-                            4.2,
-                        weight:
-                            req.body.peso ||
-                            15,
-                        length:
-                            req.body.comprimento ||
-                            12,
-                        width:
-                            2.6
-                    }
-                };
+        const response = await axios.post(
+            `https://api.openrouteservice.org/v2/directions/${perfil}/geojson`,
+            {
+                coordinates: [req.body.pontoSaida, req.body.pontoReentrada],
+                preference: 'fastest',
+                options
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: ORS_API_KEY
+                },
+                timeout: 20000
             }
+        );
 
-            const response =
-                await axios.post(
-                    `https://api.openrouteservice.org/v2/directions/${perfil}/geojson`,
-                    {
-                        coordinates: [
-                            req.body
-                                .pontoSaida,
-                            req.body
-                                .pontoReentrada
-                        ],
-                        preference:
-                            'fastest',
-                        options
-                    },
-                    {
-                        headers: {
-                            'Content-Type':
-                                'application/json',
-                            'Authorization':
-                                ORS_API_KEY
-                        },
-                        timeout:
-                            20000
-                    }
-                );
-
-            res.json(
-                response.data
-            );
-        }
-        catch (
-            error
-        ) {
-            console.error(
-                '❌ Desvio ORS:',
-                error.response?.data ||
-                error.message
-            );
-            res
-                .status(
-                    error.response?.status ||
-                    500
-                )
-                .json({
-                    erro:
-                        'Falha ao recalcular desvio',
-                    detalhe:
-                        error.response?.data ||
-                        error.message
-                });
-        }
+        res.json(response.data);
+    } catch (error) {
+        console.error('❌ Desvio ORS:', error.response?.data || error.message);
+        res.status(error.response?.status || 500).json({
+            erro: 'Falha ao recalcular desvio',
+            detalhe: error.response?.data || error.message
+        });
     }
-);
+});
 
 // ======================================================
 // TOMTOM
 // ======================================================
-app.get(
-    '/api/traffic',
-    autenticar,
-    validarQuery(
-        schemas.traffic
-    ),
-    async (
-        req,
-        res
-    ) => {
-        try {
-            const response =
-                await axios.get(
-                    'https://api.tomtom.com/traffic/services/5/incidentDetails',
-                    {
-                        params: {
-                            key:
-                                TOMTOM_API_KEY,
-                            bbox:
-                                `${req.query.left},${req.query.bottom},${req.query.right},${req.query.top}`,
-                            fields:
-                                '{incidents{type,geometry{type,coordinates},properties{iconCategory}}}'
-                        },
-                        timeout:
-                            15000
-                    }
-                );
-            res.json(
-                response.data
-            );
-        }
-        catch (
-            erro
-        ) {
-            console.error(
-                '❌ TomTom:',
-                erro.response?.data ||
-                erro.message
-            );
-            res
-                .status(500)
-                .json({
-                    erro:
-                        'Erro TomTom',
-                    detalhe:
-                        erro.response?.data ||
-                        erro.message
-                });
-        }
+app.get('/api/traffic', autenticar, validarQuery(schemas.traffic), async (req, res) => {
+    try {
+        const response = await axios.get(
+            'https://api.tomtom.com/traffic/services/5/incidentDetails',
+            {
+                params: {
+                    key: TOMTOM_API_KEY,
+                    bbox: `${req.query.left},${req.query.bottom},${req.query.right},${req.query.top}`,
+                    fields: '{incidents{type,geometry{type,coordinates},properties{iconCategory}}}'
+                },
+                timeout: 15000
+            }
+        );
+
+        res.json(response.data);
+    } catch (erro) {
+        console.error('❌ TomTom:', erro.response?.data || erro.message);
+        res.status(500).json({
+            erro: 'Erro TomTom',
+            detalhe: erro.response?.data || erro.message
+        });
     }
-);
+});
 
 // ======================================================
 // INICIAR SERVIDOR
 // ======================================================
 async function iniciarServidor() {
-    console.log(
-        '========================================'
-    );
-    console.log(
-        '🚛 INICIANDO GPS CAMINHÃO'
-    );
-    console.log(
-        '========================================'
-    );
+    console.log('========================================');
+    console.log('🚛 INICIANDO GPS CAMINHÃO');
+    console.log('========================================');
 
-    const bancoOk =
-        await testarBanco();
-
-    if (
-        !bancoOk
-    ) {
-        console.error(
-            '❌ Servidor não iniciado porque o PostgreSQL não conectou.'
-        );
+    const bancoOk = await testarBanco();
+    if (!bancoOk) {
+        console.error('❌ Servidor não iniciado porque o PostgreSQL não conectou.');
         process.exit(1);
     }
 
     try {
         await criarTabelas();
-    }
-    catch (
-        erro
-    ) {
-        console.error(
-            '❌ Erro ao criar tabelas:'
-        );
-        console.error(
-            erro
-        );
+    } catch (erro) {
+        console.error('❌ Erro ao criar/migrar tabelas:', erro);
         process.exit(1);
     }
 
-    app.listen(
-        PORT,
-        '0.0.0.0',
-        () => {
-            console.log(
-                '========================================'
-            );
-            console.log(
-                `🚀 Servidor: porta ${PORT}`
-            );
-            console.log(
-                '🐘 Banco: PostgreSQL'
-            );
-            console.log(
-                '📍 GPS em tempo real: ATIVO'
-            );
-            console.log(
-                '🚨 Reportes: ATIVO'
-            );
-            console.log(
-                '🛣️ Desvio automático: ATIVO'
-            );
-            console.log(
-                '========================================'
-            );
-        }
-    );
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log('========================================');
+        console.log(`🚀 Servidor: porta ${PORT}`);
+        console.log('🐘 PostgreSQL: ATIVO');
+        console.log(`📧 Brevo: ${BREVO_API_KEY ? 'ATIVO' : 'NÃO CONFIGURADO'}`);
+        console.log('🚚 Cadastro por placa: ATIVO');
+        console.log('📍 GPS em tempo real: ATIVO');
+        console.log('🚨 Reportes: ATIVO');
+        console.log('🛣️ Desvio automático: ATIVO');
+        console.log('========================================');
+    });
 }
 
 iniciarServidor();
