@@ -260,6 +260,60 @@ async function criarTabelas() {
         END $$;
     `);
 
+    // Viagens operacionais
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS viagens (
+            id SERIAL PRIMARY KEY,
+            id_rota INTEGER NOT NULL,
+            id_veiculo INTEGER NOT NULL,
+            id_motorista INTEGER,
+            carga TEXT,
+            altura_total DOUBLE PRECISION,
+            peso_total DOUBLE PRECISION,
+            status VARCHAR(30) DEFAULT 'planejada'
+                CHECK (status IN ('planejada','em_andamento','concluida','cancelada')),
+            saida_prevista TIMESTAMPTZ,
+            saida_real TIMESTAMPTZ,
+            chegada_prevista TIMESTAMPTZ,
+            chegada_real TIMESTAMPTZ,
+            criada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_viagem_rota FOREIGN KEY (id_rota) REFERENCES rotas(id) ON DELETE CASCADE,
+            CONSTRAINT fk_viagem_veiculo FOREIGN KEY (id_veiculo) REFERENCES veiculos(id) ON DELETE CASCADE,
+            CONSTRAINT fk_viagem_motorista FOREIGN KEY (id_motorista) REFERENCES usuarios(id) ON DELETE SET NULL
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_viagens_veiculo_status
+        ON viagens(id_veiculo, status)
+    `);
+
+    // Histórico de GPS
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS historico_localizacoes (
+            id BIGSERIAL PRIMARY KEY,
+            id_motorista INTEGER NOT NULL,
+            id_veiculo INTEGER,
+            id_viagem INTEGER,
+            lat DOUBLE PRECISION NOT NULL,
+            lon DOUBLE PRECISION NOT NULL,
+            registrado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_hist_motorista FOREIGN KEY (id_motorista) REFERENCES usuarios(id) ON DELETE CASCADE,
+            CONSTRAINT fk_hist_veiculo FOREIGN KEY (id_veiculo) REFERENCES veiculos(id) ON DELETE SET NULL,
+            CONSTRAINT fk_hist_viagem FOREIGN KEY (id_viagem) REFERENCES viagens(id) ON DELETE SET NULL
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_hist_veiculo_data
+        ON historico_localizacoes(id_veiculo, registrado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_hist_viagem_data
+        ON historico_localizacoes(id_viagem, registrado_em ASC)
+    `);
+
     // Localizações
     await pool.query(`
         CREATE TABLE IF NOT EXISTS localizacoes (
@@ -289,6 +343,23 @@ async function criarTabelas() {
                 REFERENCES usuarios(id)
                 ON DELETE CASCADE
         )
+    `);
+
+    await pool.query(`ALTER TABLE reportes ADD COLUMN IF NOT EXISTS id_veiculo INTEGER`);
+    await pool.query(`ALTER TABLE reportes ADD COLUMN IF NOT EXISTS id_viagem INTEGER`);
+
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_reportes_veiculo') THEN
+                ALTER TABLE reportes ADD CONSTRAINT fk_reportes_veiculo
+                FOREIGN KEY (id_veiculo) REFERENCES veiculos(id) ON DELETE SET NULL;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_reportes_viagem') THEN
+                ALTER TABLE reportes ADD CONSTRAINT fk_reportes_viagem
+                FOREIGN KEY (id_viagem) REFERENCES viagens(id) ON DELETE SET NULL;
+            END IF;
+        END $$;
     `);
 
     // Índices
@@ -417,7 +488,9 @@ const schemas = {
         restricoes: Joi.object().optional(),
         dados_geojson: Joi.object().required(),
         id_motorista: Joi.number().integer().positive().optional(),
-        id_veiculo: Joi.number().integer().positive().optional()
+        id_veiculo: Joi.number().integer().positive().optional(),
+        carga: Joi.string().allow('').max(300).optional(),
+        saida_prevista: Joi.date().iso().allow(null).optional()
     }),
 
     calcularRota: Joi.object({
@@ -1016,6 +1089,50 @@ app.post('/motoristas', autenticar, validar(schemas.motorista), async (req, res)
 });
 
 // ======================================================
+// CÁLCULOS DE MONITORAMENTO
+// ======================================================
+function distanciaKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function analisarPosicaoNaRota(geojson, lat, lon) {
+    const coords = geojson?.features?.[0]?.geometry?.coordinates || [];
+    if (!coords.length) return { distanciaRotaKm: null, progresso: 0, indice: -1 };
+
+    let menor = Infinity;
+    let melhor = 0;
+    let total = 0;
+    const acumulado = [0];
+
+    for (let i = 1; i < coords.length; i++) {
+        total += distanciaKm(coords[i - 1][1], coords[i - 1][0], coords[i][1], coords[i][0]);
+        acumulado[i] = total;
+    }
+
+    for (let i = 0; i < coords.length; i++) {
+        const d = distanciaKm(lat, lon, coords[i][1], coords[i][0]);
+        if (d < menor) {
+            menor = d;
+            melhor = i;
+        }
+    }
+
+    return {
+        distanciaRotaKm: menor,
+        progresso: total > 0 ? Math.min(1, acumulado[melhor] / total) : 0,
+        indice: melhor
+    };
+}
+
+// ======================================================
 // ROTAS
 // ======================================================
 app.post('/rotas', autenticar, validar(schemas.rota), async (req, res) => {
@@ -1025,8 +1142,12 @@ app.post('/rotas', autenticar, validar(schemas.rota), async (req, res) => {
         return res.status(400).json({ erro: 'Informe o motorista ou o veículo da rota' });
     }
 
+    const client = await pool.connect();
+
     try {
-        const resultado = await pool.query(`
+        await client.query('BEGIN');
+
+        const resultado = await client.query(`
             INSERT INTO rotas
                 (nome,origem,destino,restricoes,dados_geojson,id_motorista,id_veiculo,status)
             VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,'pendente')
@@ -1041,10 +1162,55 @@ app.post('/rotas', autenticar, validar(schemas.rota), async (req, res) => {
             req.body.id_veiculo || null
         ]);
 
-        res.status(201).json({ mensagem: 'Rota criada!', id: resultado.rows[0].id });
+        const idRota = resultado.rows[0].id;
+        let idViagem = null;
+
+        if (req.body.id_veiculo) {
+            const motoristaAtual = await client.query(`
+                SELECT id FROM usuarios
+                WHERE tipo = 'motorista' AND id_veiculo = $1
+                LIMIT 1
+            `, [req.body.id_veiculo]);
+
+            const duracaoSeg =
+                Number(req.body.dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
+
+            const saidaPrevista = req.body.saida_prevista ? new Date(req.body.saida_prevista) : new Date();
+            const chegadaPrevista = new Date(saidaPrevista.getTime() + duracaoSeg * 1000);
+
+            const viagem = await client.query(`
+                INSERT INTO viagens
+                    (id_rota,id_veiculo,id_motorista,carga,altura_total,peso_total,status,
+                     saida_prevista,chegada_prevista)
+                VALUES ($1,$2,$3,$4,$5,$6,'planejada',$7,$8)
+                RETURNING id
+            `, [
+                idRota,
+                req.body.id_veiculo,
+                motoristaAtual.rows[0]?.id || null,
+                req.body.carga || null,
+                Number(req.body.restricoes?.altura) || null,
+                Number(req.body.restricoes?.peso) || null,
+                saidaPrevista,
+                chegadaPrevista
+            ]);
+
+            idViagem = viagem.rows[0].id;
+        }
+
+        await client.query('COMMIT');
+
+        res.status(201).json({
+            mensagem: 'Rota e viagem criadas!',
+            id: idRota,
+            viagem_id: idViagem
+        });
     } catch (erro) {
-        console.error('❌ Criar rota:', erro);
+        await client.query('ROLLBACK');
+        console.error('❌ Criar rota/viagem:', erro);
         res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -1077,18 +1243,31 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
 
         if (user?.id_veiculo) {
             resultado = await pool.query(`
-                SELECT * FROM rotas
-                WHERE id_veiculo = $1
-                  AND status IN ('pendente','em_andamento')
-                ORDER BY criada_em DESC
+                SELECT
+                    r.*,
+                    vg.id AS viagem_id,
+                    vg.status AS viagem_status,
+                    vg.carga,
+                    vg.saida_prevista,
+                    vg.saida_real,
+                    vg.chegada_prevista,
+                    vg.chegada_real
+                FROM rotas r
+                LEFT JOIN viagens vg
+                    ON vg.id_rota = r.id
+                   AND vg.status IN ('planejada','em_andamento')
+                WHERE r.id_veiculo = $1
+                  AND r.status IN ('pendente','em_andamento')
+                ORDER BY r.criada_em DESC
                 LIMIT 1
             `, [user.id_veiculo]);
         } else {
             resultado = await pool.query(`
-                SELECT * FROM rotas
-                WHERE id_motorista = $1
-                  AND status IN ('pendente','em_andamento')
-                ORDER BY criada_em DESC
+                SELECT r.*, NULL::INTEGER AS viagem_id
+                FROM rotas r
+                WHERE r.id_motorista = $1
+                  AND r.status IN ('pendente','em_andamento')
+                ORDER BY r.criada_em DESC
                 LIMIT 1
             `, [req.usuario.id]);
         }
@@ -1125,17 +1304,214 @@ app.patch('/rotas/:id/status', autenticar, validar(schemas.status), async (req, 
 });
 
 // ======================================================
+// VIAGENS
+// ======================================================
+app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const resultado = await pool.query(`
+            UPDATE viagens vg
+            SET status = 'em_andamento',
+                id_motorista = $1,
+                saida_real = COALESCE(saida_real, CURRENT_TIMESTAMP)
+            FROM usuarios u
+            WHERE vg.id = $2
+              AND u.id = $1
+              AND u.id_veiculo = vg.id_veiculo
+              AND vg.status IN ('planejada','em_andamento')
+            RETURNING vg.*
+        `, [req.usuario.id, req.params.id]);
+
+        if (!resultado.rows.length) return res.status(404).json({ erro: 'Viagem não encontrada para este veículo' });
+
+        await pool.query(`
+            UPDATE rotas SET status = 'em_andamento'
+            WHERE id = $1
+        `, [resultado.rows[0].id_rota]);
+
+        res.json({ mensagem: 'Viagem iniciada', viagem: resultado.rows[0] });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const resultado = await pool.query(`
+            UPDATE viagens vg
+            SET status = 'concluida',
+                chegada_real = CURRENT_TIMESTAMP
+            FROM usuarios u
+            WHERE vg.id = $2
+              AND u.id = $1
+              AND u.id_veiculo = vg.id_veiculo
+              AND vg.status = 'em_andamento'
+            RETURNING vg.*
+        `, [req.usuario.id, req.params.id]);
+
+        if (!resultado.rows.length) return res.status(404).json({ erro: 'Viagem em andamento não encontrada' });
+
+        await pool.query(`UPDATE rotas SET status = 'concluida' WHERE id = $1`, [resultado.rows[0].id_rota]);
+
+        res.json({ mensagem: 'Viagem concluída', viagem: resultado.rows[0] });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/monitoramento/viagens', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                vg.*,
+                v.placa, v.frota, v.modelo,
+                u.nome AS motorista,
+                r.nome AS rota_nome, r.origem, r.destino, r.dados_geojson,
+                l.lat, l.lon, l.ultima_atualizacao
+            FROM viagens vg
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            JOIN rotas r ON r.id = vg.id_rota
+            LEFT JOIN usuarios u ON u.id = vg.id_motorista
+            LEFT JOIN localizacoes l ON l.id_motorista = u.id
+            WHERE vg.status IN ('planejada','em_andamento')
+            ORDER BY vg.saida_prevista ASC NULLS LAST, vg.criada_em DESC
+        `);
+
+        const agora = new Date();
+
+        const dados = resultado.rows.map(row => {
+            let desvioKm = null;
+            let progresso = 0;
+            let eta = row.chegada_prevista ? new Date(row.chegada_prevista) : null;
+            let atrasoMin = 0;
+
+            if (Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lon))) {
+                const analise = analisarPosicaoNaRota(row.dados_geojson, Number(row.lat), Number(row.lon));
+                desvioKm = analise.distanciaRotaKm;
+                progresso = analise.progresso;
+
+                const duracaoTotal =
+                    Number(row.dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
+
+                if (row.status === 'em_andamento' && duracaoTotal > 0) {
+                    const restanteSeg = duracaoTotal * (1 - progresso);
+                    eta = new Date(agora.getTime() + restanteSeg * 1000);
+
+                    if (row.chegada_prevista) {
+                        atrasoMin = Math.max(
+                            0,
+                            Math.round((eta.getTime() - new Date(row.chegada_prevista).getTime()) / 60000)
+                        );
+                    }
+                }
+            }
+
+            return {
+                ...row,
+                dados_geojson: undefined,
+                desvio_km: desvioKm,
+                fora_da_rota: desvioKm !== null && desvioKm > 0.5,
+                progresso_percentual: Math.round(progresso * 100),
+                eta_atual: eta,
+                atraso_minutos: atrasoMin,
+                atrasada: atrasoMin >= 10
+            };
+        });
+
+        res.json(dados);
+    } catch (erro) {
+        console.error('❌ Monitoramento:', erro);
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/veiculos/:id/historico', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+
+    const dias = Math.min(90, Math.max(1, Number(req.query.dias) || 30));
+
+    try {
+        const veiculo = await pool.query(`SELECT * FROM veiculos WHERE id = $1`, [req.params.id]);
+        if (!veiculo.rows.length) return res.status(404).json({ erro: 'Veículo não encontrado' });
+
+        const viagens = await pool.query(`
+            SELECT vg.*, r.nome AS rota_nome, r.origem, r.destino, u.nome AS motorista
+            FROM viagens vg
+            JOIN rotas r ON r.id = vg.id_rota
+            LEFT JOIN usuarios u ON u.id = vg.id_motorista
+            WHERE vg.id_veiculo = $1
+              AND vg.criada_em >= CURRENT_TIMESTAMP - ($2 || ' days')::INTERVAL
+            ORDER BY vg.criada_em DESC
+        `, [req.params.id, dias]);
+
+        const gps = await pool.query(`
+            SELECT id_viagem, lat, lon, registrado_em
+            FROM historico_localizacoes
+            WHERE id_veiculo = $1
+              AND registrado_em >= CURRENT_TIMESTAMP - ($2 || ' days')::INTERVAL
+            ORDER BY registrado_em ASC
+            LIMIT 5000
+        `, [req.params.id, dias]);
+
+        const reportes = await pool.query(`
+            SELECT r.id, r.tipo, r.lat, r.lng, r.data_hora, u.nome AS motorista
+            FROM reportes r
+            LEFT JOIN usuarios u ON u.id = r.id_motorista
+            WHERE r.id_veiculo = $1
+              AND r.data_hora >= CURRENT_TIMESTAMP - ($2 || ' days')::INTERVAL
+            ORDER BY r.data_hora DESC
+        `, [req.params.id, dias]);
+
+        res.json({
+            veiculo: veiculo.rows[0],
+            viagens: viagens.rows,
+            gps: gps.rows,
+            reportes: reportes.rows
+        });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+// ======================================================
 // REPORTES
 // ======================================================
 app.post('/reportar', autenticar, validar(schemas.reporte), async (req, res) => {
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
     try {
+        const contexto = await pool.query(`
+            SELECT
+                u.id_veiculo,
+                (
+                    SELECT vg.id
+                    FROM viagens vg
+                    WHERE vg.id_veiculo = u.id_veiculo
+                      AND vg.status = 'em_andamento'
+                    ORDER BY vg.saida_real DESC NULLS LAST
+                    LIMIT 1
+                ) AS id_viagem
+            FROM usuarios u
+            WHERE u.id = $1
+        `, [req.usuario.id]);
+
         const resultado = await pool.query(`
-            INSERT INTO reportes (id_motorista,tipo,lat,lng)
-            VALUES ($1,$2,$3,$4)
+            INSERT INTO reportes (id_motorista,id_veiculo,id_viagem,tipo,lat,lng)
+            VALUES ($1,$2,$3,$4,$5,$6)
             RETURNING id
-        `, [req.usuario.id, req.body.tipo, req.body.lat, req.body.lng]);
+        `, [
+            req.usuario.id,
+            contexto.rows[0]?.id_veiculo || null,
+            contexto.rows[0]?.id_viagem || null,
+            req.body.tipo,
+            req.body.lat,
+            req.body.lng
+        ]);
 
         res.json({ mensagem: `Reporte de "${req.body.tipo}" enviado!`, id: resultado.rows[0].id });
     } catch (erro) {
@@ -1186,6 +1562,24 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
     try {
+        const contexto = await pool.query(`
+            SELECT
+                u.id_veiculo,
+                (
+                    SELECT vg.id
+                    FROM viagens vg
+                    WHERE vg.id_veiculo = u.id_veiculo
+                      AND vg.status = 'em_andamento'
+                    ORDER BY vg.saida_real DESC NULLS LAST
+                    LIMIT 1
+                ) AS id_viagem
+            FROM usuarios u
+            WHERE u.id = $1
+        `, [req.usuario.id]);
+
+        const idVeiculo = contexto.rows[0]?.id_veiculo || null;
+        const idViagem = contexto.rows[0]?.id_viagem || null;
+
         await pool.query(`
             INSERT INTO localizacoes (id_motorista,lat,lon,ultima_atualizacao)
             VALUES ($1,$2,$3,CURRENT_TIMESTAMP)
@@ -1195,6 +1589,19 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
                 lon = EXCLUDED.lon,
                 ultima_atualizacao = CURRENT_TIMESTAMP
         `, [req.usuario.id, req.body.lat, req.body.lon]);
+
+        // Grava histórico no máximo a cada 30 segundos por motorista.
+        await pool.query(`
+            INSERT INTO historico_localizacoes
+                (id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em)
+            SELECT $1,$2,$3,$4,$5,CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM historico_localizacoes
+                WHERE id_motorista = $1
+                  AND registrado_em > CURRENT_TIMESTAMP - INTERVAL '30 seconds'
+            )
+        `, [req.usuario.id, idVeiculo, idViagem, req.body.lat, req.body.lon]);
 
         res.json({ mensagem: 'Localização atualizada' });
     } catch (erro) {
