@@ -288,6 +288,58 @@ async function criarTabelas() {
         ON viagens(id_veiculo, status)
     `);
 
+    // Rotas específicas por conjunto de restrições.
+    // Não pertencem a uma placa: podem ser reutilizadas por qualquer veículo
+    // com as mesmas dimensões/peso/altura para a mesma rota base.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS rotas_especificas (
+            id SERIAL PRIMARY KEY,
+            id_rota_base INTEGER NOT NULL,
+            comprimento DOUBLE PRECISION NOT NULL,
+            largura DOUBLE PRECISION NOT NULL,
+            altura DOUBLE PRECISION NOT NULL,
+            peso DOUBLE PRECISION NOT NULL,
+            assinatura VARCHAR(255) NOT NULL,
+            dados_geojson JSONB NOT NULL,
+            reutilizavel BOOLEAN DEFAULT FALSE,
+            validada_em TIMESTAMPTZ,
+            viagens_concluidas INTEGER DEFAULT 0,
+            viagens_com_desvio INTEGER DEFAULT 0,
+            max_desvio_validacao_km DOUBLE PRECISION DEFAULT 0,
+            criada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            ultima_utilizacao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_rota_especifica_base
+                FOREIGN KEY (id_rota_base) REFERENCES rotas(id) ON DELETE CASCADE
+        )
+    `);
+
+    await pool.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_rota_especifica_assinatura
+        ON rotas_especificas(id_rota_base, assinatura)
+    `);
+
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS id_rota_especifica INTEGER`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS rota_reutilizada BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS max_desvio_km DOUBLE PRECISION DEFAULT 0`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS desvio_longo BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS rota_validada BOOLEAN DEFAULT FALSE`);
+
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'fk_viagem_rota_especifica'
+            ) THEN
+                ALTER TABLE viagens
+                ADD CONSTRAINT fk_viagem_rota_especifica
+                FOREIGN KEY (id_rota_especifica)
+                REFERENCES rotas_especificas(id)
+                ON DELETE SET NULL;
+            END IF;
+        END $$;
+    `);
+
     // Histórico de GPS
     await pool.query(`
         CREATE TABLE IF NOT EXISTS historico_localizacoes (
@@ -1099,6 +1151,115 @@ app.post('/motoristas', autenticar, validar(schemas.motorista), async (req, res)
 });
 
 // ======================================================
+// ROTAS ESPECÍFICAS / REUTILIZAÇÃO
+// ======================================================
+
+function arredondarRestricao(valor) {
+    return Number(Number(valor).toFixed(2));
+}
+
+function gerarAssinaturaRestricoes({ comprimento, largura, altura, peso }) {
+    return [
+        arredondarRestricao(comprimento),
+        arredondarRestricao(largura),
+        arredondarRestricao(altura),
+        arredondarRestricao(peso)
+    ].join('|');
+}
+
+async function calcularRotaEspecificaORS({
+    rotaBase,
+    comprimento,
+    largura,
+    altura,
+    peso
+}) {
+    const coords = rotaBase?.dados_geojson?.features?.[0]?.geometry?.coordinates;
+
+    if (!Array.isArray(coords) || coords.length < 2) {
+        throw new Error('A rota base não possui geometria válida');
+    }
+
+    const inicio = coords[0];
+    const fim = coords[coords.length - 1];
+
+    const response = await axios.post(
+        'https://api.openrouteservice.org/v2/directions/driving-hgv/geojson',
+        {
+            coordinates: [
+                [Number(inicio[0]), Number(inicio[1])],
+                [Number(fim[0]), Number(fim[1])]
+            ],
+            preference: 'fastest',
+            options: {
+                profile_params: {
+                    restrictions: {
+                        height: arredondarRestricao(altura),
+                        weight: arredondarRestricao(peso),
+                        length: arredondarRestricao(comprimento),
+                        width: arredondarRestricao(largura)
+                    }
+                }
+            }
+        },
+        {
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': ORS_API_KEY
+            },
+            timeout: 25000
+        }
+    );
+
+    return response.data;
+}
+
+function analisarDesvioLongo(pontosGps, geojsonRota) {
+    // Regra de validação:
+    // considera "desvio longo" quando o veículo permanece a mais de 1 km
+    // da rota específica por pelo menos 5 minutos.
+    const LIMITE_KM = 1.0;
+    const DURACAO_MINIMA_MS = 5 * 60 * 1000;
+
+    let maxDesvio = 0;
+    let inicioFora = null;
+    let desvioLongo = false;
+
+    for (const ponto of pontosGps) {
+        const analise = analisarPosicaoNaRota(
+            geojsonRota,
+            Number(ponto.lat),
+            Number(ponto.lon)
+        );
+
+        const d = Number(analise.distanciaRotaKm);
+
+        if (Number.isFinite(d)) {
+            maxDesvio = Math.max(maxDesvio, d);
+        }
+
+        if (Number.isFinite(d) && d > LIMITE_KM) {
+            const momento = new Date(ponto.registrado_em).getTime();
+
+            if (!inicioFora) inicioFora = momento;
+
+            if (momento - inicioFora >= DURACAO_MINIMA_MS) {
+                desvioLongo = true;
+            }
+        } else {
+            inicioFora = null;
+        }
+    }
+
+    return {
+        desvioLongo,
+        maxDesvioKm: Number(maxDesvio.toFixed(3)),
+        limiteKm: LIMITE_KM,
+        duracaoMinutos: 5
+    };
+}
+
+// ======================================================
 // CÁLCULOS DE MONITORAMENTO
 // ======================================================
 function distanciaKm(lat1, lon1, lat2, lon2) {
@@ -1202,18 +1363,31 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
         if (user?.id_veiculo) {
             resultado = await pool.query(`
                 SELECT
-                    r.*,
+                    r.id,
+                    r.nome,
+                    r.origem,
+                    r.destino,
+                    r.restricoes,
+                    COALESCE(re.dados_geojson, r.dados_geojson) AS dados_geojson,
+                    r.status,
+                    r.criada_em,
                     vg.id AS viagem_id,
                     vg.status AS viagem_status,
                     vg.carga,
+                    vg.altura_total,
+                    vg.peso_total,
                     vg.saida_prevista,
                     vg.saida_real,
                     vg.chegada_prevista,
-                    vg.chegada_real
+                    vg.chegada_real,
+                    vg.rota_reutilizada,
+                    vg.id_rota_especifica
                 FROM rotas r
                 LEFT JOIN viagens vg
                     ON vg.id_rota = r.id
                    AND vg.status IN ('planejada','em_andamento')
+                LEFT JOIN rotas_especificas re
+                    ON re.id = vg.id_rota_especifica
                 WHERE r.id_veiculo = $1
                   AND r.status IN ('pendente','em_andamento')
                 ORDER BY r.criada_em DESC
@@ -1265,88 +1439,308 @@ app.patch('/rotas/:id/status', autenticar, validar(schemas.status), async (req, 
 // VIAGENS
 // ======================================================
 app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) => {
-    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
 
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        const rota = await client.query(`
+        const rotaResult = await client.query(`
             SELECT id, nome, origem, destino, dados_geojson
-            FROM rotas WHERE id = $1 LIMIT 1
+            FROM rotas
+            WHERE id = $1
+            LIMIT 1
         `, [req.body.id_rota]);
 
-        if (!rota.rows.length) {
+        if (!rotaResult.rows.length) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Rota não encontrada' });
+            return res.status(404).json({ erro: 'Rota base não encontrada' });
         }
 
-        const veiculo = await client.query(`
-            SELECT id, placa, peso, ativo
-            FROM veiculos WHERE id = $1 LIMIT 1
-        `, [req.body.id_veiculo]);
+        const rotaBase = rotaResult.rows[0];
 
-        if (!veiculo.rows.length || !veiculo.rows[0].ativo) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Veículo não encontrado ou inativo' });
-        }
-
-        const ativa = await client.query(`
-            SELECT id FROM viagens
-            WHERE id_veiculo = $1 AND status IN ('planejada','em_andamento')
+        const veiculoResult = await client.query(`
+            SELECT
+                id, placa, frota, modelo,
+                comprimento, largura, peso, ativo
+            FROM veiculos
+            WHERE id = $1
             LIMIT 1
         `, [req.body.id_veiculo]);
 
-        if (ativa.rows.length) {
+        if (!veiculoResult.rows.length || !veiculoResult.rows[0].ativo) {
             await client.query('ROLLBACK');
-            return res.status(409).json({ erro: 'Este veículo já possui uma viagem ativa ou planejada' });
+            return res.status(404).json({
+                erro: 'Veículo não encontrado ou inativo'
+            });
         }
 
-        const motorista = await client.query(`
-            SELECT id FROM usuarios
-            WHERE tipo = 'motorista' AND id_veiculo = $1
+        const veiculo = veiculoResult.rows[0];
+
+        const comprimento = Number(veiculo.comprimento);
+        const largura = Number(veiculo.largura);
+        const altura = Number(req.body.altura_total);
+        const peso = Number(req.body.peso_total || veiculo.peso);
+
+        if (![comprimento, largura, altura, peso].every(v => Number.isFinite(v) && v > 0)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: 'Comprimento, largura, altura e peso precisam ser válidos'
+            });
+        }
+
+        const viagemAtiva = await client.query(`
+            SELECT id
+            FROM viagens
+            WHERE id_veiculo = $1
+              AND status IN ('planejada','em_andamento')
+            LIMIT 1
+        `, [req.body.id_veiculo]);
+
+        if (viagemAtiva.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                erro: 'Este veículo já possui uma viagem ativa ou planejada'
+            });
+        }
+
+        const assinatura = gerarAssinaturaRestricoes({
+            comprimento,
+            largura,
+            altura,
+            peso
+        });
+
+        // 1. Primeiro procura uma rota específica já VALIDADA.
+        const cacheResult = await client.query(`
+            SELECT *
+            FROM rotas_especificas
+            WHERE id_rota_base = $1
+              AND assinatura = $2
+              AND reutilizavel = TRUE
+            LIMIT 1
+        `, [req.body.id_rota, assinatura]);
+
+        let rotaEspecifica;
+        let rotaReutilizada = false;
+
+        if (cacheResult.rows.length) {
+            rotaEspecifica = cacheResult.rows[0];
+            rotaReutilizada = true;
+
+            await client.query(`
+                UPDATE rotas_especificas
+                SET ultima_utilizacao = CURRENT_TIMESTAMP
+                WHERE id = $1
+            `, [rotaEspecifica.id]);
+
+            console.log(
+                `♻️ Rota específica reutilizada: base=${req.body.id_rota} assinatura=${assinatura}`
+            );
+
+        } else {
+            // 2. Não existe rota validada: calcula uma específica no ORS.
+            await client.query('COMMIT');
+            client.release();
+
+            let geojsonEspecifico;
+
+            try {
+                geojsonEspecifico = await calcularRotaEspecificaORS({
+                    rotaBase,
+                    comprimento,
+                    largura,
+                    altura,
+                    peso
+                });
+            } catch (erroORS) {
+                console.error('❌ ORS rota específica:', erroORS.response?.data || erroORS.message);
+                return res.status(502).json({
+                    erro: 'Não foi possível calcular a rota específica do veículo',
+                    detalhe: erroORS.response?.data || erroORS.message
+                });
+            }
+
+            const client2 = await pool.connect();
+
+            try {
+                await client2.query('BEGIN');
+
+                const insertEspecifica = await client2.query(`
+                    INSERT INTO rotas_especificas
+                    (
+                        id_rota_base,
+                        comprimento,
+                        largura,
+                        altura,
+                        peso,
+                        assinatura,
+                        dados_geojson,
+                        reutilizavel,
+                        ultima_utilizacao
+                    )
+                    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,FALSE,CURRENT_TIMESTAMP)
+
+                    ON CONFLICT (id_rota_base, assinatura)
+                    DO UPDATE SET
+                        dados_geojson = EXCLUDED.dados_geojson,
+                        ultima_utilizacao = CURRENT_TIMESTAMP
+
+                    RETURNING *
+                `, [
+                    req.body.id_rota,
+                    arredondarRestricao(comprimento),
+                    arredondarRestricao(largura),
+                    arredondarRestricao(altura),
+                    arredondarRestricao(peso),
+                    assinatura,
+                    JSON.stringify(geojsonEspecifico)
+                ]);
+
+                rotaEspecifica = insertEspecifica.rows[0];
+
+                const motoristaAtual = await client2.query(`
+                    SELECT id
+                    FROM usuarios
+                    WHERE tipo = 'motorista'
+                      AND id_veiculo = $1
+                    LIMIT 1
+                `, [req.body.id_veiculo]);
+
+                const duracaoSeg =
+                    Number(rotaEspecifica.dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
+
+                const saidaPrevista = req.body.saida_prevista
+                    ? new Date(req.body.saida_prevista)
+                    : new Date();
+
+                const chegadaPrevista =
+                    new Date(saidaPrevista.getTime() + duracaoSeg * 1000);
+
+                const viagem = await client2.query(`
+                    INSERT INTO viagens
+                    (
+                        id_rota,
+                        id_rota_especifica,
+                        id_veiculo,
+                        id_motorista,
+                        carga,
+                        altura_total,
+                        peso_total,
+                        status,
+                        saida_prevista,
+                        chegada_prevista,
+                        rota_reutilizada
+                    )
+                    VALUES
+                    ($1,$2,$3,$4,$5,$6,$7,'planejada',$8,$9,FALSE)
+                    RETURNING *
+                `, [
+                    req.body.id_rota,
+                    rotaEspecifica.id,
+                    req.body.id_veiculo,
+                    motoristaAtual.rows[0]?.id || null,
+                    req.body.carga || null,
+                    altura,
+                    peso,
+                    saidaPrevista,
+                    chegadaPrevista
+                ]);
+
+                await client2.query('COMMIT');
+
+                return res.status(201).json({
+                    mensagem: 'Viagem criada com nova rota específica',
+                    viagem: viagem.rows[0],
+                    rota_especifica: {
+                        id: rotaEspecifica.id,
+                        reutilizada: false,
+                        reutilizavel: false,
+                        assinatura
+                    }
+                });
+
+            } catch (erro2) {
+                await client2.query('ROLLBACK');
+                console.error('❌ Salvar rota específica/viagem:', erro2);
+                return res.status(500).json({ erro: erro2.message });
+            } finally {
+                client2.release();
+            }
+        }
+
+        // Fluxo de rota específica reutilizada.
+        const motoristaAtual = await client.query(`
+            SELECT id
+            FROM usuarios
+            WHERE tipo = 'motorista'
+              AND id_veiculo = $1
             LIMIT 1
         `, [req.body.id_veiculo]);
 
         const duracaoSeg =
-            Number(rota.rows[0].dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
+            Number(rotaEspecifica.dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
 
-        const saidaPrevista = req.body.saida_prevista ? new Date(req.body.saida_prevista) : new Date();
-        const chegadaPrevista = new Date(saidaPrevista.getTime() + duracaoSeg * 1000);
+        const saidaPrevista = req.body.saida_prevista
+            ? new Date(req.body.saida_prevista)
+            : new Date();
+
+        const chegadaPrevista =
+            new Date(saidaPrevista.getTime() + duracaoSeg * 1000);
 
         const viagem = await client.query(`
             INSERT INTO viagens
-                (id_rota,id_veiculo,id_motorista,carga,altura_total,peso_total,status,
-                 saida_prevista,chegada_prevista)
-            VALUES ($1,$2,$3,$4,$5,$6,'planejada',$7,$8)
+            (
+                id_rota,
+                id_rota_especifica,
+                id_veiculo,
+                id_motorista,
+                carga,
+                altura_total,
+                peso_total,
+                status,
+                saida_prevista,
+                chegada_prevista,
+                rota_reutilizada
+            )
+            VALUES
+            ($1,$2,$3,$4,$5,$6,$7,'planejada',$8,$9,$10)
             RETURNING *
         `, [
             req.body.id_rota,
+            rotaEspecifica.id,
             req.body.id_veiculo,
-            motorista.rows[0]?.id || null,
+            motoristaAtual.rows[0]?.id || null,
             req.body.carga || null,
-            req.body.altura_total,
-            req.body.peso_total || veiculo.rows[0].peso || null,
+            altura,
+            peso,
             saidaPrevista,
-            chegadaPrevista
-        ]);
-
-        // A rota continua reutilizável; este vínculo serve para o app localizar a viagem atual.
-        await client.query(`UPDATE rotas SET id_veiculo = $1 WHERE id = $2`, [
-            req.body.id_veiculo,
-            req.body.id_rota
+            chegadaPrevista,
+            rotaReutilizada
         ]);
 
         await client.query('COMMIT');
-        res.status(201).json({ mensagem: 'Viagem criada com sucesso!', viagem: viagem.rows[0] });
+
+        res.status(201).json({
+            mensagem: 'Viagem criada usando rota específica já validada',
+            viagem: viagem.rows[0],
+            rota_especifica: {
+                id: rotaEspecifica.id,
+                reutilizada: true,
+                reutilizavel: true,
+                assinatura
+            }
+        });
 
     } catch (erro) {
-        await client.query('ROLLBACK');
+        try { await client.query('ROLLBACK'); } catch(e) {}
         console.error('❌ Criar viagem:', erro);
         res.status(500).json({ erro: erro.message });
     } finally {
-        client.release();
+        try { client.release(); } catch(e) {}
     }
 });
 
@@ -1381,28 +1775,146 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
 });
 
 app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
-    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+    if (req.usuario.tipo !== 'motorista') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const client = await pool.connect();
 
     try {
-        const resultado = await pool.query(`
-            UPDATE viagens vg
-            SET status = 'concluida',
-                chegada_real = CURRENT_TIMESTAMP
-            FROM usuarios u
+        await client.query('BEGIN');
+
+        const viagemResult = await client.query(`
+            SELECT
+                vg.*,
+                re.dados_geojson AS rota_especifica_geojson,
+                re.reutilizavel
+            FROM viagens vg
+            LEFT JOIN rotas_especificas re
+                ON re.id = vg.id_rota_especifica
+            JOIN usuarios u
+                ON u.id = $1
+               AND u.id_veiculo = vg.id_veiculo
             WHERE vg.id = $2
-              AND u.id = $1
-              AND u.id_veiculo = vg.id_veiculo
               AND vg.status = 'em_andamento'
-            RETURNING vg.*
+            LIMIT 1
+            FOR UPDATE OF vg
         `, [req.usuario.id, req.params.id]);
 
-        if (!resultado.rows.length) return res.status(404).json({ erro: 'Viagem em andamento não encontrada' });
+        if (!viagemResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                erro: 'Viagem em andamento não encontrada'
+            });
+        }
 
-        await pool.query(`UPDATE rotas SET status = 'concluida' WHERE id = $1`, [resultado.rows[0].id_rota]);
+        const viagem = viagemResult.rows[0];
 
-        res.json({ mensagem: 'Viagem concluída', viagem: resultado.rows[0] });
+        const historico = await client.query(`
+            SELECT lat, lon, registrado_em
+            FROM historico_localizacoes
+            WHERE id_viagem = $1
+            ORDER BY registrado_em ASC
+        `, [viagem.id]);
+
+        let validacao = {
+            desvioLongo: false,
+            maxDesvioKm: 0,
+            limiteKm: 1,
+            duracaoMinutos: 5
+        };
+
+        if (
+            viagem.id_rota_especifica &&
+            viagem.rota_especifica_geojson &&
+            historico.rows.length >= 2
+        ) {
+            validacao = analisarDesvioLongo(
+                historico.rows,
+                viagem.rota_especifica_geojson
+            );
+        }
+
+        const rotaPodeSerValidada =
+            Boolean(viagem.id_rota_especifica) &&
+            !validacao.desvioLongo;
+
+        await client.query(`
+            UPDATE viagens
+            SET
+                status = 'concluida',
+                chegada_real = CURRENT_TIMESTAMP,
+                max_desvio_km = $1,
+                desvio_longo = $2,
+                rota_validada = $3
+            WHERE id = $4
+        `, [
+            validacao.maxDesvioKm,
+            validacao.desvioLongo,
+            rotaPodeSerValidada,
+            viagem.id
+        ]);
+
+        await client.query(`
+            UPDATE rotas
+            SET status = 'concluida'
+            WHERE id = $1
+        `, [viagem.id_rota]);
+
+        if (viagem.id_rota_especifica) {
+            if (rotaPodeSerValidada) {
+                await client.query(`
+                    UPDATE rotas_especificas
+                    SET
+                        reutilizavel = TRUE,
+                        validada_em = COALESCE(validada_em, CURRENT_TIMESTAMP),
+                        viagens_concluidas = viagens_concluidas + 1,
+                        max_desvio_validacao_km =
+                            GREATEST(COALESCE(max_desvio_validacao_km,0), $1),
+                        ultima_utilizacao = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                `, [
+                    validacao.maxDesvioKm,
+                    viagem.id_rota_especifica
+                ]);
+            } else {
+                await client.query(`
+                    UPDATE rotas_especificas
+                    SET
+                        viagens_concluidas = viagens_concluidas + 1,
+                        viagens_com_desvio = viagens_com_desvio + 1,
+                        max_desvio_validacao_km =
+                            GREATEST(COALESCE(max_desvio_validacao_km,0), $1),
+                        ultima_utilizacao = CURRENT_TIMESTAMP
+                    WHERE id = $2
+                `, [
+                    validacao.maxDesvioKm,
+                    viagem.id_rota_especifica
+                ]);
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem: rotaPodeSerValidada
+                ? 'Viagem concluída. A rota específica foi validada para reutilização.'
+                : 'Viagem concluída. A rota específica não foi liberada para reutilização.',
+            validacao_rota: {
+                reutilizavel: rotaPodeSerValidada,
+                desvio_longo: validacao.desvioLongo,
+                max_desvio_km: validacao.maxDesvioKm,
+                regra:
+                    'Desvio maior que 1 km por 5 minutos ou mais impede a validação.'
+            }
+        });
+
     } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch(e) {}
+        console.error('❌ Concluir/validar viagem:', erro);
         res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -1582,6 +2094,42 @@ app.get('/monitoramento/viagens', autenticar, async (req, res) => {
         res.json(dados);
     } catch (erro) {
         console.error('❌ Monitoramento:', erro);
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/rotas-especificas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                re.id,
+                re.id_rota_base,
+                r.nome AS rota_base,
+                r.origem,
+                r.destino,
+                re.comprimento,
+                re.largura,
+                re.altura,
+                re.peso,
+                re.assinatura,
+                re.reutilizavel,
+                re.validada_em,
+                re.viagens_concluidas,
+                re.viagens_com_desvio,
+                re.max_desvio_validacao_km,
+                re.criada_em,
+                re.ultima_utilizacao
+            FROM rotas_especificas re
+            JOIN rotas r ON r.id = re.id_rota_base
+            ORDER BY re.ultima_utilizacao DESC
+        `);
+
+        res.json(resultado.rows);
+    } catch (erro) {
         res.status(500).json({ erro: erro.message });
     }
 });
