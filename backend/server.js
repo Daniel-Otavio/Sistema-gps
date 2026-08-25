@@ -145,10 +145,18 @@ async function criarTabelas() {
             placa VARCHAR(10) UNIQUE NOT NULL,
             frota VARCHAR(50),
             modelo VARCHAR(150),
+            comprimento DOUBLE PRECISION,
+            largura DOUBLE PRECISION,
+            peso DOUBLE PRECISION,
             ativo BOOLEAN DEFAULT TRUE,
             created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
     `);
+
+    // Migração de dimensões dos veículos existentes
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS comprimento DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS largura DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS peso DOUBLE PRECISION`);
 
     // Novos campos em usuários
     await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email VARCHAR(255)`);
@@ -389,7 +397,10 @@ const schemas = {
     veiculo: Joi.object({
         placa: Joi.string().min(6).max(10).required(),
         frota: Joi.string().allow('').optional(),
-        modelo: Joi.string().allow('').optional()
+        modelo: Joi.string().allow('').optional(),
+        comprimento: Joi.number().positive().required(),
+        largura: Joi.number().positive().required(),
+        peso: Joi.number().positive().required()
     }),
 
     motorista: Joi.object({
@@ -421,6 +432,7 @@ const schemas = {
         altura: Joi.number().positive().optional(),
         peso: Joi.number().positive().optional(),
         comprimento: Joi.number().positive().optional(),
+        largura: Joi.number().positive().optional(),
         perfil: Joi.string().valid('driving-car', 'driving-hgv').required(),
         preferencia: Joi.string().valid('fastest', 'shortest', 'recommended').optional()
     }),
@@ -433,7 +445,8 @@ const schemas = {
         perfil: Joi.string().valid('driving-car', 'driving-hgv').optional(),
         altura: Joi.number().positive().optional(),
         peso: Joi.number().positive().optional(),
-        comprimento: Joi.number().positive().optional()
+        comprimento: Joi.number().positive().optional(),
+        largura: Joi.number().positive().optional()
     }),
 
     localizacao: Joi.object({
@@ -858,7 +871,9 @@ app.get('/veiculos', autenticar, async (req, res) => {
     try {
         const resultado = await pool.query(`
             SELECT
-                v.id, v.placa, v.frota, v.modelo, v.ativo, v.created_at,
+                v.id, v.placa, v.frota, v.modelo,
+                v.comprimento, v.largura, v.peso,
+                v.ativo, v.created_at,
                 u.id AS id_motorista, u.nome AS motorista, u.email
             FROM veiculos v
             LEFT JOIN usuarios u
@@ -878,12 +893,56 @@ app.post('/veiculos', autenticar, validar(schemas.veiculo), async (req, res) => 
     try {
         const placa = normalizarPlaca(req.body.placa);
         const resultado = await pool.query(`
-            INSERT INTO veiculos (placa,frota,modelo)
-            VALUES ($1,$2,$3)
+            INSERT INTO veiculos
+                (placa,frota,modelo,comprimento,largura,peso)
+            VALUES ($1,$2,$3,$4,$5,$6)
             RETURNING *
-        `, [placa, req.body.frota || null, req.body.modelo || null]);
+        `, [
+            placa,
+            req.body.frota || null,
+            req.body.modelo || null,
+            req.body.comprimento,
+            req.body.largura,
+            req.body.peso
+        ]);
 
         res.status(201).json(resultado.rows[0]);
+    } catch (erro) {
+        if (erro.code === '23505') return res.status(409).json({ erro: 'Placa já cadastrada' });
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.put('/veiculos/:id', autenticar, validar(schemas.veiculo), async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+
+    try {
+        const placa = normalizarPlaca(req.body.placa);
+        const resultado = await pool.query(`
+            UPDATE veiculos
+            SET placa = $1,
+                frota = $2,
+                modelo = $3,
+                comprimento = $4,
+                largura = $5,
+                peso = $6
+            WHERE id = $7
+            RETURNING *
+        `, [
+            placa,
+            req.body.frota || null,
+            req.body.modelo || null,
+            req.body.comprimento,
+            req.body.largura,
+            req.body.peso,
+            req.params.id
+        ]);
+
+        if (!resultado.rows.length) {
+            return res.status(404).json({ erro: 'Veículo não encontrado' });
+        }
+
+        res.json(resultado.rows[0]);
     } catch (erro) {
         if (erro.code === '23505') return res.status(409).json({ erro: 'Placa já cadastrada' });
         res.status(500).json({ erro: erro.message });
@@ -922,7 +981,8 @@ app.get('/motoristas', autenticar, async (req, res) => {
             SELECT
                 u.id, u.nome, u.login, u.email, u.tipo,
                 u.email_verificado, u.id_veiculo,
-                v.placa, v.frota, v.modelo
+                v.placa, v.frota, v.modelo,
+                v.comprimento, v.largura, v.peso
             FROM usuarios u
             LEFT JOIN veiculos v ON v.id = u.id_veiculo
             WHERE u.tipo = 'motorista'
@@ -993,7 +1053,9 @@ app.get('/rotas', autenticar, async (req, res) => {
 
     try {
         const resultado = await pool.query(`
-            SELECT r.*, v.placa, v.frota, v.modelo, u.nome AS motorista
+            SELECT r.*, v.placa, v.frota, v.modelo,
+                   v.comprimento, v.largura, v.peso,
+                   u.nome AS motorista
             FROM rotas r
             LEFT JOIN veiculos v ON v.id = r.id_veiculo
             LEFT JOIN usuarios u ON u.id = r.id_motorista
@@ -1149,6 +1211,7 @@ app.get('/localizacoes', autenticar, async (req, res) => {
             SELECT
                 u.id, u.nome,
                 v.placa, v.frota, v.modelo,
+                v.comprimento, v.largura, v.peso,
                 l.lat, l.lon, l.ultima_atualizacao
             FROM usuarios u
             LEFT JOIN veiculos v ON v.id = u.id_veiculo
@@ -1218,7 +1281,7 @@ app.post('/api/calcular-rota', autenticar, heavyLimiter, validar(schemas.calcula
                         height: req.body.altura || 4.2,
                         weight: req.body.peso || 15,
                         length: req.body.comprimento || 12,
-                        width: 2.6
+                        width: req.body.largura || 2.6
                     }
                 }
             };
@@ -1265,7 +1328,7 @@ app.post('/api/recalcular-desvio', autenticar, heavyLimiter, validar(schemas.rec
                     height: req.body.altura || 4.2,
                     weight: req.body.peso || 15,
                     length: req.body.comprimento || 12,
-                    width: 2.6
+                    width: req.body.largura || 2.6
                 }
             };
         }
