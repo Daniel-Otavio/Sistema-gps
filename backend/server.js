@@ -3774,8 +3774,11 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
         }
 
         if (!user.id_veiculo) {
-            return res.status(404).json({
-                mensagem: 'Motorista sem veículo vinculado'
+            return res.json({
+                disponivel: false,
+                codigo: 'SEM_VEICULO',
+                mensagem:
+                    'Este motorista ainda não possui um veículo vinculado.'
             });
         }
 
@@ -3865,12 +3868,116 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
         `, [user.id_veiculo]);
 
         if (!resultado.rows.length) {
-            return res.status(404).json({
-                mensagem: 'Nenhuma viagem ativa para este veículo'
+            /*
+             * Diagnóstico operacional:
+             * procura uma viagem ativa mesmo que ainda não esteja liberada.
+             * Assim o app sabe se está aguardando aprovação, bloqueada,
+             * em revisão ou realmente não existe viagem.
+             */
+            const diagnostico = await pool.query(`
+                SELECT
+                    vg.id AS viagem_id,
+                    vg.status AS viagem_status,
+                    vg.liberacao_rota,
+                    vg.status_aprovacao,
+                    vg.motivo_invalidacao_aprovacao,
+                    vg.saida_prevista,
+                    r.nome AS rota_nome,
+                    r.origem,
+                    r.destino,
+                    v.placa,
+                    v.frota
+                FROM viagens vg
+                JOIN rotas r
+                    ON r.id = vg.id_rota
+                JOIN veiculos v
+                    ON v.id = vg.id_veiculo
+                WHERE vg.id_veiculo = $1
+                  AND vg.status IN ('planejada','em_andamento')
+                ORDER BY
+                    CASE
+                        WHEN vg.status = 'em_andamento' THEN 0
+                        ELSE 1
+                    END,
+                    vg.saida_prevista ASC NULLS LAST,
+                    vg.id DESC
+                LIMIT 1
+            `, [user.id_veiculo]);
+
+            if (!diagnostico.rows.length) {
+                return res.json({
+                    disponivel: false,
+                    codigo: 'SEM_VIAGEM',
+                    mensagem:
+                        'Nenhuma viagem ativa foi encontrada para este veículo.'
+                });
+            }
+
+            const v = diagnostico.rows[0];
+            const aprovacao =
+                v.status_aprovacao ||
+                'aguardando_aprovacao';
+
+            const liberacao =
+                v.liberacao_rota ||
+                'liberada';
+
+            if (
+                aprovacao === 'revisao_obrigatoria'
+            ) {
+                return res.json({
+                    disponivel: false,
+                    codigo: 'REVISAO_OBRIGATORIA',
+                    mensagem:
+                        'A viagem precisa ser revisada e aprovada novamente pelo gestor.',
+                    detalhe:
+                        v.motivo_invalidacao_aprovacao ||
+                        'A aprovação anterior perdeu a validade.',
+                    viagem: v
+                });
+            }
+
+            if (
+                liberacao === 'bloqueada' ||
+                aprovacao === 'bloqueada'
+            ) {
+                return res.json({
+                    disponivel: false,
+                    codigo: 'VIAGEM_BLOQUEADA',
+                    mensagem:
+                        'Esta viagem está bloqueada pelo gestor ou pela verificação de segurança.',
+                    detalhe:
+                        v.motivo_invalidacao_aprovacao ||
+                        null,
+                    viagem: v
+                });
+            }
+
+            if (
+                aprovacao === 'aguardando_aprovacao'
+            ) {
+                return res.json({
+                    disponivel: false,
+                    codigo: 'AGUARDANDO_APROVACAO',
+                    mensagem:
+                        'A viagem foi criada, mas ainda aguarda aprovação do gestor.',
+                    viagem: v
+                });
+            }
+
+            return res.json({
+                disponivel: false,
+                codigo: 'ROTA_INDISPONIVEL',
+                mensagem:
+                    'A viagem existe, mas ainda não está disponível para navegação.',
+                viagem: v
             });
         }
 
-        res.json(resultado.rows[0]);
+        res.json({
+            disponivel: true,
+            ...resultado.rows[0]
+        });
 
     } catch (erro) {
         console.error('❌ Minha rota:', erro);
