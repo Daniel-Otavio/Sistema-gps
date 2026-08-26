@@ -424,6 +424,75 @@ async function criarTabelas() {
         END $$;
     `);
 
+
+    // Possíveis restrições encontradas automaticamente no trajeto.
+    // IMPORTANTE: registros "descoberta" NÃO bloqueiam nem alteram a rota.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS restricoes_candidatas (
+            id BIGSERIAL PRIMARY KEY,
+            id_viagem INTEGER NOT NULL,
+            id_rota INTEGER NOT NULL,
+            id_rota_especifica INTEGER,
+            id_veiculo INTEGER NOT NULL,
+
+            fonte VARCHAR(40) NOT NULL DEFAULT 'osm',
+            fonte_id VARCHAR(120) NOT NULL,
+            tipo VARCHAR(50) NOT NULL,
+            nome TEXT,
+
+            lat DOUBLE PRECISION NOT NULL,
+            lng DOUBLE PRECISION NOT NULL,
+            distancia_rota_km DOUBLE PRECISION,
+
+            limite_altura DOUBLE PRECISION,
+            limite_largura DOUBLE PRECISION,
+            limite_comprimento DOUBLE PRECISION,
+            limite_peso DOUBLE PRECISION,
+            limite_eixo DOUBLE PRECISION,
+
+            compatibilidade VARCHAR(30) NOT NULL DEFAULT 'verificar'
+                CHECK (compatibilidade IN ('compativel','possivelmente_incompativel','verificar')),
+
+            risco VARCHAR(20) NOT NULL DEFAULT 'medio'
+                CHECK (risco IN ('baixo','medio','alto')),
+
+            confianca INTEGER NOT NULL DEFAULT 30,
+            status_validacao VARCHAR(20) NOT NULL DEFAULT 'descoberta'
+                CHECK (status_validacao IN ('descoberta','confirmada','validada','rejeitada')),
+
+            tags JSONB DEFAULT '{}'::jsonb,
+            observacao TEXT,
+            validado_por INTEGER,
+            validado_em TIMESTAMPTZ,
+
+            primeira_deteccao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            ultima_deteccao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+            CONSTRAINT fk_restricao_viagem
+                FOREIGN KEY (id_viagem) REFERENCES viagens(id) ON DELETE CASCADE,
+            CONSTRAINT fk_restricao_rota
+                FOREIGN KEY (id_rota) REFERENCES rotas(id) ON DELETE CASCADE,
+            CONSTRAINT fk_restricao_rota_especifica
+                FOREIGN KEY (id_rota_especifica) REFERENCES rotas_especificas(id) ON DELETE SET NULL,
+            CONSTRAINT fk_restricao_veiculo
+                FOREIGN KEY (id_veiculo) REFERENCES veiculos(id) ON DELETE CASCADE,
+            CONSTRAINT fk_restricao_validador
+                FOREIGN KEY (validado_por) REFERENCES usuarios(id) ON DELETE SET NULL,
+
+            UNIQUE (id_viagem, fonte, fonte_id)
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_restricoes_candidatas_viagem
+        ON restricoes_candidatas(id_viagem, status_validacao)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_restricoes_candidatas_status
+        ON restricoes_candidatas(status_validacao, risco)
+    `);
+
     // Índices
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_motorista ON rotas(id_motorista)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_veiculo ON rotas(id_veiculo)`);
@@ -1509,6 +1578,572 @@ function distanciaKm(lat1, lon1, lat2, lon2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+
+// ======================================================
+// SCANNER DE INFRAESTRUTURA - ANTT (FONTE OFICIAL)
+// ======================================================
+const ANTT_CKAN_BASE = 'https://dados.antt.gov.br';
+const ANTT_PACKAGE_SHOW =
+    `${ANTT_CKAN_BASE}/api/3/action/package_show`;
+
+const ANTT_DATASETS = {
+    pontes: 'pontes-similares',
+    altura: 'deteccao-de-altura'
+};
+
+// Cache local do backend: evita baixar milhares de registros
+// a cada viagem.
+const anttDatasetCache = new NodeCache({
+    stdTTL: 6 * 60 * 60,
+    checkperiod: 10 * 60
+});
+
+function semAcentoANTT(valor) {
+    return String(valor ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+}
+
+function chaveANTT(valor) {
+    return semAcentoANTT(valor)
+        .toLowerCase()
+        .trim()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+function normalizarRegistroANTT(registro) {
+    const saida = {};
+
+    for (const [k, v] of Object.entries(registro || {})) {
+        saida[chaveANTT(k)] = v;
+    }
+
+    return saida;
+}
+
+function primeiroANTT(registro, ...nomes) {
+    for (const nome of nomes) {
+        const chave = chaveANTT(nome);
+
+        if (
+            Object.prototype.hasOwnProperty.call(registro, chave) &&
+            registro[chave] !== null &&
+            registro[chave] !== ''
+        ) {
+            return registro[chave];
+        }
+    }
+
+    return null;
+}
+
+function numeroANTT(valor) {
+    if (valor === null || valor === undefined) return null;
+
+    let s = String(valor).trim();
+
+    if (!s) return null;
+
+    s = s.replace(/\s/g, '');
+
+    if (s.includes(',') && !s.includes('.')) {
+        s = s.replace(',', '.');
+    } else if (s.includes(',') && s.includes('.')) {
+        s = s.replace(/\./g, '').replace(',', '.');
+    }
+
+    s = s.replace(/[^0-9.+-]/g, '');
+
+    const n = Number(s);
+
+    return Number.isFinite(n) ? n : null;
+}
+
+function textoANTT(valor) {
+    return valor === null || valor === undefined
+        ? ''
+        : String(valor).trim();
+}
+
+async function consultarDatasetANTT(slug) {
+    const cacheKey = `antt_dataset_${slug}`;
+    const cache = anttDatasetCache.get(cacheKey);
+
+    if (cache) return cache;
+
+    const pacoteResp = await axios.get(
+        ANTT_PACKAGE_SHOW,
+        {
+            params: { id: slug },
+            headers: {
+                'User-Agent': 'GPS-Caminhao-ANTT/1.0'
+            },
+            timeout: 30000
+        }
+    );
+
+    const pacote = pacoteResp.data;
+
+    if (!pacote?.success || !pacote?.result) {
+        throw new Error(
+            `Catálogo ANTT não retornou o dataset ${slug}`
+        );
+    }
+
+    const recursos =
+        Array.isArray(pacote.result.resources)
+            ? pacote.result.resources
+            : [];
+
+    const candidatos = recursos
+        .filter(r => {
+            const nome = String(r.name || '').toLowerCase();
+            const formato = String(r.format || '').toUpperCase();
+            const url = String(r.url || '');
+
+            if (!url || nome.includes('dicion')) return false;
+
+            return (
+                formato === 'JSON' ||
+                formato === 'CSV' ||
+                url.toLowerCase().endsWith('.json') ||
+                url.toLowerCase().endsWith('.csv')
+            );
+        })
+        .sort((a, b) => {
+            function peso(r) {
+                const formato = String(r.format || '').toUpperCase();
+                const url = String(r.url || '').toLowerCase();
+
+                if (formato === 'JSON') return 0;
+                if (formato === 'CSV') return 1;
+                if (url.endsWith('.json')) return 2;
+                if (url.endsWith('.csv')) return 3;
+
+                return 99;
+            }
+
+            return peso(a) - peso(b);
+        });
+
+    if (!candidatos.length) {
+        throw new Error(
+            `Nenhum recurso JSON/CSV localizado no dataset ANTT ${slug}`
+        );
+    }
+
+    const recurso = candidatos[0];
+
+    const resp = await axios.get(
+        recurso.url,
+        {
+            headers: {
+                'User-Agent': 'GPS-Caminhao-ANTT/1.0'
+            },
+            timeout: 90000,
+            responseType: 'text',
+            maxContentLength: 20 * 1024 * 1024
+        }
+    );
+
+    let registros = [];
+
+    const formato =
+        String(recurso.format || '').toUpperCase();
+
+    const urlLower =
+        String(recurso.url || '').toLowerCase();
+
+    if (
+        formato === 'JSON' ||
+        urlLower.includes('.json')
+    ) {
+        let dados = resp.data;
+
+        if (typeof dados === 'string') {
+            dados = JSON.parse(dados);
+        }
+
+        function coletarListas(obj, listas = []) {
+            if (Array.isArray(obj)) {
+                if (
+                    obj.length &&
+                    obj.every(x => x && typeof x === 'object' && !Array.isArray(x))
+                ) {
+                    listas.push(obj);
+                }
+
+                for (const item of obj) {
+                    coletarListas(item, listas);
+                }
+
+            } else if (obj && typeof obj === 'object') {
+                for (const valor of Object.values(obj)) {
+                    coletarListas(valor, listas);
+                }
+            }
+
+            return listas;
+        }
+
+        if (Array.isArray(dados)) {
+            registros = dados;
+
+        } else if (
+            dados?.type === 'FeatureCollection' &&
+            Array.isArray(dados.features)
+        ) {
+            registros = dados.features.map(feature => {
+                const props = {
+                    ...(feature.properties || {})
+                };
+
+                const coords =
+                    feature?.geometry?.coordinates;
+
+                if (
+                    Array.isArray(coords) &&
+                    coords.length >= 2 &&
+                    Number.isFinite(Number(coords[0])) &&
+                    Number.isFinite(Number(coords[1]))
+                ) {
+                    props.longitude ??= Number(coords[0]);
+                    props.latitude ??= Number(coords[1]);
+                }
+
+                return props;
+            });
+
+        } else {
+            const listas = coletarListas(dados);
+
+            if (listas.length) {
+                listas.sort((a, b) => b.length - a.length);
+                registros = listas[0];
+            }
+        }
+
+    } else {
+        // Parser CSV simples, suficiente para os recursos ANTT.
+        const texto = String(resp.data || '')
+            .replace(/^\uFEFF/, '');
+
+        const linhas = texto
+            .split(/\r?\n/)
+            .filter(Boolean);
+
+        if (linhas.length >= 2) {
+            const primeira = linhas[0];
+            const sep =
+                (primeira.match(/;/g) || []).length >
+                (primeira.match(/,/g) || []).length
+                    ? ';'
+                    : ',';
+
+            function parseLinhaCSV(linha) {
+                const campos = [];
+                let atual = '';
+                let aspas = false;
+
+                for (let i = 0; i < linha.length; i++) {
+                    const c = linha[i];
+
+                    if (c === '"') {
+                        if (aspas && linha[i + 1] === '"') {
+                            atual += '"';
+                            i++;
+                        } else {
+                            aspas = !aspas;
+                        }
+
+                    } else if (c === sep && !aspas) {
+                        campos.push(atual);
+                        atual = '';
+
+                    } else {
+                        atual += c;
+                    }
+                }
+
+                campos.push(atual);
+                return campos;
+            }
+
+            const cab = parseLinhaCSV(linhas[0]);
+
+            registros = linhas.slice(1).map(linha => {
+                const vals = parseLinhaCSV(linha);
+                const obj = {};
+
+                cab.forEach((k, i) => {
+                    obj[k] = vals[i] ?? '';
+                });
+
+                return obj;
+            });
+        }
+    }
+
+    if (!registros.length) {
+        throw new Error(
+            `Recurso ANTT ${slug} baixado, mas sem registros reconhecidos`
+        );
+    }
+
+    const resultado = {
+        slug,
+        titulo: pacote.result.title,
+        recurso: recurso.name,
+        url: recurso.url,
+        registros
+    };
+
+    anttDatasetCache.set(cacheKey, resultado);
+
+    console.log(
+        `✅ ANTT ${slug}: ${registros.length} registro(s) carregados`
+    );
+
+    return resultado;
+}
+
+function prepararPonteANTT(original) {
+    const r = normalizarRegistroANTT(original);
+
+    const tipo = primeiroANTT(
+        r,
+        'ds_tipo_ponte_similares',
+        'tipo_de_ponte_e_similares',
+        'tipo_de_ponte',
+        'tipo'
+    );
+
+    const nome = primeiroANTT(
+        r,
+        'no_ponte_similares',
+        'nome_de_ponte_e_similares',
+        'nome_de_ponte',
+        'nome'
+    );
+
+    const rodovia = primeiroANTT(
+        r,
+        'no_rodovia_entrada',
+        'rodovia_uf_entrada',
+        'rodovia',
+        'br'
+    );
+
+    let uf = primeiroANTT(r, 'uf');
+
+    if (!uf && rodovia) {
+        const m =
+            String(rodovia)
+                .toUpperCase()
+                .match(/\/([A-Z]{2})/);
+
+        if (m) uf = m[1];
+    }
+
+    return {
+        categoria: 'PONTE_SIMILAR',
+        tipo: textoANTT(tipo),
+        nome: textoANTT(nome),
+        concessionaria: textoANTT(
+            primeiroANTT(
+                r,
+                'no_concessionaria',
+                'concessionaria'
+            )
+        ),
+        rodovia: textoANTT(rodovia),
+        uf: textoANTT(uf),
+        km: textoANTT(
+            primeiroANTT(
+                r,
+                'nu_km_inicial_entrada',
+                'km_m_entrada',
+                'km_entrada',
+                'km_m',
+                'km'
+            )
+        ),
+        municipio: textoANTT(
+            primeiroANTT(
+                r,
+                'municipio',
+                'município'
+            )
+        ),
+        sentido: textoANTT(
+            primeiroANTT(
+                r,
+                'ds_sentido_entrada',
+                'sentido_entrada',
+                'sentido'
+            )
+        ),
+        situacao: textoANTT(
+            primeiroANTT(
+                r,
+                'situacao',
+                'situação'
+            )
+        ),
+        latitude: numeroANTT(
+            primeiroANTT(
+                r,
+                'cg_latitude_inicial_entrada',
+                'latitude_entrada',
+                'latitude',
+                'lat'
+            )
+        ),
+        longitude: numeroANTT(
+            primeiroANTT(
+                r,
+                'cg_longitude_inicial_entrada',
+                'longitude_entrada',
+                'longitude',
+                'lon',
+                'lng'
+            )
+        ),
+        original
+    };
+}
+
+function prepararDeteccaoAlturaANTT(original) {
+    const r = normalizarRegistroANTT(original);
+
+    const tipo = textoANTT(
+        primeiroANTT(
+            r,
+            'tipo_de_equipamento',
+            'tipo_equipamento',
+            'tipo'
+        )
+    );
+
+    return {
+        categoria: 'DETECCAO_ALTURA',
+        tipo,
+        nome: tipo,
+        concessionaria: textoANTT(
+            primeiroANTT(r, 'concessionaria')
+        ),
+        rodovia: textoANTT(
+            primeiroANTT(r, 'rodovia', 'br')
+        ),
+        uf: textoANTT(
+            primeiroANTT(r, 'uf', 'estado')
+        ),
+        km: textoANTT(
+            primeiroANTT(r, 'km_m', 'km')
+        ),
+        municipio: textoANTT(
+            primeiroANTT(
+                r,
+                'municipio',
+                'município'
+            )
+        ),
+        sentido: textoANTT(
+            primeiroANTT(r, 'sentido')
+        ),
+        situacao: textoANTT(
+            primeiroANTT(
+                r,
+                'situacao',
+                'situação'
+            )
+        ),
+        latitude: numeroANTT(
+            primeiroANTT(r, 'latitude', 'lat')
+        ),
+        longitude: numeroANTT(
+            primeiroANTT(
+                r,
+                'longitude',
+                'lon',
+                'lng'
+            )
+        ),
+        original
+    };
+}
+
+function hashFonteANTT(registro) {
+    const base = [
+        registro.categoria,
+        registro.tipo,
+        registro.nome,
+        registro.rodovia,
+        registro.km,
+        registro.latitude,
+        registro.longitude,
+        registro.concessionaria
+    ].join('|');
+
+    let hash = 2166136261;
+
+    for (let i = 0; i < base.length; i++) {
+        hash ^= base.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return (hash >>> 0).toString(16);
+}
+
+async function carregarInfraestruturaANTT() {
+    const [pontesDataset, alturaDataset] =
+        await Promise.all([
+            consultarDatasetANTT(
+                ANTT_DATASETS.pontes
+            ),
+            consultarDatasetANTT(
+                ANTT_DATASETS.altura
+            )
+        ]);
+
+    const pontes =
+        pontesDataset.registros
+            .map(prepararPonteANTT)
+            .filter(r =>
+                Number.isFinite(r.latitude) &&
+                Number.isFinite(r.longitude)
+            );
+
+    // O conjunto inclui estação meteorológica.
+    // Mantemos apenas registros cujo tipo mencione altura.
+    const deteccaoAltura =
+        alturaDataset.registros
+            .map(prepararDeteccaoAlturaANTT)
+            .filter(r =>
+                Number.isFinite(r.latitude) &&
+                Number.isFinite(r.longitude) &&
+                semAcentoANTT(r.tipo)
+                    .toLowerCase()
+                    .includes('altura')
+            );
+
+    return {
+        pontes,
+        deteccaoAltura,
+        datasets: {
+            pontes: {
+                titulo: pontesDataset.titulo,
+                recurso: pontesDataset.recurso
+            },
+            altura: {
+                titulo: alturaDataset.titulo,
+                recurso: alturaDataset.recurso
+            }
+        }
+    };
+}
+
 function analisarPosicaoNaRota(geojson, lat, lon) {
     const coords = geojson?.features?.[0]?.geometry?.coordinates || [];
     if (!coords.length) return { distanciaRotaKm: null, progresso: 0, indice: -1 };
@@ -2464,6 +3099,439 @@ app.get('/monitoramento/viagens', autenticar, async (req, res) => {
         res.status(500).json({ erro: erro.message });
     }
 });
+
+
+// ======================================================
+// VERIFICAÇÃO DE RESTRIÇÕES DO TRAJETO
+// ======================================================
+
+// Faz a varredura da rota específica da viagem.
+// NUNCA altera o roteamento automaticamente.
+app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const result = await pool.query(`
+            SELECT
+                vg.id,
+                vg.id_rota,
+                vg.id_rota_especifica,
+                vg.id_veiculo,
+                vg.altura_total,
+                vg.peso_total,
+                r.nome AS rota_nome,
+                r.origem,
+                r.destino,
+                COALESCE(re.dados_geojson, r.dados_geojson) AS dados_geojson,
+                v.placa,
+                v.comprimento,
+                v.largura,
+                COALESCE(vg.peso_total, v.peso) AS peso
+            FROM viagens vg
+            JOIN rotas r ON r.id = vg.id_rota
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            LEFT JOIN rotas_especificas re ON re.id = vg.id_rota_especifica
+            WHERE vg.id = $1
+            LIMIT 1
+        `, [req.params.id]);
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                erro: 'Viagem não encontrada'
+            });
+        }
+
+        const viagem = result.rows[0];
+
+        if (!viagem.dados_geojson) {
+            return res.status(400).json({
+                erro: 'Viagem sem geometria de rota'
+            });
+        }
+
+        const infraestrutura =
+            await carregarInfraestruturaANTT();
+
+        const registros = [
+            ...infraestrutura.pontes,
+            ...infraestrutura.deteccaoAltura
+        ];
+
+        const salvos = [];
+        let ignoradosDistancia = 0;
+
+        for (const reg of registros) {
+            const analiseRota =
+                analisarPosicaoNaRota(
+                    viagem.dados_geojson,
+                    reg.latitude,
+                    reg.longitude
+                );
+
+            // Somente pontos próximos da rota real.
+            if (
+                analiseRota.distanciaRotaKm === null ||
+                analiseRota.distanciaRotaKm > 1.0
+            ) {
+                ignoradosDistancia++;
+                continue;
+            }
+
+            const isPonte =
+                reg.categoria === 'PONTE_SIMILAR';
+
+            const tipoTexto =
+                semAcentoANTT(
+                    reg.tipo || ''
+                ).toLowerCase();
+
+            let tipo = 'infraestrutura_antt';
+
+            if (isPonte) {
+                if (tipoTexto.includes('viaduto')) {
+                    tipo = 'ponte_viaduto';
+                } else if (tipoTexto.includes('ponte')) {
+                    tipo = 'ponte_viaduto';
+                } else if (
+                    tipoTexto.includes('passagem inferior')
+                ) {
+                    tipo = 'passagem_inferior';
+                } else {
+                    tipo = 'obra_arte_especial';
+                }
+            } else {
+                tipo = 'equipamento_deteccao_altura';
+            }
+
+            /*
+             * REGRA DE SEGURANÇA:
+             * ANTT confirma a existência/localização da infraestrutura,
+             * mas estes datasets NÃO significam automaticamente que há
+             * um limite de altura para o caminhão.
+             *
+             * Portanto:
+             * - compatibilidade = verificar
+             * - não marcamos "incompatível"
+             * - não geramos desvio
+             */
+            const confianca =
+                isPonte ? 90 : 92;
+
+            const risco =
+                isPonte ? 'baixo' : 'baixo';
+
+            const observacao =
+                isPonte
+                    ? (
+                        'Estrutura encontrada em base oficial da ANTT. ' +
+                        'A existência/localização tem alta confiança, ' +
+                        'mas a base de pontes/similares não confirma, por si só, ' +
+                        'a altura livre nem uma restrição dimensional. ' +
+                        'Exige verificação antes de qualquer bloqueio de rota.'
+                    )
+                    : (
+                        'Equipamento de detecção de altura encontrado em base oficial da ANTT. ' +
+                        'Isto indica a presença do equipamento, NÃO um limite máximo de altura. ' +
+                        'Não bloqueia nem altera a rota.'
+                    );
+
+            const fonteId =
+                `${reg.categoria}/${hashFonteANTT(reg)}`;
+
+            const nome =
+                reg.nome ||
+                [
+                    reg.tipo,
+                    reg.rodovia,
+                    reg.km
+                        ? `km ${reg.km}`
+                        : ''
+                ]
+                .filter(Boolean)
+                .join(' - ') ||
+                null;
+
+            const tags = {
+                categoria_antt: reg.categoria,
+                tipo_antt: reg.tipo,
+                concessionaria: reg.concessionaria,
+                rodovia: reg.rodovia,
+                uf: reg.uf,
+                km: reg.km,
+                municipio: reg.municipio,
+                sentido: reg.sentido,
+                situacao: reg.situacao,
+                origem_dado: 'Portal de Dados Abertos ANTT',
+                dados_originais: reg.original
+            };
+
+            const salvo = await pool.query(`
+                INSERT INTO restricoes_candidatas
+                (
+                    id_viagem,
+                    id_rota,
+                    id_rota_especifica,
+                    id_veiculo,
+                    fonte,
+                    fonte_id,
+                    tipo,
+                    nome,
+                    lat,
+                    lng,
+                    distancia_rota_km,
+                    limite_altura,
+                    limite_largura,
+                    limite_comprimento,
+                    limite_peso,
+                    limite_eixo,
+                    compatibilidade,
+                    risco,
+                    confianca,
+                    tags,
+                    observacao,
+                    ultima_deteccao
+                )
+                VALUES
+                (
+                    $1,$2,$3,$4,
+                    'antt',$5,$6,$7,
+                    $8,$9,$10,
+                    NULL,NULL,NULL,NULL,NULL,
+                    'verificar',$11,$12,$13::jsonb,$14,
+                    CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (id_viagem, fonte, fonte_id)
+                DO UPDATE SET
+                    tipo = EXCLUDED.tipo,
+                    nome = EXCLUDED.nome,
+                    lat = EXCLUDED.lat,
+                    lng = EXCLUDED.lng,
+                    distancia_rota_km = EXCLUDED.distancia_rota_km,
+                    compatibilidade = EXCLUDED.compatibilidade,
+                    risco = EXCLUDED.risco,
+                    confianca = EXCLUDED.confianca,
+                    tags = EXCLUDED.tags,
+                    observacao = EXCLUDED.observacao,
+                    ultima_deteccao = CURRENT_TIMESTAMP
+                RETURNING *
+            `, [
+                viagem.id,
+                viagem.id_rota,
+                viagem.id_rota_especifica,
+                viagem.id_veiculo,
+                fonteId,
+                tipo,
+                nome,
+                reg.latitude,
+                reg.longitude,
+                Number(
+                    analiseRota.distanciaRotaKm.toFixed(3)
+                ),
+                risco,
+                confianca,
+                JSON.stringify(tags),
+                observacao
+            ]);
+
+            salvos.push(salvo.rows[0]);
+        }
+
+        res.json({
+            mensagem:
+                'Varredura ANTT concluída. Os registros são candidatos oficiais para verificação e NÃO alteram a rota automaticamente.',
+            fonte: 'ANTT - Portal de Dados Abertos',
+            viagem: {
+                id: viagem.id,
+                placa: viagem.placa,
+                rota: viagem.rota_nome,
+                origem: viagem.origem,
+                destino: viagem.destino
+            },
+            datasets: infraestrutura.datasets,
+            pontes_antt_total:
+                infraestrutura.pontes.length,
+            detectores_altura_antt_total:
+                infraestrutura.deteccaoAltura.length,
+            candidatos_na_rota:
+                salvos.length,
+            pontes_similares_na_rota:
+                salvos.filter(
+                    x =>
+                        x.tipo === 'ponte_viaduto' ||
+                        x.tipo === 'passagem_inferior' ||
+                        x.tipo === 'obra_arte_especial'
+                ).length,
+            equipamentos_altura_na_rota:
+                salvos.filter(
+                    x =>
+                        x.tipo === 'equipamento_deteccao_altura'
+                ).length,
+            ignorados_fora_corredor:
+                ignoradosDistancia,
+            aviso:
+                'Detecção de altura da ANTT representa equipamento, não altura máxima permitida. Pontes/similares representam infraestrutura, não necessariamente restrição dimensional.'
+        });
+
+    } catch (erro) {
+        console.error(
+            '❌ Scanner ANTT:',
+            erro.response?.data || erro.message
+        );
+
+        res.status(502).json({
+            erro:
+                'Não foi possível concluir a varredura ANTT',
+            detalhe:
+                erro.response?.data?.error ||
+                erro.response?.data?.message ||
+                erro.message
+        });
+    }
+});
+
+app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                rc.*,
+                v.placa,
+                r.nome AS rota_nome
+            FROM restricoes_candidatas rc
+            JOIN veiculos v ON v.id = rc.id_veiculo
+            JOIN rotas r ON r.id = rc.id_rota
+            WHERE rc.id_viagem = $1
+            ORDER BY
+                CASE rc.status_validacao
+                    WHEN 'validada' THEN 0
+                    WHEN 'confirmada' THEN 1
+                    WHEN 'descoberta' THEN 2
+                    ELSE 3
+                END,
+                CASE rc.risco
+                    WHEN 'alto' THEN 0
+                    WHEN 'medio' THEN 1
+                    ELSE 2
+                END,
+                rc.distancia_rota_km ASC,
+                rc.id ASC
+        `, [req.params.id]);
+
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.patch('/restricoes-candidatas/:id/status', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const status = String(req.body?.status || '');
+    const permitidos = ['descoberta','confirmada','validada','rejeitada'];
+
+    if (!permitidos.includes(status)) {
+        return res.status(400).json({ erro: 'Status de validação inválido' });
+    }
+
+    const observacao =
+        req.body?.observacao !== undefined
+            ? String(req.body.observacao || '').slice(0, 1000)
+            : null;
+
+    try {
+        const resultado = await pool.query(`
+            UPDATE restricoes_candidatas
+            SET
+                status_validacao = $1,
+                observacao = COALESCE($2, observacao),
+                validado_por =
+                    CASE
+                        WHEN $1 IN ('confirmada','validada','rejeitada')
+                            THEN $3
+                        ELSE NULL
+                    END,
+                validado_em =
+                    CASE
+                        WHEN $1 IN ('confirmada','validada','rejeitada')
+                            THEN CURRENT_TIMESTAMP
+                        ELSE NULL
+                    END
+            WHERE id = $4
+            RETURNING *
+        `, [
+            status,
+            observacao,
+            req.usuario.id,
+            req.params.id
+        ]);
+
+        if (!resultado.rows.length) {
+            return res.status(404).json({ erro: 'Candidato não encontrado' });
+        }
+
+        res.json({
+            mensagem:
+                status === 'validada'
+                    ? 'Restrição validada. Ela está apta para uso futuro no motor de segurança, mas este endpoint não recalcula a rota.'
+                    : 'Status atualizado.',
+            restricao: resultado.rows[0]
+        });
+
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/restricoes-candidatas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const status = String(req.query.status || 'pendentes');
+
+    try {
+        let where = '';
+
+        if (status === 'pendentes') {
+            where = `WHERE rc.status_validacao IN ('descoberta','confirmada')`;
+        } else if (['validada','rejeitada','descoberta','confirmada'].includes(status)) {
+            where = `WHERE rc.status_validacao = '${status}'`;
+        }
+
+        const resultado = await pool.query(`
+            SELECT
+                rc.*,
+                v.placa,
+                r.nome AS rota_nome,
+                r.origem,
+                r.destino
+            FROM restricoes_candidatas rc
+            JOIN veiculos v ON v.id = rc.id_veiculo
+            JOIN rotas r ON r.id = rc.id_rota
+            ${where}
+            ORDER BY
+                CASE rc.risco
+                    WHEN 'alto' THEN 0
+                    WHEN 'medio' THEN 1
+                    ELSE 2
+                END,
+                rc.ultima_deteccao DESC
+            LIMIT 500
+        `);
+
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
 
 app.get('/rotas-especificas', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
