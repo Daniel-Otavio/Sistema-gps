@@ -16,6 +16,7 @@ const compression = require('compression');
 const { Pool } = require('pg');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3000;
 
 // ======================================================
@@ -425,8 +426,9 @@ async function criarTabelas() {
     `);
 
 
-    // Possíveis restrições encontradas automaticamente no trajeto.
-    // IMPORTANTE: registros "descoberta" NÃO bloqueiam nem alteram a rota.
+    // --------------------------------------------------
+    // RESTRIÇÕES CANDIDATAS — descobertas em scanners
+    // --------------------------------------------------
     await pool.query(`
         CREATE TABLE IF NOT EXISTS restricoes_candidatas (
             id BIGSERIAL PRIMARY KEY,
@@ -435,9 +437,9 @@ async function criarTabelas() {
             id_rota_especifica INTEGER,
             id_veiculo INTEGER NOT NULL,
 
-            fonte VARCHAR(40) NOT NULL DEFAULT 'osm',
-            fonte_id VARCHAR(120) NOT NULL,
-            tipo VARCHAR(50) NOT NULL,
+            fonte VARCHAR(40) NOT NULL DEFAULT 'antt',
+            fonte_id VARCHAR(160) NOT NULL,
+            tipo VARCHAR(60) NOT NULL,
             nome TEXT,
 
             lat DOUBLE PRECISION NOT NULL,
@@ -450,34 +452,21 @@ async function criarTabelas() {
             limite_peso DOUBLE PRECISION,
             limite_eixo DOUBLE PRECISION,
 
-            compatibilidade VARCHAR(30) NOT NULL DEFAULT 'verificar'
-                CHECK (compatibilidade IN ('compativel','possivelmente_incompativel','verificar')),
-
-            risco VARCHAR(20) NOT NULL DEFAULT 'medio'
-                CHECK (risco IN ('baixo','medio','alto')),
-
+            compatibilidade VARCHAR(30) NOT NULL DEFAULT 'verificar',
+            risco VARCHAR(20) NOT NULL DEFAULT 'medio',
             confianca INTEGER NOT NULL DEFAULT 30,
+
             status_validacao VARCHAR(20) NOT NULL DEFAULT 'descoberta'
                 CHECK (status_validacao IN ('descoberta','confirmada','validada','rejeitada')),
 
             tags JSONB DEFAULT '{}'::jsonb,
             observacao TEXT,
+
             validado_por INTEGER,
             validado_em TIMESTAMPTZ,
 
             primeira_deteccao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             ultima_deteccao TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-
-            CONSTRAINT fk_restricao_viagem
-                FOREIGN KEY (id_viagem) REFERENCES viagens(id) ON DELETE CASCADE,
-            CONSTRAINT fk_restricao_rota
-                FOREIGN KEY (id_rota) REFERENCES rotas(id) ON DELETE CASCADE,
-            CONSTRAINT fk_restricao_rota_especifica
-                FOREIGN KEY (id_rota_especifica) REFERENCES rotas_especificas(id) ON DELETE SET NULL,
-            CONSTRAINT fk_restricao_veiculo
-                FOREIGN KEY (id_veiculo) REFERENCES veiculos(id) ON DELETE CASCADE,
-            CONSTRAINT fk_restricao_validador
-                FOREIGN KEY (validado_por) REFERENCES usuarios(id) ON DELETE SET NULL,
 
             UNIQUE (id_viagem, fonte, fonte_id)
         )
@@ -488,9 +477,71 @@ async function criarTabelas() {
         ON restricoes_candidatas(id_viagem, status_validacao)
     `);
 
+    // --------------------------------------------------
+    // BASE GLOBAL DE RESTRIÇÕES VALIDADAS
+    // Reutilizada por QUALQUER viagem futura.
+    // --------------------------------------------------
     await pool.query(`
-        CREATE INDEX IF NOT EXISTS idx_restricoes_candidatas_status
-        ON restricoes_candidatas(status_validacao, risco)
+        CREATE TABLE IF NOT EXISTS restricoes_validadas (
+            id BIGSERIAL PRIMARY KEY,
+
+            fonte VARCHAR(40) NOT NULL,
+            fonte_id VARCHAR(160),
+            candidato_origem_id BIGINT,
+
+            tipo VARCHAR(60) NOT NULL,
+            nome TEXT,
+
+            lat DOUBLE PRECISION NOT NULL,
+            lng DOUBLE PRECISION NOT NULL,
+            raio_metros DOUBLE PRECISION DEFAULT 180,
+
+            limite_altura DOUBLE PRECISION,
+            limite_largura DOUBLE PRECISION,
+            limite_comprimento DOUBLE PRECISION,
+            limite_peso DOUBLE PRECISION,
+            limite_eixo DOUBLE PRECISION,
+
+            sentido VARCHAR(100),
+            rodovia VARCHAR(120),
+            km VARCHAR(60),
+            concessionaria VARCHAR(180),
+
+            evidencia_url TEXT,
+            evidencia_texto TEXT,
+            observacao TEXT,
+
+            confianca INTEGER DEFAULT 95,
+            ativa BOOLEAN DEFAULT TRUE,
+            valida_ate TIMESTAMPTZ,
+
+            validado_por INTEGER,
+            validado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            atualizada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE (fonte, fonte_id)
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_restricoes_validadas_ativas
+        ON restricoes_validadas(ativa, valida_ate)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_restricoes_validadas_geo
+        ON restricoes_validadas(lat, lng)
+    `);
+
+    // Segurança operacional da viagem.
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS liberacao_rota VARCHAR(20) DEFAULT 'liberada'
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS checagem_seguranca JSONB DEFAULT '{}'::jsonb
     `);
 
     // Índices
@@ -1476,7 +1527,8 @@ async function calcularRotaEspecificaORS({
     comprimento,
     largura,
     altura,
-    peso
+    peso,
+    avoidPolygons = null
 }) {
     const coords = rotaBase?.dados_geojson?.features?.[0]?.geometry?.coordinates;
 
@@ -1503,7 +1555,10 @@ async function calcularRotaEspecificaORS({
                         length: arredondarRestricao(comprimento),
                         width: arredondarRestricao(largura)
                     }
-                }
+                },
+                ...(avoidPolygons
+                    ? { avoid_polygons: avoidPolygons }
+                    : {})
             }
         },
         {
@@ -1580,7 +1635,7 @@ function distanciaKm(lat1, lon1, lat2, lon2) {
 
 
 // ======================================================
-// SCANNER DE INFRAESTRUTURA - ANTT (FONTE OFICIAL)
+// ANTT — INFRAESTRUTURA OFICIAL
 // ======================================================
 const ANTT_CKAN_BASE = 'https://dados.antt.gov.br';
 const ANTT_PACKAGE_SHOW =
@@ -1591,8 +1646,6 @@ const ANTT_DATASETS = {
     altura: 'deteccao-de-altura'
 };
 
-// Cache local do backend: evita baixar milhares de registros
-// a cada viagem.
 const anttDatasetCache = new NodeCache({
     stdTTL: 6 * 60 * 60,
     checkperiod: 10 * 60
@@ -1614,37 +1667,28 @@ function chaveANTT(valor) {
 
 function normalizarRegistroANTT(registro) {
     const saida = {};
-
     for (const [k, v] of Object.entries(registro || {})) {
         saida[chaveANTT(k)] = v;
     }
-
     return saida;
 }
 
 function primeiroANTT(registro, ...nomes) {
     for (const nome of nomes) {
         const chave = chaveANTT(nome);
-
         if (
             Object.prototype.hasOwnProperty.call(registro, chave) &&
             registro[chave] !== null &&
             registro[chave] !== ''
-        ) {
-            return registro[chave];
-        }
+        ) return registro[chave];
     }
-
     return null;
 }
 
 function numeroANTT(valor) {
     if (valor === null || valor === undefined) return null;
-
     let s = String(valor).trim();
-
     if (!s) return null;
-
     s = s.replace(/\s/g, '');
 
     if (s.includes(',') && !s.includes('.')) {
@@ -1654,31 +1698,20 @@ function numeroANTT(valor) {
     }
 
     s = s.replace(/[^0-9.+-]/g, '');
-
     const n = Number(s);
-
     return Number.isFinite(n) ? n : null;
-}
-
-function textoANTT(valor) {
-    return valor === null || valor === undefined
-        ? ''
-        : String(valor).trim();
 }
 
 async function consultarDatasetANTT(slug) {
     const cacheKey = `antt_dataset_${slug}`;
     const cache = anttDatasetCache.get(cacheKey);
-
     if (cache) return cache;
 
     const pacoteResp = await axios.get(
         ANTT_PACKAGE_SHOW,
         {
             params: { id: slug },
-            headers: {
-                'User-Agent': 'GPS-Caminhao-ANTT/1.0'
-            },
+            headers: { 'User-Agent': 'GPS-Caminhao-ANTT/2.0' },
             timeout: 30000
         }
     );
@@ -1686,15 +1719,12 @@ async function consultarDatasetANTT(slug) {
     const pacote = pacoteResp.data;
 
     if (!pacote?.success || !pacote?.result) {
-        throw new Error(
-            `Catálogo ANTT não retornou o dataset ${slug}`
-        );
+        throw new Error(`ANTT não retornou o dataset ${slug}`);
     }
 
-    const recursos =
-        Array.isArray(pacote.result.resources)
-            ? pacote.result.resources
-            : [];
+    const recursos = Array.isArray(pacote.result.resources)
+        ? pacote.result.resources
+        : [];
 
     const candidatos = recursos
         .filter(r => {
@@ -1712,25 +1742,20 @@ async function consultarDatasetANTT(slug) {
             );
         })
         .sort((a, b) => {
-            function peso(r) {
+            const peso = r => {
                 const formato = String(r.format || '').toUpperCase();
                 const url = String(r.url || '').toLowerCase();
-
                 if (formato === 'JSON') return 0;
                 if (formato === 'CSV') return 1;
                 if (url.endsWith('.json')) return 2;
                 if (url.endsWith('.csv')) return 3;
-
                 return 99;
-            }
-
+            };
             return peso(a) - peso(b);
         });
 
     if (!candidatos.length) {
-        throw new Error(
-            `Nenhum recurso JSON/CSV localizado no dataset ANTT ${slug}`
-        );
+        throw new Error(`Nenhum recurso JSON/CSV no dataset ANTT ${slug}`);
     }
 
     const recurso = candidatos[0];
@@ -1738,52 +1763,35 @@ async function consultarDatasetANTT(slug) {
     const resp = await axios.get(
         recurso.url,
         {
-            headers: {
-                'User-Agent': 'GPS-Caminhao-ANTT/1.0'
-            },
+            headers: { 'User-Agent': 'GPS-Caminhao-ANTT/2.0' },
             timeout: 90000,
             responseType: 'text',
             maxContentLength: 20 * 1024 * 1024
         }
     );
 
+    let dados = resp.data;
+    const formato = String(recurso.format || '').toUpperCase();
+    const urlLower = String(recurso.url || '').toLowerCase();
     let registros = [];
 
-    const formato =
-        String(recurso.format || '').toUpperCase();
-
-    const urlLower =
-        String(recurso.url || '').toLowerCase();
-
-    if (
-        formato === 'JSON' ||
-        urlLower.includes('.json')
-    ) {
-        let dados = resp.data;
-
-        if (typeof dados === 'string') {
-            dados = JSON.parse(dados);
-        }
+    if (formato === 'JSON' || urlLower.includes('.json')) {
+        if (typeof dados === 'string') dados = JSON.parse(dados);
 
         function coletarListas(obj, listas = []) {
             if (Array.isArray(obj)) {
                 if (
                     obj.length &&
                     obj.every(x => x && typeof x === 'object' && !Array.isArray(x))
-                ) {
-                    listas.push(obj);
-                }
+                ) listas.push(obj);
 
-                for (const item of obj) {
-                    coletarListas(item, listas);
-                }
+                for (const item of obj) coletarListas(item, listas);
 
             } else if (obj && typeof obj === 'object') {
                 for (const valor of Object.values(obj)) {
                     coletarListas(valor, listas);
                 }
             }
-
             return listas;
         }
 
@@ -1795,12 +1803,8 @@ async function consultarDatasetANTT(slug) {
             Array.isArray(dados.features)
         ) {
             registros = dados.features.map(feature => {
-                const props = {
-                    ...(feature.properties || {})
-                };
-
-                const coords =
-                    feature?.geometry?.coordinates;
+                const props = { ...(feature.properties || {}) };
+                const coords = feature?.geometry?.coordinates;
 
                 if (
                     Array.isArray(coords) &&
@@ -1817,21 +1821,13 @@ async function consultarDatasetANTT(slug) {
 
         } else {
             const listas = coletarListas(dados);
-
-            if (listas.length) {
-                listas.sort((a, b) => b.length - a.length);
-                registros = listas[0];
-            }
+            listas.sort((a, b) => b.length - a.length);
+            registros = listas[0] || [];
         }
 
     } else {
-        // Parser CSV simples, suficiente para os recursos ANTT.
-        const texto = String(resp.data || '')
-            .replace(/^\uFEFF/, '');
-
-        const linhas = texto
-            .split(/\r?\n/)
-            .filter(Boolean);
+        const texto = String(dados || '').replace(/^\uFEFF/, '');
+        const linhas = texto.split(/\r?\n/).filter(Boolean);
 
         if (linhas.length >= 2) {
             const primeira = linhas[0];
@@ -1841,7 +1837,7 @@ async function consultarDatasetANTT(slug) {
                     ? ';'
                     : ',';
 
-            function parseLinhaCSV(linha) {
+            function parseLinha(linha) {
                 const campos = [];
                 let atual = '';
                 let aspas = false;
@@ -1856,11 +1852,9 @@ async function consultarDatasetANTT(slug) {
                         } else {
                             aspas = !aspas;
                         }
-
                     } else if (c === sep && !aspas) {
                         campos.push(atual);
                         atual = '';
-
                     } else {
                         atual += c;
                     }
@@ -1870,62 +1864,36 @@ async function consultarDatasetANTT(slug) {
                 return campos;
             }
 
-            const cab = parseLinhaCSV(linhas[0]);
+            const cab = parseLinha(linhas[0]);
 
             registros = linhas.slice(1).map(linha => {
-                const vals = parseLinhaCSV(linha);
+                const vals = parseLinha(linha);
                 const obj = {};
-
-                cab.forEach((k, i) => {
-                    obj[k] = vals[i] ?? '';
-                });
-
+                cab.forEach((k, i) => obj[k] = vals[i] ?? '');
                 return obj;
             });
         }
     }
 
     if (!registros.length) {
-        throw new Error(
-            `Recurso ANTT ${slug} baixado, mas sem registros reconhecidos`
-        );
+        throw new Error(`ANTT ${slug}: recurso sem registros reconhecidos`);
     }
 
     const resultado = {
-        slug,
         titulo: pacote.result.title,
         recurso: recurso.name,
-        url: recurso.url,
         registros
     };
 
     anttDatasetCache.set(cacheKey, resultado);
 
-    console.log(
-        `✅ ANTT ${slug}: ${registros.length} registro(s) carregados`
-    );
+    console.log(`✅ ANTT ${slug}: ${registros.length} registro(s) carregados`);
 
     return resultado;
 }
 
 function prepararPonteANTT(original) {
     const r = normalizarRegistroANTT(original);
-
-    const tipo = primeiroANTT(
-        r,
-        'ds_tipo_ponte_similares',
-        'tipo_de_ponte_e_similares',
-        'tipo_de_ponte',
-        'tipo'
-    );
-
-    const nome = primeiroANTT(
-        r,
-        'no_ponte_similares',
-        'nome_de_ponte_e_similares',
-        'nome_de_ponte',
-        'nome'
-    );
 
     const rodovia = primeiroANTT(
         r,
@@ -1935,141 +1903,80 @@ function prepararPonteANTT(original) {
         'br'
     );
 
-    let uf = primeiroANTT(r, 'uf');
-
-    if (!uf && rodovia) {
-        const m =
-            String(rodovia)
-                .toUpperCase()
-                .match(/\/([A-Z]{2})/);
-
-        if (m) uf = m[1];
-    }
-
     return {
         categoria: 'PONTE_SIMILAR',
-        tipo: textoANTT(tipo),
-        nome: textoANTT(nome),
-        concessionaria: textoANTT(
-            primeiroANTT(
-                r,
-                'no_concessionaria',
-                'concessionaria'
-            )
-        ),
-        rodovia: textoANTT(rodovia),
-        uf: textoANTT(uf),
-        km: textoANTT(
-            primeiroANTT(
-                r,
-                'nu_km_inicial_entrada',
-                'km_m_entrada',
-                'km_entrada',
-                'km_m',
-                'km'
-            )
-        ),
-        municipio: textoANTT(
-            primeiroANTT(
-                r,
-                'municipio',
-                'município'
-            )
-        ),
-        sentido: textoANTT(
-            primeiroANTT(
-                r,
-                'ds_sentido_entrada',
-                'sentido_entrada',
-                'sentido'
-            )
-        ),
-        situacao: textoANTT(
-            primeiroANTT(
-                r,
-                'situacao',
-                'situação'
-            )
-        ),
-        latitude: numeroANTT(
-            primeiroANTT(
-                r,
-                'cg_latitude_inicial_entrada',
-                'latitude_entrada',
-                'latitude',
-                'lat'
-            )
-        ),
-        longitude: numeroANTT(
-            primeiroANTT(
-                r,
-                'cg_longitude_inicial_entrada',
-                'longitude_entrada',
-                'longitude',
-                'lon',
-                'lng'
-            )
-        ),
+        tipo: String(primeiroANTT(
+            r,
+            'ds_tipo_ponte_similares',
+            'tipo_de_ponte_e_similares',
+            'tipo_de_ponte',
+            'tipo'
+        ) || ''),
+        nome: String(primeiroANTT(
+            r,
+            'no_ponte_similares',
+            'nome_de_ponte_e_similares',
+            'nome_de_ponte',
+            'nome'
+        ) || ''),
+        concessionaria: String(primeiroANTT(
+            r,
+            'no_concessionaria',
+            'concessionaria'
+        ) || ''),
+        rodovia: String(rodovia || ''),
+        km: String(primeiroANTT(
+            r,
+            'nu_km_inicial_entrada',
+            'km_m_entrada',
+            'km_entrada',
+            'km_m',
+            'km'
+        ) || ''),
+        sentido: String(primeiroANTT(
+            r,
+            'ds_sentido_entrada',
+            'sentido_entrada',
+            'sentido'
+        ) || ''),
+        latitude: numeroANTT(primeiroANTT(
+            r,
+            'cg_latitude_inicial_entrada',
+            'latitude_entrada',
+            'latitude',
+            'lat'
+        )),
+        longitude: numeroANTT(primeiroANTT(
+            r,
+            'cg_longitude_inicial_entrada',
+            'longitude_entrada',
+            'longitude',
+            'lon',
+            'lng'
+        )),
         original
     };
 }
 
 function prepararDeteccaoAlturaANTT(original) {
     const r = normalizarRegistroANTT(original);
-
-    const tipo = textoANTT(
-        primeiroANTT(
-            r,
-            'tipo_de_equipamento',
-            'tipo_equipamento',
-            'tipo'
-        )
-    );
+    const tipo = String(primeiroANTT(
+        r,
+        'tipo_de_equipamento',
+        'tipo_equipamento',
+        'tipo'
+    ) || '');
 
     return {
         categoria: 'DETECCAO_ALTURA',
         tipo,
         nome: tipo,
-        concessionaria: textoANTT(
-            primeiroANTT(r, 'concessionaria')
-        ),
-        rodovia: textoANTT(
-            primeiroANTT(r, 'rodovia', 'br')
-        ),
-        uf: textoANTT(
-            primeiroANTT(r, 'uf', 'estado')
-        ),
-        km: textoANTT(
-            primeiroANTT(r, 'km_m', 'km')
-        ),
-        municipio: textoANTT(
-            primeiroANTT(
-                r,
-                'municipio',
-                'município'
-            )
-        ),
-        sentido: textoANTT(
-            primeiroANTT(r, 'sentido')
-        ),
-        situacao: textoANTT(
-            primeiroANTT(
-                r,
-                'situacao',
-                'situação'
-            )
-        ),
-        latitude: numeroANTT(
-            primeiroANTT(r, 'latitude', 'lat')
-        ),
-        longitude: numeroANTT(
-            primeiroANTT(
-                r,
-                'longitude',
-                'lon',
-                'lng'
-            )
-        ),
+        concessionaria: String(primeiroANTT(r, 'concessionaria') || ''),
+        rodovia: String(primeiroANTT(r, 'rodovia', 'br') || ''),
+        km: String(primeiroANTT(r, 'km_m', 'km') || ''),
+        sentido: String(primeiroANTT(r, 'sentido') || ''),
+        latitude: numeroANTT(primeiroANTT(r, 'latitude', 'lat')),
+        longitude: numeroANTT(primeiroANTT(r, 'longitude', 'lon', 'lng')),
         original
     };
 }
@@ -2087,62 +1994,218 @@ function hashFonteANTT(registro) {
     ].join('|');
 
     let hash = 2166136261;
-
     for (let i = 0; i < base.length; i++) {
         hash ^= base.charCodeAt(i);
         hash = Math.imul(hash, 16777619);
     }
-
     return (hash >>> 0).toString(16);
 }
 
 async function carregarInfraestruturaANTT() {
     const [pontesDataset, alturaDataset] =
         await Promise.all([
-            consultarDatasetANTT(
-                ANTT_DATASETS.pontes
-            ),
-            consultarDatasetANTT(
-                ANTT_DATASETS.altura
-            )
+            consultarDatasetANTT(ANTT_DATASETS.pontes),
+            consultarDatasetANTT(ANTT_DATASETS.altura)
         ]);
 
-    const pontes =
-        pontesDataset.registros
-            .map(prepararPonteANTT)
-            .filter(r =>
-                Number.isFinite(r.latitude) &&
-                Number.isFinite(r.longitude)
-            );
+    const pontes = pontesDataset.registros
+        .map(prepararPonteANTT)
+        .filter(r => Number.isFinite(r.latitude) && Number.isFinite(r.longitude));
 
-    // O conjunto inclui estação meteorológica.
-    // Mantemos apenas registros cujo tipo mencione altura.
-    const deteccaoAltura =
-        alturaDataset.registros
-            .map(prepararDeteccaoAlturaANTT)
-            .filter(r =>
-                Number.isFinite(r.latitude) &&
-                Number.isFinite(r.longitude) &&
-                semAcentoANTT(r.tipo)
-                    .toLowerCase()
-                    .includes('altura')
-            );
+    const deteccaoAltura = alturaDataset.registros
+        .map(prepararDeteccaoAlturaANTT)
+        .filter(r =>
+            Number.isFinite(r.latitude) &&
+            Number.isFinite(r.longitude) &&
+            semAcentoANTT(r.tipo).toLowerCase().includes('altura')
+        );
 
     return {
         pontes,
         deteccaoAltura,
         datasets: {
-            pontes: {
-                titulo: pontesDataset.titulo,
-                recurso: pontesDataset.recurso
-            },
-            altura: {
-                titulo: alturaDataset.titulo,
-                recurso: alturaDataset.recurso
-            }
+            pontes: pontesDataset.titulo,
+            altura: alturaDataset.titulo
         }
     };
 }
+
+// ======================================================
+// BASE GLOBAL VALIDADA + MOTOR DE SEGURANÇA
+// ======================================================
+function valorPositivoOuNulo(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function restricaoIncompativelComVeiculo(restricao, veiculo) {
+    const motivos = [];
+
+    const altura = Number(veiculo.altura);
+    const largura = Number(veiculo.largura);
+    const comprimento = Number(veiculo.comprimento);
+    const peso = Number(veiculo.peso);
+
+    if (
+        valorPositivoOuNulo(restricao.limite_altura) !== null &&
+        Number.isFinite(altura) &&
+        altura > Number(restricao.limite_altura)
+    ) {
+        motivos.push(
+            `altura ${altura.toFixed(2)} m > ${Number(restricao.limite_altura).toFixed(2)} m`
+        );
+    }
+
+    if (
+        valorPositivoOuNulo(restricao.limite_largura) !== null &&
+        Number.isFinite(largura) &&
+        largura > Number(restricao.limite_largura)
+    ) {
+        motivos.push(
+            `largura ${largura.toFixed(2)} m > ${Number(restricao.limite_largura).toFixed(2)} m`
+        );
+    }
+
+    if (
+        valorPositivoOuNulo(restricao.limite_comprimento) !== null &&
+        Number.isFinite(comprimento) &&
+        comprimento > Number(restricao.limite_comprimento)
+    ) {
+        motivos.push(
+            `comprimento ${comprimento.toFixed(2)} m > ${Number(restricao.limite_comprimento).toFixed(2)} m`
+        );
+    }
+
+    if (
+        valorPositivoOuNulo(restricao.limite_peso) !== null &&
+        Number.isFinite(peso) &&
+        peso > Number(restricao.limite_peso)
+    ) {
+        motivos.push(
+            `peso ${peso.toFixed(2)} t > ${Number(restricao.limite_peso).toFixed(2)} t`
+        );
+    }
+
+    const tipo = String(restricao.tipo || '').toLowerCase();
+
+    if (
+        ['proibicao_caminhao','acesso_restrito'].includes(tipo)
+    ) {
+        motivos.push('acesso validado como proibido/restrito para caminhão');
+    }
+
+    return {
+        incompativel: motivos.length > 0,
+        motivos
+    };
+}
+
+async function buscarRestricoesValidadasAtivas(client = pool) {
+    const result = await client.query(`
+        SELECT *
+        FROM restricoes_validadas
+        WHERE ativa = TRUE
+          AND (valida_ate IS NULL OR valida_ate > CURRENT_TIMESTAMP)
+        ORDER BY validado_em DESC
+    `);
+
+    return result.rows;
+}
+
+async function preChecarRotaSegura({
+    geojson,
+    comprimento,
+    largura,
+    altura,
+    peso,
+    client = pool
+}) {
+    const restricoes = await buscarRestricoesValidadasAtivas(client);
+
+    const veiculo = {
+        comprimento: Number(comprimento),
+        largura: Number(largura),
+        altura: Number(altura),
+        peso: Number(peso)
+    };
+
+    const encontradas = [];
+
+    for (const r of restricoes) {
+        const analise = analisarPosicaoNaRota(
+            geojson,
+            Number(r.lat),
+            Number(r.lng)
+        );
+
+        if (
+            analise.distanciaRotaKm === null ||
+            !Number.isFinite(Number(analise.distanciaRotaKm))
+        ) continue;
+
+        const raioKm = Math.max(
+            0.05,
+            Number(r.raio_metros || 180) / 1000
+        );
+
+        if (Number(analise.distanciaRotaKm) > raioKm) continue;
+
+        const comp = restricaoIncompativelComVeiculo(r, veiculo);
+
+        encontradas.push({
+            ...r,
+            distancia_rota_km: Number(
+                Number(analise.distanciaRotaKm).toFixed(3)
+            ),
+            incompativel: comp.incompativel,
+            motivos: comp.motivos
+        });
+    }
+
+    const incompativeis = encontradas.filter(x => x.incompativel);
+
+    return {
+        liberada: incompativeis.length === 0,
+        total_validadas_proximas: encontradas.length,
+        incompativeis,
+        compatíveis_ou_informativas:
+            encontradas.filter(x => !x.incompativel)
+    };
+}
+
+function poligonoQuadradoAoRedor(lng, lat, raioMetros = 220) {
+    const dLat = raioMetros / 111320;
+    const dLng = raioMetros / (
+        111320 * Math.max(0.2, Math.cos(Number(lat) * Math.PI / 180))
+    );
+
+    return [[
+        [lng - dLng, lat - dLat],
+        [lng + dLng, lat - dLat],
+        [lng + dLng, lat + dLat],
+        [lng - dLng, lat + dLat],
+        [lng - dLng, lat - dLat]
+    ]];
+}
+
+function montarAvoidPolygons(restricoes) {
+    const polygons = (restricoes || []).map(r =>
+        poligonoQuadradoAoRedor(
+            Number(r.lng),
+            Number(r.lat),
+            Math.max(180, Number(r.raio_metros || 180))
+        )
+    );
+
+    if (!polygons.length) return null;
+
+    return {
+        type: 'MultiPolygon',
+        coordinates: polygons
+    };
+}
+
 
 function analisarPosicaoNaRota(geojson, lat, lon) {
     const coords = geojson?.features?.[0]?.geometry?.coordinates || [];
@@ -2346,6 +2409,8 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
                 vg.chegada_real,
                 vg.rota_reutilizada,
                 vg.id_rota_especifica,
+                vg.liberacao_rota,
+                vg.checagem_seguranca,
 
                 v.id AS veiculo_id,
                 v.placa,
@@ -2368,6 +2433,7 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
 
             WHERE vg.id_veiculo = $1
               AND vg.status IN ('planejada', 'em_andamento')
+              AND COALESCE(vg.liberacao_rota, 'liberada') <> 'bloqueada'
 
             ORDER BY
                 CASE
@@ -2424,6 +2490,48 @@ app.patch('/rotas/:id/status', autenticar, validar(schemas.status), async (req, 
 // ======================================================
 // VIAGENS
 // ======================================================
+
+async function finalizarSegurancaNovaViagem({
+    client,
+    viagem,
+    rotaGeoJson,
+    comprimento,
+    largura,
+    altura,
+    peso
+}) {
+    const check = await preChecarRotaSegura({
+        geojson: rotaGeoJson,
+        comprimento,
+        largura,
+        altura,
+        peso,
+        client
+    });
+
+    const liberacao =
+        check.liberada
+            ? 'liberada'
+            : 'bloqueada';
+
+    await client.query(`
+        UPDATE viagens
+        SET
+            liberacao_rota = $1,
+            checagem_seguranca = $2::jsonb
+        WHERE id = $3
+    `, [
+        liberacao,
+        JSON.stringify(check),
+        viagem.id
+    ]);
+
+    return {
+        liberacao_rota: liberacao,
+        checagem_seguranca: check
+    };
+}
+
 app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro: 'Acesso negado' });
@@ -2518,20 +2626,52 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
 
         if (cacheResult.rows.length) {
             rotaEspecifica = cacheResult.rows[0];
-            rotaReutilizada = true;
 
-            await client.query(`
-                UPDATE rotas_especificas
-                SET ultima_utilizacao = CURRENT_TIMESTAMP
-                WHERE id = $1
-            `, [rotaEspecifica.id]);
+            const checkCache = await preChecarRotaSegura({
+                geojson: rotaEspecifica.dados_geojson,
+                comprimento,
+                largura,
+                altura,
+                peso,
+                client
+            });
 
-            console.log(
-                `♻️ Rota específica reutilizada: base=${req.body.id_rota} assinatura=${assinatura}`
-            );
+            // Uma nova restrição global pode invalidar uma rota antes confiável.
+            if (!checkCache.liberada) {
+                await client.query(`
+                    UPDATE rotas_especificas
+                    SET
+                        bloqueada = TRUE,
+                        motivo_bloqueio = $1
+                    WHERE id = $2
+                `, [
+                    'Restrição global validada incompatível detectada na pré-checagem.',
+                    rotaEspecifica.id
+                ]);
 
-        } else {
-            // 2. Não existe rota validada: calcula uma específica no ORS.
+                // Força o fluxo de cálculo de uma rota nova.
+                rotaEspecifica = null;
+                rotaReutilizada = false;
+            } else {
+                rotaReutilizada = true;
+            }
+
+            if (rotaEspecifica) {
+                await client.query(`
+                    UPDATE rotas_especificas
+                    SET ultima_utilizacao = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                `, [rotaEspecifica.id]);
+
+                console.log(
+                    `♻️ Rota específica reutilizada: base=${req.body.id_rota} assinatura=${assinatura}`
+                );
+            }
+
+        }
+
+        if (!rotaEspecifica) {
+            // 2. Não existe rota validada segura: calcula uma específica no ORS.
             await client.query('COMMIT');
             client.release();
 
@@ -2545,6 +2685,36 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                     altura,
                     peso
                 });
+
+                // Pré-checagem global antes de salvar a rota definitiva.
+                let precheckInicial = await preChecarRotaSegura({
+                    geojson: geojsonEspecifico,
+                    comprimento,
+                    largura,
+                    altura,
+                    peso
+                });
+
+                // Se houver restrição VALIDADA incompatível, tenta contornar no ORS.
+                if (!precheckInicial.liberada && precheckInicial.incompativeis.length) {
+                    const avoidPolygons =
+                        montarAvoidPolygons(precheckInicial.incompativeis);
+
+                    if (avoidPolygons) {
+                        console.log(
+                            `🛡️ ${precheckInicial.incompativeis.length} restrição(ões) validada(s) incompatível(is). Tentando rota alternativa.`
+                        );
+
+                        geojsonEspecifico = await calcularRotaEspecificaORS({
+                            rotaBase,
+                            comprimento,
+                            largura,
+                            altura,
+                            peso,
+                            avoidPolygons
+                        });
+                    }
+                }
             } catch (erroORS) {
                 console.error('❌ ORS rota específica:', erroORS.response?.data || erroORS.message);
                 return res.status(502).json({
@@ -2578,7 +2748,13 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                     ON CONFLICT (id_rota_base, assinatura)
                     DO UPDATE SET
                         dados_geojson = EXCLUDED.dados_geojson,
-                        ultima_utilizacao = CURRENT_TIMESTAMP
+                        reutilizavel = FALSE,
+                        nivel_confianca = 'teste',
+                        bloqueada = FALSE,
+                        motivo_bloqueio = NULL,
+                        valida_ate = NULL,
+                        ultima_utilizacao = CURRENT_TIMESTAMP,
+                        versao = COALESCE(rotas_especificas.versao, 1) + 1
 
                     RETURNING *
                 `, [
@@ -2641,11 +2817,28 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                     chegadaPrevista
                 ]);
 
+                const seguranca = await finalizarSegurancaNovaViagem({
+                    client: client2,
+                    viagem: viagem.rows[0],
+                    rotaGeoJson: rotaEspecifica.dados_geojson,
+                    comprimento,
+                    largura,
+                    altura,
+                    peso
+                });
+
                 await client2.query('COMMIT');
 
                 return res.status(201).json({
-                    mensagem: 'Viagem criada com nova rota específica',
-                    viagem: viagem.rows[0],
+                    mensagem:
+                        seguranca.liberacao_rota === 'liberada'
+                            ? 'Viagem criada e pré-checagem de segurança aprovada'
+                            : 'Viagem criada, mas BLOQUEADA por restrição validada incompatível',
+                    viagem: {
+                        ...viagem.rows[0],
+                        ...seguranca
+                    },
+                    seguranca,
                     rota_especifica: {
                         id: rotaEspecifica.id,
                         reutilizada: false,
@@ -2713,11 +2906,28 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
             rotaReutilizada
         ]);
 
+        const seguranca = await finalizarSegurancaNovaViagem({
+            client,
+            viagem: viagem.rows[0],
+            rotaGeoJson: rotaEspecifica.dados_geojson,
+            comprimento,
+            largura,
+            altura,
+            peso
+        });
+
         await client.query('COMMIT');
 
         res.status(201).json({
-            mensagem: 'Viagem criada usando rota específica já validada',
-            viagem: viagem.rows[0],
+            mensagem:
+                seguranca.liberacao_rota === 'liberada'
+                    ? 'Viagem criada usando rota específica validada e segura'
+                    : 'Viagem criada, mas BLOQUEADA por restrição validada incompatível',
+            viagem: {
+                ...viagem.rows[0],
+                ...seguranca
+            },
+            seguranca,
             rota_especifica: {
                 id: rotaEspecifica.id,
                 reutilizada: true,
@@ -2749,6 +2959,7 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
               AND u.id = $1
               AND u.id_veiculo = vg.id_veiculo
               AND vg.status IN ('planejada','em_andamento')
+              AND COALESCE(vg.liberacao_rota, 'liberada') <> 'bloqueada'
             RETURNING vg.*
         `, [req.usuario.id, req.params.id]);
 
@@ -3102,11 +3313,8 @@ app.get('/monitoramento/viagens', autenticar, async (req, res) => {
 
 
 // ======================================================
-// VERIFICAÇÃO DE RESTRIÇÕES DO TRAJETO
+// SCANNER ANTT / CENTRAL DE VALIDAÇÃO
 // ======================================================
-
-// Faz a varredura da rota específica da viagem.
-// NUNCA altera o roteamento automaticamente.
 app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro: 'Acesso negado' });
@@ -3138,21 +3346,12 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
         `, [req.params.id]);
 
         if (!result.rows.length) {
-            return res.status(404).json({
-                erro: 'Viagem não encontrada'
-            });
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
         }
 
         const viagem = result.rows[0];
 
-        if (!viagem.dados_geojson) {
-            return res.status(400).json({
-                erro: 'Viagem sem geometria de rota'
-            });
-        }
-
-        const infraestrutura =
-            await carregarInfraestruturaANTT();
+        const infraestrutura = await carregarInfraestruturaANTT();
 
         const registros = [
             ...infraestrutura.pontes,
@@ -3160,137 +3359,54 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
         ];
 
         const salvos = [];
-        let ignoradosDistancia = 0;
 
         for (const reg of registros) {
-            const analiseRota =
-                analisarPosicaoNaRota(
-                    viagem.dados_geojson,
-                    reg.latitude,
-                    reg.longitude
-                );
+            const analise = analisarPosicaoNaRota(
+                viagem.dados_geojson,
+                reg.latitude,
+                reg.longitude
+            );
 
-            // Somente pontos próximos da rota real.
             if (
-                analiseRota.distanciaRotaKm === null ||
-                analiseRota.distanciaRotaKm > 1.0
-            ) {
-                ignoradosDistancia++;
-                continue;
-            }
+                analise.distanciaRotaKm === null ||
+                analise.distanciaRotaKm > 1
+            ) continue;
 
-            const isPonte =
-                reg.categoria === 'PONTE_SIMILAR';
+            const tipoTexto = semAcentoANTT(reg.tipo).toLowerCase();
 
-            const tipoTexto =
-                semAcentoANTT(
-                    reg.tipo || ''
-                ).toLowerCase();
-
-            let tipo = 'infraestrutura_antt';
-
-            if (isPonte) {
-                if (tipoTexto.includes('viaduto')) {
-                    tipo = 'ponte_viaduto';
-                } else if (tipoTexto.includes('ponte')) {
-                    tipo = 'ponte_viaduto';
-                } else if (
-                    tipoTexto.includes('passagem inferior')
-                ) {
-                    tipo = 'passagem_inferior';
-                } else {
-                    tipo = 'obra_arte_especial';
-                }
-            } else {
-                tipo = 'equipamento_deteccao_altura';
-            }
-
-            /*
-             * REGRA DE SEGURANÇA:
-             * ANTT confirma a existência/localização da infraestrutura,
-             * mas estes datasets NÃO significam automaticamente que há
-             * um limite de altura para o caminhão.
-             *
-             * Portanto:
-             * - compatibilidade = verificar
-             * - não marcamos "incompatível"
-             * - não geramos desvio
-             */
-            const confianca =
-                isPonte ? 90 : 92;
-
-            const risco =
-                isPonte ? 'baixo' : 'baixo';
-
-            const observacao =
-                isPonte
-                    ? (
-                        'Estrutura encontrada em base oficial da ANTT. ' +
-                        'A existência/localização tem alta confiança, ' +
-                        'mas a base de pontes/similares não confirma, por si só, ' +
-                        'a altura livre nem uma restrição dimensional. ' +
-                        'Exige verificação antes de qualquer bloqueio de rota.'
-                    )
-                    : (
-                        'Equipamento de detecção de altura encontrado em base oficial da ANTT. ' +
-                        'Isto indica a presença do equipamento, NÃO um limite máximo de altura. ' +
-                        'Não bloqueia nem altera a rota.'
-                    );
+            let tipo =
+                reg.categoria === 'DETECCAO_ALTURA'
+                    ? 'equipamento_deteccao_altura'
+                    : tipoTexto.includes('passagem inferior')
+                        ? 'passagem_inferior'
+                        : 'ponte_viaduto';
 
             const fonteId =
                 `${reg.categoria}/${hashFonteANTT(reg)}`;
-
-            const nome =
-                reg.nome ||
-                [
-                    reg.tipo,
-                    reg.rodovia,
-                    reg.km
-                        ? `km ${reg.km}`
-                        : ''
-                ]
-                .filter(Boolean)
-                .join(' - ') ||
-                null;
 
             const tags = {
                 categoria_antt: reg.categoria,
                 tipo_antt: reg.tipo,
                 concessionaria: reg.concessionaria,
                 rodovia: reg.rodovia,
-                uf: reg.uf,
                 km: reg.km,
-                municipio: reg.municipio,
                 sentido: reg.sentido,
-                situacao: reg.situacao,
                 origem_dado: 'Portal de Dados Abertos ANTT',
                 dados_originais: reg.original
             };
 
+            const observacao =
+                reg.categoria === 'DETECCAO_ALTURA'
+                    ? 'Equipamento oficial de detecção de altura. Não representa sozinho o limite máximo permitido.'
+                    : 'Estrutura oficial ANTT. A existência/localização tem alta confiança, mas a altura livre precisa ser validada antes de qualquer bloqueio.';
+
             const salvo = await pool.query(`
                 INSERT INTO restricoes_candidatas
                 (
-                    id_viagem,
-                    id_rota,
-                    id_rota_especifica,
-                    id_veiculo,
-                    fonte,
-                    fonte_id,
-                    tipo,
-                    nome,
-                    lat,
-                    lng,
-                    distancia_rota_km,
-                    limite_altura,
-                    limite_largura,
-                    limite_comprimento,
-                    limite_peso,
-                    limite_eixo,
-                    compatibilidade,
-                    risco,
-                    confianca,
-                    tags,
-                    observacao,
+                    id_viagem,id_rota,id_rota_especifica,id_veiculo,
+                    fonte,fonte_id,tipo,nome,
+                    lat,lng,distancia_rota_km,
+                    compatibilidade,risco,confianca,tags,observacao,
                     ultima_deteccao
                 )
                 VALUES
@@ -3298,8 +3414,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                     $1,$2,$3,$4,
                     'antt',$5,$6,$7,
                     $8,$9,$10,
-                    NULL,NULL,NULL,NULL,NULL,
-                    'verificar',$11,$12,$13::jsonb,$14,
+                    'verificar','baixo',$11,$12::jsonb,$13,
                     CURRENT_TIMESTAMP
                 )
                 ON CONFLICT (id_viagem, fonte, fonte_id)
@@ -3309,9 +3424,6 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                     lat = EXCLUDED.lat,
                     lng = EXCLUDED.lng,
                     distancia_rota_km = EXCLUDED.distancia_rota_km,
-                    compatibilidade = EXCLUDED.compatibilidade,
-                    risco = EXCLUDED.risco,
-                    confianca = EXCLUDED.confianca,
                     tags = EXCLUDED.tags,
                     observacao = EXCLUDED.observacao,
                     ultima_deteccao = CURRENT_TIMESTAMP
@@ -3323,14 +3435,11 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 viagem.id_veiculo,
                 fonteId,
                 tipo,
-                nome,
+                reg.nome || reg.tipo || null,
                 reg.latitude,
                 reg.longitude,
-                Number(
-                    analiseRota.distanciaRotaKm.toFixed(3)
-                ),
-                risco,
-                confianca,
+                Number(analise.distanciaRotaKm.toFixed(3)),
+                reg.categoria === 'PONTE_SIMILAR' ? 90 : 92,
                 JSON.stringify(tags),
                 observacao
             ]);
@@ -3339,52 +3448,25 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
         }
 
         res.json({
-            mensagem:
-                'Varredura ANTT concluída. Os registros são candidatos oficiais para verificação e NÃO alteram a rota automaticamente.',
-            fonte: 'ANTT - Portal de Dados Abertos',
-            viagem: {
-                id: viagem.id,
-                placa: viagem.placa,
-                rota: viagem.rota_nome,
-                origem: viagem.origem,
-                destino: viagem.destino
-            },
-            datasets: infraestrutura.datasets,
-            pontes_antt_total:
-                infraestrutura.pontes.length,
-            detectores_altura_antt_total:
-                infraestrutura.deteccaoAltura.length,
-            candidatos_na_rota:
-                salvos.length,
+            mensagem: 'Varredura ANTT concluída.',
+            fonte: 'ANTT',
+            candidatos_na_rota: salvos.length,
             pontes_similares_na_rota:
-                salvos.filter(
-                    x =>
-                        x.tipo === 'ponte_viaduto' ||
-                        x.tipo === 'passagem_inferior' ||
-                        x.tipo === 'obra_arte_especial'
+                salvos.filter(x =>
+                    ['ponte_viaduto','passagem_inferior'].includes(x.tipo)
                 ).length,
             equipamentos_altura_na_rota:
-                salvos.filter(
-                    x =>
-                        x.tipo === 'equipamento_deteccao_altura'
-                ).length,
-            ignorados_fora_corredor:
-                ignoradosDistancia,
-            aviso:
-                'Detecção de altura da ANTT representa equipamento, não altura máxima permitida. Pontes/similares representam infraestrutura, não necessariamente restrição dimensional.'
+                salvos.filter(x =>
+                    x.tipo === 'equipamento_deteccao_altura'
+                ).length
         });
 
     } catch (erro) {
-        console.error(
-            '❌ Scanner ANTT:',
-            erro.response?.data || erro.message
-        );
+        console.error('❌ Scanner ANTT:', erro.response?.data || erro.message);
 
         res.status(502).json({
-            erro:
-                'Não foi possível concluir a varredura ANTT',
+            erro: 'Não foi possível concluir a varredura ANTT',
             detalhe:
-                erro.response?.data?.error ||
                 erro.response?.data?.message ||
                 erro.message
         });
@@ -3413,13 +3495,7 @@ app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
                     WHEN 'descoberta' THEN 2
                     ELSE 3
                 END,
-                CASE rc.risco
-                    WHEN 'alto' THEN 0
-                    WHEN 'medio' THEN 1
-                    ELSE 2
-                END,
-                rc.distancia_rota_km ASC,
-                rc.id ASC
+                rc.distancia_rota_km ASC
         `, [req.params.id]);
 
         res.json(resultado.rows);
@@ -3428,46 +3504,26 @@ app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
     }
 });
 
-app.patch('/restricoes-candidatas/:id/status', autenticar, async (req, res) => {
+// Confirma somente a existência; ainda não vai para a base global.
+app.patch('/restricoes-candidatas/:id/confirmar', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro: 'Acesso negado' });
     }
-
-    const status = String(req.body?.status || '');
-    const permitidos = ['descoberta','confirmada','validada','rejeitada'];
-
-    if (!permitidos.includes(status)) {
-        return res.status(400).json({ erro: 'Status de validação inválido' });
-    }
-
-    const observacao =
-        req.body?.observacao !== undefined
-            ? String(req.body.observacao || '').slice(0, 1000)
-            : null;
 
     try {
         const resultado = await pool.query(`
             UPDATE restricoes_candidatas
             SET
-                status_validacao = $1,
-                observacao = COALESCE($2, observacao),
-                validado_por =
-                    CASE
-                        WHEN $1 IN ('confirmada','validada','rejeitada')
-                            THEN $3
-                        ELSE NULL
-                    END,
-                validado_em =
-                    CASE
-                        WHEN $1 IN ('confirmada','validada','rejeitada')
-                            THEN CURRENT_TIMESTAMP
-                        ELSE NULL
-                    END
-            WHERE id = $4
+                status_validacao = 'confirmada',
+                observacao = COALESCE($1, observacao),
+                validado_por = $2,
+                validado_em = CURRENT_TIMESTAMP
+            WHERE id = $3
             RETURNING *
         `, [
-            status,
-            observacao,
+            req.body?.observacao
+                ? String(req.body.observacao).slice(0,1000)
+                : null,
             req.usuario.id,
             req.params.id
         ]);
@@ -3477,56 +3533,373 @@ app.patch('/restricoes-candidatas/:id/status', autenticar, async (req, res) => {
         }
 
         res.json({
-            mensagem:
-                status === 'validada'
-                    ? 'Restrição validada. Ela está apta para uso futuro no motor de segurança, mas este endpoint não recalcula a rota.'
-                    : 'Status atualizado.',
+            mensagem: 'Existência confirmada. Ainda não interfere no roteamento.',
             restricao: resultado.rows[0]
         });
-
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
     }
 });
 
-app.get('/restricoes-candidatas', autenticar, async (req, res) => {
+// Validação completa: promove para a base GLOBAL.
+app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro: 'Acesso negado' });
     }
 
-    const status = String(req.query.status || 'pendentes');
+    const client = await pool.connect();
 
     try {
-        let where = '';
+        await client.query('BEGIN');
 
-        if (status === 'pendentes') {
-            where = `WHERE rc.status_validacao IN ('descoberta','confirmada')`;
-        } else if (['validada','rejeitada','descoberta','confirmada'].includes(status)) {
-            where = `WHERE rc.status_validacao = '${status}'`;
+        const candidatoResult = await client.query(`
+            SELECT *
+            FROM restricoes_candidatas
+            WHERE id = $1
+            LIMIT 1
+            FOR UPDATE
+        `, [req.params.id]);
+
+        if (!candidatoResult.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Candidato não encontrado' });
         }
 
+        const c = candidatoResult.rows[0];
+        const tags = c.tags || {};
+
+        const limiteAltura = valorPositivoOuNulo(req.body?.limite_altura);
+        const limiteLargura = valorPositivoOuNulo(req.body?.limite_largura);
+        const limiteComprimento = valorPositivoOuNulo(req.body?.limite_comprimento);
+        const limitePeso = valorPositivoOuNulo(req.body?.limite_peso);
+        const limiteEixo = valorPositivoOuNulo(req.body?.limite_eixo);
+
+        const tipo = String(req.body?.tipo || c.tipo || '').slice(0,60);
+        const evidenciaUrl = String(req.body?.evidencia_url || '').trim() || null;
+        const evidenciaTexto = String(req.body?.evidencia_texto || '').trim() || null;
+        const observacao = String(req.body?.observacao || '').trim() || null;
+
+        const validaDias =
+            Math.max(1, Math.min(3650, Number(req.body?.valida_dias || 180)));
+
+        const raioMetros =
+            Math.max(30, Math.min(1500, Number(req.body?.raio_metros || 180)));
+
+        // Para tipos dimensionais, exige pelo menos um limite.
+        const exigeLimite =
+            ![
+                'proibicao_caminhao',
+                'acesso_restrito'
+            ].includes(tipo);
+
+        if (
+            exigeLimite &&
+            [
+                limiteAltura,
+                limiteLargura,
+                limiteComprimento,
+                limitePeso,
+                limiteEixo
+            ].every(v => v === null)
+        ) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro:
+                    'Para validar para roteamento, informe pelo menos um limite dimensional confirmado ou escolha um tipo de proibição/acesso restrito.'
+            });
+        }
+
+        const global = await client.query(`
+            INSERT INTO restricoes_validadas
+            (
+                fonte,
+                fonte_id,
+                candidato_origem_id,
+                tipo,
+                nome,
+                lat,
+                lng,
+                raio_metros,
+                limite_altura,
+                limite_largura,
+                limite_comprimento,
+                limite_peso,
+                limite_eixo,
+                sentido,
+                rodovia,
+                km,
+                concessionaria,
+                evidencia_url,
+                evidencia_texto,
+                observacao,
+                confianca,
+                ativa,
+                valida_ate,
+                validado_por,
+                validado_em,
+                atualizada_em
+            )
+            VALUES
+            (
+                $1,$2,$3,$4,$5,$6,$7,$8,
+                $9,$10,$11,$12,$13,
+                $14,$15,$16,$17,
+                $18,$19,$20,
+                100,TRUE,
+                CURRENT_TIMESTAMP + ($21 || ' days')::INTERVAL,
+                $22,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
+            )
+            ON CONFLICT (fonte, fonte_id)
+            DO UPDATE SET
+                candidato_origem_id = EXCLUDED.candidato_origem_id,
+                tipo = EXCLUDED.tipo,
+                nome = EXCLUDED.nome,
+                lat = EXCLUDED.lat,
+                lng = EXCLUDED.lng,
+                raio_metros = EXCLUDED.raio_metros,
+                limite_altura = EXCLUDED.limite_altura,
+                limite_largura = EXCLUDED.limite_largura,
+                limite_comprimento = EXCLUDED.limite_comprimento,
+                limite_peso = EXCLUDED.limite_peso,
+                limite_eixo = EXCLUDED.limite_eixo,
+                sentido = EXCLUDED.sentido,
+                rodovia = EXCLUDED.rodovia,
+                km = EXCLUDED.km,
+                concessionaria = EXCLUDED.concessionaria,
+                evidencia_url = EXCLUDED.evidencia_url,
+                evidencia_texto = EXCLUDED.evidencia_texto,
+                observacao = EXCLUDED.observacao,
+                confianca = 100,
+                ativa = TRUE,
+                valida_ate = EXCLUDED.valida_ate,
+                validado_por = EXCLUDED.validado_por,
+                validado_em = CURRENT_TIMESTAMP,
+                atualizada_em = CURRENT_TIMESTAMP
+            RETURNING *
+        `, [
+            c.fonte,
+            c.fonte_id,
+            c.id,
+            tipo,
+            req.body?.nome || c.nome,
+            c.lat,
+            c.lng,
+            raioMetros,
+            limiteAltura,
+            limiteLargura,
+            limiteComprimento,
+            limitePeso,
+            limiteEixo,
+            req.body?.sentido || tags.sentido || null,
+            req.body?.rodovia || tags.rodovia || null,
+            req.body?.km || tags.km || null,
+            req.body?.concessionaria || tags.concessionaria || null,
+            evidenciaUrl,
+            evidenciaTexto,
+            observacao,
+            validaDias,
+            req.usuario.id
+        ]);
+
+        await client.query(`
+            UPDATE restricoes_candidatas
+            SET
+                status_validacao = 'validada',
+                limite_altura = $1,
+                limite_largura = $2,
+                limite_comprimento = $3,
+                limite_peso = $4,
+                limite_eixo = $5,
+                observacao = COALESCE($6, observacao),
+                validado_por = $7,
+                validado_em = CURRENT_TIMESTAMP
+            WHERE id = $8
+        `, [
+            limiteAltura,
+            limiteLargura,
+            limiteComprimento,
+            limitePeso,
+            limiteEixo,
+            observacao,
+            req.usuario.id,
+            c.id
+        ]);
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:
+                'Restrição validada e adicionada à base global de segurança.',
+            restricao_global: global.rows[0]
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch(_) {}
+        res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
+    }
+});
+
+app.patch('/restricoes-candidatas/:id/rejeitar', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const resultado = await pool.query(`
+            UPDATE restricoes_candidatas
+            SET
+                status_validacao = 'rejeitada',
+                observacao = COALESCE($1, observacao),
+                validado_por = $2,
+                validado_em = CURRENT_TIMESTAMP
+            WHERE id = $3
+            RETURNING *
+        `, [
+            req.body?.observacao
+                ? String(req.body.observacao).slice(0,1000)
+                : null,
+            req.usuario.id,
+            req.params.id
+        ]);
+
+        if (!resultado.rows.length) {
+            return res.status(404).json({ erro: 'Candidato não encontrado' });
+        }
+
+        res.json({
+            mensagem: 'Candidato rejeitado.',
+            restricao: resultado.rows[0]
+        });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/restricoes-validadas', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
         const resultado = await pool.query(`
             SELECT
-                rc.*,
-                v.placa,
-                r.nome AS rota_nome,
-                r.origem,
-                r.destino
-            FROM restricoes_candidatas rc
-            JOIN veiculos v ON v.id = rc.id_veiculo
-            JOIN rotas r ON r.id = rc.id_rota
-            ${where}
+                rv.*,
+                u.nome AS validado_por_nome
+            FROM restricoes_validadas rv
+            LEFT JOIN usuarios u ON u.id = rv.validado_por
             ORDER BY
-                CASE rc.risco
-                    WHEN 'alto' THEN 0
-                    WHEN 'medio' THEN 1
-                    ELSE 2
-                END,
-                rc.ultima_deteccao DESC
-            LIMIT 500
+                rv.ativa DESC,
+                rv.validado_em DESC
+            LIMIT 1000
         `);
 
         res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.patch('/restricoes-validadas/:id', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const resultado = await pool.query(`
+            UPDATE restricoes_validadas
+            SET
+                ativa = COALESCE($1, ativa),
+                limite_altura = COALESCE($2, limite_altura),
+                limite_largura = COALESCE($3, limite_largura),
+                limite_comprimento = COALESCE($4, limite_comprimento),
+                limite_peso = COALESCE($5, limite_peso),
+                limite_eixo = COALESCE($6, limite_eixo),
+                observacao = COALESCE($7, observacao),
+                evidencia_url = COALESCE($8, evidencia_url),
+                atualizada_em = CURRENT_TIMESTAMP
+            WHERE id = $9
+            RETURNING *
+        `, [
+            req.body?.ativa ?? null,
+            valorPositivoOuNulo(req.body?.limite_altura),
+            valorPositivoOuNulo(req.body?.limite_largura),
+            valorPositivoOuNulo(req.body?.limite_comprimento),
+            valorPositivoOuNulo(req.body?.limite_peso),
+            valorPositivoOuNulo(req.body?.limite_eixo),
+            req.body?.observacao || null,
+            req.body?.evidencia_url || null,
+            req.params.id
+        ]);
+
+        if (!resultado.rows.length) {
+            return res.status(404).json({ erro: 'Restrição global não encontrada' });
+        }
+
+        res.json({
+            mensagem: 'Restrição global atualizada.',
+            restricao: resultado.rows[0]
+        });
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.post('/viagens/:id/precheck-seguranca', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const r = await pool.query(`
+            SELECT
+                vg.*,
+                v.comprimento,
+                v.largura,
+                COALESCE(vg.peso_total, v.peso) AS peso_operacional,
+                COALESCE(re.dados_geojson, ro.dados_geojson) AS dados_geojson
+            FROM viagens vg
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            JOIN rotas ro ON ro.id = vg.id_rota
+            LEFT JOIN rotas_especificas re ON re.id = vg.id_rota_especifica
+            WHERE vg.id = $1
+            LIMIT 1
+        `, [req.params.id]);
+
+        if (!r.rows.length) {
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
+        }
+
+        const vg = r.rows[0];
+
+        const check = await preChecarRotaSegura({
+            geojson: vg.dados_geojson,
+            comprimento: vg.comprimento,
+            largura: vg.largura,
+            altura: vg.altura_total,
+            peso: vg.peso_operacional
+        });
+
+        const liberacao = check.liberada ? 'liberada' : 'bloqueada';
+
+        await pool.query(`
+            UPDATE viagens
+            SET
+                liberacao_rota = $1,
+                checagem_seguranca = $2::jsonb
+            WHERE id = $3
+        `, [
+            liberacao,
+            JSON.stringify(check),
+            vg.id
+        ]);
+
+        res.json({
+            liberacao_rota: liberacao,
+            checagem: check
+        });
+
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
     }
