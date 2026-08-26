@@ -374,6 +374,35 @@ async function criarTabelas() {
         ON historico_localizacoes(id_viagem, registrado_em ASC)
     `);
 
+    // V21 - telemetria bruta para aprendizado futuro (somente coleta)
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS velocidade_kmh DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS precisao_m DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS direcao_graus DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS altitude_m DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS timestamp_dispositivo TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE historico_localizacoes ADD COLUMN IF NOT EXISTS origem_coleta VARCHAR(20) DEFAULT 'gps_app'`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS resumo_coleta_viagem (
+            id_viagem INTEGER PRIMARY KEY,
+            id_veiculo INTEGER,
+            id_motorista INTEGER,
+            primeiro_gps_em TIMESTAMPTZ,
+            ultimo_gps_em TIMESTAMPTZ,
+            total_pontos INTEGER DEFAULT 0,
+            pontos_com_velocidade INTEGER DEFAULT 0,
+            soma_velocidade_kmh DOUBLE PRECISION DEFAULT 0,
+            velocidade_max_kmh DOUBLE PRECISION,
+            soma_precisao_m DOUBLE PRECISION DEFAULT 0,
+            pontos_com_precisao INTEGER DEFAULT 0,
+            distancia_gps_bruta_km DOUBLE PRECISION DEFAULT 0,
+            ultima_lat DOUBLE PRECISION,
+            ultima_lon DOUBLE PRECISION,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+
     // Localizações
     await pool.query(`
         CREATE TABLE IF NOT EXISTS localizacoes (
@@ -927,7 +956,13 @@ const schemas = {
 
     localizacao: Joi.object({
         lat: Joi.number().min(-90).max(90).required(),
-        lon: Joi.number().min(-180).max(180).required()
+        lon: Joi.number().min(-180).max(180).required(),
+        velocidade_kmh: Joi.number().min(0).max(250).allow(null).optional(),
+        precisao_m: Joi.number().min(0).max(5000).allow(null).optional(),
+        direcao_graus: Joi.number().min(0).max(360).allow(null).optional(),
+        altitude_m: Joi.number().min(-500).max(10000).allow(null).optional(),
+        timestamp_dispositivo: Joi.date().iso().allow(null).optional(),
+        origem_coleta: Joi.string().valid('gps_app','offline_sync','simulacao').optional()
     }),
 
     status: Joi.object({
@@ -6648,6 +6683,18 @@ app.delete('/reportes', autenticar, async (req, res) => {
     }
 });
 
+function distanciaKmEntrePontos(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const rad = v => Number(v) * Math.PI / 180;
+    const dLat = rad(lat2 - lat1);
+    const dLon = rad(lon2 - lon1);
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(rad(lat1)) * Math.cos(rad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // ======================================================
 // LOCALIZAÇÕES
 // ======================================================
@@ -6702,18 +6749,128 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
                 ultima_atualizacao = CURRENT_TIMESTAMP
         `, [req.usuario.id, req.body.lat, req.body.lon]);
 
-        // Grava histórico no máximo a cada 30 segundos por motorista.
-        await pool.query(`
+        // V21: coleta real em background, sem uso decisório.
+        const pontoAnterior = idViagem
+            ? await pool.query(`
+                SELECT lat, lon
+                FROM historico_localizacoes
+                WHERE id_viagem = $1
+                ORDER BY registrado_em DESC
+                LIMIT 1
+            `, [idViagem])
+            : { rows: [] };
+
+        const inserido = await pool.query(`
             INSERT INTO historico_localizacoes
-                (id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em)
-            SELECT $1,$2,$3,$4,$5,CURRENT_TIMESTAMP
+            (
+                id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em,
+                velocidade_kmh,precisao_m,direcao_graus,altitude_m,
+                timestamp_dispositivo,origem_coleta
+            )
+            SELECT
+                $1,$2,$3,$4,$5,CURRENT_TIMESTAMP,
+                $6,$7,$8,$9,$10,$11
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM historico_localizacoes
                 WHERE id_motorista = $1
                   AND registrado_em > CURRENT_TIMESTAMP - INTERVAL '30 seconds'
             )
-        `, [req.usuario.id, idVeiculo, idViagem, req.body.lat, req.body.lon]);
+            RETURNING id
+        `, [
+            req.usuario.id,idVeiculo,idViagem,req.body.lat,req.body.lon,
+            req.body.velocidade_kmh ?? null,
+            req.body.precisao_m ?? null,
+            req.body.direcao_graus ?? null,
+            req.body.altitude_m ?? null,
+            req.body.timestamp_dispositivo || null,
+            req.body.origem_coleta || 'gps_app'
+        ]);
+
+        if (idViagem && inserido.rowCount > 0) {
+            let distanciaIncrementalKm = 0;
+
+            if (pontoAnterior.rows.length) {
+                const p = pontoAnterior.rows[0];
+                distanciaIncrementalKm = distanciaKmEntrePontos(
+                    Number(p.lat), Number(p.lon),
+                    Number(req.body.lat), Number(req.body.lon)
+                );
+
+                if (
+                    !Number.isFinite(distanciaIncrementalKm) ||
+                    distanciaIncrementalKm < 0 ||
+                    distanciaIncrementalKm > 5
+                ) {
+                    distanciaIncrementalKm = 0;
+                }
+            }
+
+            const vel =
+                req.body.velocidade_kmh !== null &&
+                req.body.velocidade_kmh !== undefined
+                    ? Number(req.body.velocidade_kmh)
+                    : null;
+
+            const precisao =
+                req.body.precisao_m !== null &&
+                req.body.precisao_m !== undefined
+                    ? Number(req.body.precisao_m)
+                    : null;
+
+            await pool.query(`
+                INSERT INTO resumo_coleta_viagem
+                (
+                    id_viagem,id_veiculo,id_motorista,
+                    primeiro_gps_em,ultimo_gps_em,total_pontos,
+                    pontos_com_velocidade,soma_velocidade_kmh,velocidade_max_kmh,
+                    soma_precisao_m,pontos_com_precisao,
+                    distancia_gps_bruta_km,ultima_lat,ultima_lon,atualizado_em
+                )
+                VALUES (
+                    $1,$2,$3,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,1,
+                    $4,$5,$6,$7,$8,$9,$10,$11,CURRENT_TIMESTAMP
+                )
+                ON CONFLICT (id_viagem)
+                DO UPDATE SET
+                    ultimo_gps_em = CURRENT_TIMESTAMP,
+                    total_pontos = resumo_coleta_viagem.total_pontos + 1,
+                    pontos_com_velocidade =
+                        resumo_coleta_viagem.pontos_com_velocidade + EXCLUDED.pontos_com_velocidade,
+                    soma_velocidade_kmh =
+                        resumo_coleta_viagem.soma_velocidade_kmh + EXCLUDED.soma_velocidade_kmh,
+                    velocidade_max_kmh =
+                        CASE
+                            WHEN EXCLUDED.velocidade_max_kmh IS NULL
+                                THEN resumo_coleta_viagem.velocidade_max_kmh
+                            WHEN resumo_coleta_viagem.velocidade_max_kmh IS NULL
+                                THEN EXCLUDED.velocidade_max_kmh
+                            ELSE GREATEST(
+                                resumo_coleta_viagem.velocidade_max_kmh,
+                                EXCLUDED.velocidade_max_kmh
+                            )
+                        END,
+                    soma_precisao_m =
+                        resumo_coleta_viagem.soma_precisao_m + EXCLUDED.soma_precisao_m,
+                    pontos_com_precisao =
+                        resumo_coleta_viagem.pontos_com_precisao + EXCLUDED.pontos_com_precisao,
+                    distancia_gps_bruta_km =
+                        resumo_coleta_viagem.distancia_gps_bruta_km + EXCLUDED.distancia_gps_bruta_km,
+                    ultima_lat = EXCLUDED.ultima_lat,
+                    ultima_lon = EXCLUDED.ultima_lon,
+                    atualizado_em = CURRENT_TIMESTAMP
+            `, [
+                idViagem,idVeiculo,req.usuario.id,
+                vel !== null ? 1 : 0,
+                vel || 0,
+                vel,
+                precisao || 0,
+                precisao !== null ? 1 : 0,
+                distanciaIncrementalKm,
+                Number(req.body.lat),
+                Number(req.body.lon)
+            ]);
+        }
 
         let monitoramento = null;
 
@@ -6758,6 +6915,34 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
     } catch (erro) {
         console.error('❌ Localização:', erro);
         res.status(500).json({ erro: erro.message });
+    }
+});
+
+
+app.get('/coleta-producao/viagens/:id', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro:'Acesso negado' });
+    }
+
+    try {
+        const r = await pool.query(`
+            SELECT
+                rc.*,
+                CASE WHEN rc.pontos_com_velocidade > 0
+                    THEN rc.soma_velocidade_kmh / rc.pontos_com_velocidade
+                    ELSE NULL
+                END AS velocidade_media_gps_kmh,
+                CASE WHEN rc.pontos_com_precisao > 0
+                    THEN rc.soma_precisao_m / rc.pontos_com_precisao
+                    ELSE NULL
+                END AS precisao_media_m
+            FROM resumo_coleta_viagem rc
+            WHERE rc.id_viagem = $1
+        `, [req.params.id]);
+
+        res.json(r.rows[0] || null);
+    } catch (erro) {
+        res.status(500).json({ erro:erro.message });
     }
 });
 
