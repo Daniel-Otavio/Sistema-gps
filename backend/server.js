@@ -544,6 +544,217 @@ async function criarTabelas() {
         ADD COLUMN IF NOT EXISTS checagem_seguranca JSONB DEFAULT '{}'::jsonb
     `);
 
+    // Aprovação formal da viagem.
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS status_aprovacao VARCHAR(30) DEFAULT 'aguardando_aprovacao'
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS aprovado_por INTEGER
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS aprovado_em TIMESTAMPTZ
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS observacao_aprovacao TEXT
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS versao_aprovacao INTEGER DEFAULT 0
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS snapshot_seguranca_aprovado JSONB DEFAULT '{}'::jsonb
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS aprovacao_invalidada_em TIMESTAMPTZ
+    `);
+
+    await pool.query(`
+        ALTER TABLE viagens
+        ADD COLUMN IF NOT EXISTS motivo_invalidacao_aprovacao TEXT
+    `);
+
+    // Registros antigos seguros ficam aguardando aprovação formal.
+    await pool.query(`
+        UPDATE viagens
+        SET status_aprovacao =
+            CASE
+                WHEN COALESCE(liberacao_rota, 'liberada') = 'bloqueada'
+                    THEN 'bloqueada'
+                ELSE COALESCE(status_aprovacao, 'aguardando_aprovacao')
+            END
+        WHERE status IN ('planejada','em_andamento')
+    `);
+
+    // Trilha imutável de auditoria operacional.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS auditoria_viagens (
+            id BIGSERIAL PRIMARY KEY,
+            id_viagem INTEGER NOT NULL,
+            id_usuario INTEGER,
+            tipo_usuario VARCHAR(30),
+            acao VARCHAR(80) NOT NULL,
+            status_anterior VARCHAR(50),
+            status_novo VARCHAR(50),
+            detalhes JSONB DEFAULT '{}'::jsonb,
+            ip VARCHAR(120),
+            user_agent TEXT,
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+            CONSTRAINT fk_auditoria_viagem
+                FOREIGN KEY (id_viagem)
+                REFERENCES viagens(id)
+                ON DELETE CASCADE,
+
+            CONSTRAINT fk_auditoria_usuario
+                FOREIGN KEY (id_usuario)
+                REFERENCES usuarios(id)
+                ON DELETE SET NULL
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_auditoria_viagens_viagem_data
+        ON auditoria_viagens(id_viagem, criado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_auditoria_viagens_data
+        ON auditoria_viagens(criado_em DESC)
+    `);
+
+    // V18 - snapshot/versionamento imutável da rota aprovada
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS rota_aprovada_geojson JSONB`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS id_rota_especifica_aprovada INTEGER`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS versao_rota_aprovada INTEGER`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS rota_aprovada_em TIMESTAMPTZ`);
+
+    // V18 - monitor operacional em tempo real
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS estado_monitoramento VARCHAR(30) DEFAULT 'normal'`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS desvio_inicio_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS gps_offline_desde TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS ultima_revalidacao_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS ultima_distancia_rota_km DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS ultimo_progresso DOUBLE PRECISION DEFAULT 0`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS ultima_eta_calculada TIMESTAMPTZ`);
+
+    // V19 - dados econômicos do veículo
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS consumo_medio_km_l DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS tipo_combustivel VARCHAR(30) DEFAULT 'diesel'`);
+    await pool.query(`ALTER TABLE veiculos ADD COLUMN IF NOT EXISTS preco_combustivel_ref DOUBLE PRECISION`);
+
+    // V19 - estimativas e inteligência salvas na viagem
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS distancia_estimada_km DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS duracao_estimada_min DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS combustivel_estimado_l DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS custo_combustivel_estimado DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS score_rota INTEGER`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS memoria_rota_snapshot JSONB DEFAULT '{}'::jsonb`);
+
+    // Memória privada da frota por rota + configuração operacional
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS memoria_rotas_operacionais (
+            id BIGSERIAL PRIMARY KEY,
+            id_rota INTEGER NOT NULL,
+            assinatura_config VARCHAR(160) NOT NULL,
+
+            comprimento DOUBLE PRECISION,
+            largura DOUBLE PRECISION,
+            altura DOUBLE PRECISION,
+            peso DOUBLE PRECISION,
+
+            viagens_total INTEGER DEFAULT 0,
+            viagens_sem_ocorrencia INTEGER DEFAULT 0,
+            viagens_com_desvio INTEGER DEFAULT 0,
+            incidentes_total INTEGER DEFAULT 0,
+
+            duracao_media_min DOUBLE PRECISION,
+            combustivel_medio_l DOUBLE PRECISION,
+
+            score_confiabilidade INTEGER DEFAULT 50,
+            ultima_viagem_em TIMESTAMPTZ,
+            atualizada_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE(id_rota, assinatura_config)
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_memoria_rota_config
+        ON memoria_rotas_operacionais(id_rota, assinatura_config)
+    `);
+
+    // Passagens reais da frota por restrições validadas
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS passagens_restricoes (
+            id BIGSERIAL PRIMARY KEY,
+            id_restricao BIGINT NOT NULL,
+            id_viagem INTEGER NOT NULL,
+            id_veiculo INTEGER NOT NULL,
+
+            comprimento DOUBLE PRECISION,
+            largura DOUBLE PRECISION,
+            altura DOUBLE PRECISION,
+            peso DOUBLE PRECISION,
+
+            passou_sem_ocorrencia BOOLEAN DEFAULT TRUE,
+            registrado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE(id_restricao, id_viagem)
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_passagens_restricao
+        ON passagens_restricoes(id_restricao, registrado_em DESC)
+    `);
+
+    // V20 - consumo real da viagem
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_real_km_l DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS combustivel_real_l DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS custo_combustivel_real DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS variacao_consumo_percentual DOUBLE PRECISION`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_anormal BOOLEAN DEFAULT FALSE`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_informado_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_informado_por INTEGER`);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS historico_consumo_viagens (
+            id BIGSERIAL PRIMARY KEY,
+            id_viagem INTEGER NOT NULL UNIQUE,
+            id_veiculo INTEGER NOT NULL,
+            id_rota INTEGER NOT NULL,
+            distancia_km DOUBLE PRECISION,
+            consumo_real_km_l DOUBLE PRECISION NOT NULL,
+            combustivel_real_l DOUBLE PRECISION,
+            custo_real DOUBLE PRECISION,
+            consumo_previsto_km_l DOUBLE PRECISION,
+            combustivel_previsto_l DOUBLE PRECISION,
+            variacao_percentual DOUBLE PRECISION,
+            consumo_anormal BOOLEAN DEFAULT FALSE,
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_hist_consumo_veiculo_rota
+        ON historico_consumo_viagens(id_veiculo, id_rota, criado_em DESC)
+    `);
+
+
+
+
     // Índices
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_motorista ON rotas(id_motorista)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_rotas_veiculo ON rotas(id_veiculo)`);
@@ -653,7 +864,10 @@ const schemas = {
         modelo: Joi.string().allow('').optional(),
         comprimento: Joi.number().positive().required(),
         largura: Joi.number().positive().required(),
-        peso: Joi.number().positive().required()
+        peso: Joi.number().positive().required(),
+        consumo_medio_km_l: Joi.number().positive().allow(null).optional(),
+        tipo_combustivel: Joi.string().max(30).allow('').optional(),
+        preco_combustivel_ref: Joi.number().positive().allow(null).optional()
     }),
 
     motorista: Joi.object({
@@ -1363,6 +1577,9 @@ app.get('/veiculos', autenticar, async (req, res) => {
             SELECT
                 v.id, v.placa, v.frota, v.modelo,
                 v.comprimento, v.largura, v.peso,
+                v.consumo_medio_km_l,
+                v.tipo_combustivel,
+                v.preco_combustivel_ref,
                 v.ativo, v.created_at,
                 u.id AS id_motorista, u.nome AS motorista, u.email
             FROM veiculos v
@@ -1384,8 +1601,14 @@ app.post('/veiculos', autenticar, validar(schemas.veiculo), async (req, res) => 
         const placa = normalizarPlaca(req.body.placa);
         const resultado = await pool.query(`
             INSERT INTO veiculos
-                (placa,frota,modelo,comprimento,largura,peso)
-            VALUES ($1,$2,$3,$4,$5,$6)
+                (
+                    placa,frota,modelo,
+                    comprimento,largura,peso,
+                    consumo_medio_km_l,
+                    tipo_combustivel,
+                    preco_combustivel_ref
+                )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             RETURNING *
         `, [
             placa,
@@ -1393,7 +1616,10 @@ app.post('/veiculos', autenticar, validar(schemas.veiculo), async (req, res) => 
             req.body.modelo || null,
             req.body.comprimento,
             req.body.largura,
-            req.body.peso
+            req.body.peso,
+            req.body.consumo_medio_km_l || null,
+            req.body.tipo_combustivel || 'diesel',
+            req.body.preco_combustivel_ref || null
         ]);
 
         res.status(201).json(resultado.rows[0]);
@@ -1415,8 +1641,11 @@ app.put('/veiculos/:id', autenticar, validar(schemas.veiculo), async (req, res) 
                 modelo = $3,
                 comprimento = $4,
                 largura = $5,
-                peso = $6
-            WHERE id = $7
+                peso = $6,
+                consumo_medio_km_l = $7,
+                tipo_combustivel = $8,
+                preco_combustivel_ref = $9
+            WHERE id = $10
             RETURNING *
         `, [
             placa,
@@ -1425,6 +1654,9 @@ app.put('/veiculos/:id', autenticar, validar(schemas.veiculo), async (req, res) 
             req.body.comprimento,
             req.body.largura,
             req.body.peso,
+            req.body.consumo_medio_km_l || null,
+            req.body.tipo_combustivel || 'diesel',
+            req.body.preco_combustivel_ref || null,
             req.params.id
         ]);
 
@@ -2033,6 +2265,1142 @@ async function carregarInfraestruturaANTT() {
 // ======================================================
 // BASE GLOBAL VALIDADA + MOTOR DE SEGURANÇA
 // ======================================================
+
+// ======================================================
+// APROVAÇÃO FORMAL / AUDITORIA
+// ======================================================
+async function registrarAuditoriaViagem({
+    client = pool,
+    idViagem,
+    usuario = null,
+    acao,
+    statusAnterior = null,
+    statusNovo = null,
+    detalhes = {},
+    req = null
+}) {
+    try {
+        await client.query(`
+            INSERT INTO auditoria_viagens
+            (
+                id_viagem,
+                id_usuario,
+                tipo_usuario,
+                acao,
+                status_anterior,
+                status_novo,
+                detalhes,
+                ip,
+                user_agent
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9)
+        `, [
+            idViagem,
+            usuario?.id || null,
+            usuario?.tipo || null,
+            acao,
+            statusAnterior,
+            statusNovo,
+            JSON.stringify(detalhes || {}),
+            req?.ip || null,
+            req?.headers?.['user-agent'] || null
+        ]);
+    } catch (erro) {
+        // Auditoria não deve derrubar o fluxo principal por falha isolada.
+        console.error('⚠️ Falha ao registrar auditoria:', erro.message);
+    }
+}
+
+
+// ======================================================
+// V18 - MONITORAMENTO DE SEGURANÇA EM TEMPO REAL
+// ======================================================
+
+// ======================================================
+// V19 - INTELIGÊNCIA / MEMÓRIA OPERACIONAL
+// ======================================================
+
+async function obterMediaConsumoHistorica({ idVeiculo, idRota, client = pool }) {
+    const r = await client.query(`
+        SELECT
+            AVG(consumo_real_km_l) AS media_geral,
+            AVG(consumo_real_km_l) FILTER (
+                WHERE criado_em >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+            ) AS media_30_dias,
+            COUNT(*)::int AS viagens_total
+        FROM historico_consumo_viagens
+        WHERE id_veiculo = $1 AND id_rota = $2
+    `, [idVeiculo, idRota]);
+
+    const row = r.rows[0] || {};
+
+    return {
+        media_geral: row.media_geral !== null ? Number(row.media_geral) : null,
+        media_30_dias: row.media_30_dias !== null ? Number(row.media_30_dias) : null,
+        viagens_total: Number(row.viagens_total || 0)
+    };
+}
+
+async function registrarConsumoRealViagem({
+    viagem,
+    consumoRealKmL,
+    client = pool,
+    usuario = null,
+    req = null
+}) {
+    const consumo = Number(consumoRealKmL);
+
+    if (!Number.isFinite(consumo) || consumo <= 0 || consumo > 20) {
+        throw new Error('Média de consumo inválida. Informe em km/L.');
+    }
+
+    const distanciaKm = Number(viagem.distancia_estimada_km || 0);
+    const combustivelReal = distanciaKm > 0 ? distanciaKm / consumo : null;
+    const precoRef = Number(viagem.preco_combustivel_ref || 0);
+    const custoReal =
+        combustivelReal !== null && precoRef > 0
+            ? combustivelReal * precoRef
+            : null;
+
+    const previstoKmL = Number(viagem.consumo_medio_km_l || 0);
+    const variacao =
+        previstoKmL > 0
+            ? ((consumo - previstoKmL) / previstoKmL) * 100
+            : null;
+
+    const hist = await obterMediaConsumoHistorica({
+        idVeiculo: viagem.id_veiculo,
+        idRota: viagem.id_rota,
+        client
+    });
+
+    const referencia =
+        hist.media_30_dias ||
+        hist.media_geral ||
+        (previstoKmL > 0 ? previstoKmL : null);
+
+    const desvioRef =
+        referencia
+            ? ((consumo - Number(referencia)) / Number(referencia)) * 100
+            : null;
+
+    const anormal =
+        desvioRef !== null &&
+        desvioRef <= -15;
+
+    await client.query(`
+        UPDATE viagens
+        SET
+            consumo_real_km_l = $1,
+            combustivel_real_l = $2,
+            custo_combustivel_real = $3,
+            variacao_consumo_percentual = $4,
+            consumo_anormal = $5,
+            consumo_informado_em = CURRENT_TIMESTAMP,
+            consumo_informado_por = $6
+        WHERE id = $7
+    `, [
+        consumo,
+        combustivelReal,
+        custoReal,
+        variacao,
+        anormal,
+        usuario?.id || null,
+        viagem.id
+    ]);
+
+    await client.query(`
+        INSERT INTO historico_consumo_viagens
+        (
+            id_viagem,id_veiculo,id_rota,distancia_km,
+            consumo_real_km_l,combustivel_real_l,custo_real,
+            consumo_previsto_km_l,combustivel_previsto_l,
+            variacao_percentual,consumo_anormal
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (id_viagem)
+        DO UPDATE SET
+            distancia_km = EXCLUDED.distancia_km,
+            consumo_real_km_l = EXCLUDED.consumo_real_km_l,
+            combustivel_real_l = EXCLUDED.combustivel_real_l,
+            custo_real = EXCLUDED.custo_real,
+            consumo_previsto_km_l = EXCLUDED.consumo_previsto_km_l,
+            combustivel_previsto_l = EXCLUDED.combustivel_previsto_l,
+            variacao_percentual = EXCLUDED.variacao_percentual,
+            consumo_anormal = EXCLUDED.consumo_anormal
+    `, [
+        viagem.id,
+        viagem.id_veiculo,
+        viagem.id_rota,
+        distanciaKm || null,
+        consumo,
+        combustivelReal,
+        custoReal,
+        previstoKmL || null,
+        viagem.combustivel_estimado_l || null,
+        variacao,
+        anormal
+    ]);
+
+    await registrarAuditoriaViagem({
+        client,
+        idViagem: viagem.id,
+        usuario,
+        acao: anormal ? 'CONSUMO_REAL_ANORMAL' : 'CONSUMO_REAL_INFORMADO',
+        statusAnterior: null,
+        statusNovo: anormal ? 'consumo_anormal' : 'consumo_ok',
+        detalhes: {
+            consumo_real_km_l: consumo,
+            consumo_previsto_km_l: previstoKmL || null,
+            combustivel_real_l: combustivelReal,
+            combustivel_previsto_l: viagem.combustivel_estimado_l || null,
+            variacao_percentual: variacao,
+            media_historica_referencia: referencia,
+            desvio_referencia_percentual: desvioRef
+        },
+        req
+    });
+
+    return {
+        consumo_real_km_l: consumo,
+        combustivel_real_l:
+            combustivelReal !== null ? Number(combustivelReal.toFixed(1)) : null,
+        custo_combustivel_real:
+            custoReal !== null ? Number(custoReal.toFixed(2)) : null,
+        variacao_percentual:
+            variacao !== null ? Number(variacao.toFixed(1)) : null,
+        consumo_anormal: anormal,
+        media_historica_referencia:
+            referencia !== null ? Number(Number(referencia).toFixed(2)) : null,
+        desvio_referencia_percentual:
+            desvioRef !== null ? Number(desvioRef.toFixed(1)) : null
+    };
+}
+
+function assinaturaConfigOperacional({
+    comprimento,
+    largura,
+    altura,
+    peso
+}) {
+    // Agrupa configurações equivalentes para reaproveitar histórico.
+    const c = Math.round(Number(comprimento || 0) * 2) / 2;
+    const l = Math.round(Number(largura || 0) * 20) / 20;
+    const a = Math.round(Number(altura || 0) * 20) / 20;
+    const p = Math.round(Number(peso || 0) / 2) * 2;
+
+    return `C${c}|L${l}|A${a}|P${p}`;
+}
+
+function calcularScoreMemoria(memoria) {
+    const total = Number(memoria?.viagens_total || 0);
+    const boas = Number(memoria?.viagens_sem_ocorrencia || 0);
+    const desvios = Number(memoria?.viagens_com_desvio || 0);
+    const incidentes = Number(memoria?.incidentes_total || 0);
+
+    if (total <= 0) return 55;
+
+    const taxaBoa = boas / total;
+
+    let score =
+        45 +
+        taxaBoa * 35 +
+        Math.min(15, total * 2) -
+        Math.min(15, desvios * 3) -
+        Math.min(20, incidentes * 5);
+
+    return Math.max(
+        0,
+        Math.min(
+            100,
+            Math.round(score)
+        )
+    );
+}
+
+async function obterMemoriaOperacional({
+    idRota,
+    assinatura,
+    client = pool
+}) {
+    const r = await client.query(`
+        SELECT *
+        FROM memoria_rotas_operacionais
+        WHERE id_rota = $1
+          AND assinatura_config = $2
+        LIMIT 1
+    `, [
+        idRota,
+        assinatura
+    ]);
+
+    return r.rows[0] || null;
+}
+
+async function calcularEstimativaViagem({
+    idRota,
+    geojson,
+    comprimento,
+    largura,
+    altura,
+    peso,
+    consumoKmL,
+    precoLitro,
+    client = pool
+}) {
+    const assinatura =
+        assinaturaConfigOperacional({
+            comprimento,
+            largura,
+            altura,
+            peso
+        });
+
+    const memoria =
+        await obterMemoriaOperacional({
+            idRota,
+            assinatura,
+            client
+        });
+
+    const resumo =
+        resumoGeoJsonRota(
+            geojson
+        );
+
+    const distanciaKm =
+        resumo.distancia_m > 0
+            ? resumo.distancia_m / 1000
+            : 0;
+
+    let duracaoMin =
+        resumo.duracao_s > 0
+            ? resumo.duracao_s / 60
+            : null;
+
+    // Quando já existe histórico real, dá peso ao tempo real da frota.
+    if (
+        memoria &&
+        Number(memoria.duracao_media_min) > 0
+    ) {
+        duracaoMin =
+            duracaoMin
+                ? (
+                    duracaoMin * 0.55 +
+                    Number(memoria.duracao_media_min) * 0.45
+                )
+                : Number(memoria.duracao_media_min);
+    }
+
+    const consumo =
+        Number(consumoKmL);
+
+    const combustivelL =
+        distanciaKm > 0 &&
+        Number.isFinite(consumo) &&
+        consumo > 0
+            ? distanciaKm / consumo
+            : null;
+
+    const preco =
+        Number(precoLitro);
+
+    const custo =
+        combustivelL !== null &&
+        Number.isFinite(preco) &&
+        preco > 0
+            ? combustivelL * preco
+            : null;
+
+    const score =
+        memoria
+            ? calcularScoreMemoria(memoria)
+            : 55;
+
+    return {
+        assinatura_config:
+            assinatura,
+
+        distancia_estimada_km:
+            distanciaKm > 0
+                ? Number(
+                    distanciaKm.toFixed(1)
+                )
+                : null,
+
+        duracao_estimada_min:
+            duracaoMin !== null
+                ? Number(
+                    duracaoMin.toFixed(0)
+                )
+                : null,
+
+        combustivel_estimado_l:
+            combustivelL !== null
+                ? Number(
+                    combustivelL.toFixed(1)
+                )
+                : null,
+
+        custo_combustivel_estimado:
+            custo !== null
+                ? Number(
+                    custo.toFixed(2)
+                )
+                : null,
+
+        score_rota:
+            score,
+
+        memoria: memoria
+            ? {
+                viagens_total:
+                    Number(memoria.viagens_total || 0),
+                viagens_sem_ocorrencia:
+                    Number(memoria.viagens_sem_ocorrencia || 0),
+                viagens_com_desvio:
+                    Number(memoria.viagens_com_desvio || 0),
+                incidentes_total:
+                    Number(memoria.incidentes_total || 0),
+                duracao_media_min:
+                    memoria.duracao_media_min !== null
+                        ? Number(memoria.duracao_media_min)
+                        : null,
+                combustivel_medio_l:
+                    memoria.combustivel_medio_l !== null
+                        ? Number(memoria.combustivel_medio_l)
+                        : null,
+                score_confiabilidade:
+                    Number(memoria.score_confiabilidade || score),
+                ultima_viagem_em:
+                    memoria.ultima_viagem_em || null
+            }
+            : {
+                viagens_total:0,
+                viagens_sem_ocorrencia:0,
+                viagens_com_desvio:0,
+                incidentes_total:0,
+                score_confiabilidade:55
+            }
+    };
+}
+
+async function salvarEstimativaInteligenciaViagem({
+    viagemId,
+    idRota,
+    geojson,
+    comprimento,
+    largura,
+    altura,
+    peso,
+    consumoKmL,
+    precoLitro,
+    client = pool
+}) {
+    const estimativa =
+        await calcularEstimativaViagem({
+            idRota,
+            geojson,
+            comprimento,
+            largura,
+            altura,
+            peso,
+            consumoKmL,
+            precoLitro,
+            client
+        });
+
+    await client.query(`
+        UPDATE viagens
+        SET
+            distancia_estimada_km = $1,
+            duracao_estimada_min = $2,
+            combustivel_estimado_l = $3,
+            custo_combustivel_estimado = $4,
+            score_rota = $5,
+            memoria_rota_snapshot = $6::jsonb
+        WHERE id = $7
+    `, [
+        estimativa.distancia_estimada_km,
+        estimativa.duracao_estimada_min,
+        estimativa.combustivel_estimado_l,
+        estimativa.custo_combustivel_estimado,
+        estimativa.score_rota,
+        JSON.stringify(estimativa),
+        viagemId
+    ]);
+
+    return estimativa;
+}
+
+async function atualizarMemoriaAposConclusao({
+    viagem,
+    validacao,
+    client = pool
+}) {
+    const veiculoResult =
+        await client.query(`
+            SELECT
+                comprimento,
+                largura,
+                peso,
+                consumo_medio_km_l
+            FROM veiculos
+            WHERE id = $1
+            LIMIT 1
+        `, [
+            viagem.id_veiculo
+        ]);
+
+    const veiculo =
+        veiculoResult.rows[0];
+
+    if (!veiculo) return;
+
+    const assinatura =
+        assinaturaConfigOperacional({
+            comprimento:
+                veiculo.comprimento,
+            largura:
+                veiculo.largura,
+            altura:
+                viagem.altura_total,
+            peso:
+                viagem.peso_total ||
+                veiculo.peso
+        });
+
+    const duracaoRealMin =
+        viagem.saida_real
+            ? Math.max(
+                0,
+                (
+                    Date.now() -
+                    new Date(
+                        viagem.saida_real
+                    ).getTime()
+                ) / 60000
+            )
+            : null;
+
+    const reportesResult =
+        await client.query(`
+            SELECT COUNT(*)::int AS total
+            FROM incidentes
+            WHERE id_motorista = $1
+              AND criado_em >= COALESCE(
+                    $2::timestamptz,
+                    CURRENT_TIMESTAMP - INTERVAL '2 days'
+                  )
+              AND criado_em <= CURRENT_TIMESTAMP
+        `, [
+            viagem.id_motorista,
+            viagem.saida_real
+        ]);
+
+    const incidentes =
+        Number(
+            reportesResult.rows[0]?.total || 0
+        );
+
+    const semOcorrencia =
+        !validacao.desvioLongo &&
+        incidentes === 0;
+
+    const combustivelEstimado =
+        Number(
+            viagem.combustivel_real_l ||
+            viagem.combustivel_estimado_l
+        );
+
+    const anterior =
+        await obterMemoriaOperacional({
+            idRota:
+                viagem.id_rota,
+            assinatura,
+            client
+        });
+
+    const totalAnterior =
+        Number(anterior?.viagens_total || 0);
+
+    const novaDuracaoMedia =
+        duracaoRealMin !== null
+            ? (
+                (
+                    Number(anterior?.duracao_media_min || 0) *
+                    totalAnterior
+                ) +
+                duracaoRealMin
+            ) /
+            (totalAnterior + 1)
+            : Number(
+                anterior?.duracao_media_min || 0
+            ) || null;
+
+    const novoCombMedio =
+        Number.isFinite(combustivelEstimado) &&
+        combustivelEstimado > 0
+            ? (
+                (
+                    Number(anterior?.combustivel_medio_l || 0) *
+                    totalAnterior
+                ) +
+                combustivelEstimado
+            ) /
+            (totalAnterior + 1)
+            : Number(
+                anterior?.combustivel_medio_l || 0
+            ) || null;
+
+    const novaMemoria = {
+        viagens_total:
+            totalAnterior + 1,
+
+        viagens_sem_ocorrencia:
+            Number(
+                anterior?.viagens_sem_ocorrencia || 0
+            ) +
+            (semOcorrencia ? 1 : 0),
+
+        viagens_com_desvio:
+            Number(
+                anterior?.viagens_com_desvio || 0
+            ) +
+            (validacao.desvioLongo ? 1 : 0),
+
+        incidentes_total:
+            Number(
+                anterior?.incidentes_total || 0
+            ) +
+            incidentes
+    };
+
+    const score =
+        calcularScoreMemoria(
+            novaMemoria
+        );
+
+    await client.query(`
+        INSERT INTO memoria_rotas_operacionais
+        (
+            id_rota,
+            assinatura_config,
+            comprimento,
+            largura,
+            altura,
+            peso,
+            viagens_total,
+            viagens_sem_ocorrencia,
+            viagens_com_desvio,
+            incidentes_total,
+            duracao_media_min,
+            combustivel_medio_l,
+            score_confiabilidade,
+            ultima_viagem_em,
+            atualizada_em
+        )
+        VALUES
+        (
+            $1,$2,$3,$4,$5,$6,
+            $7,$8,$9,$10,
+            $11,$12,$13,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT
+            (id_rota, assinatura_config)
+        DO UPDATE SET
+            viagens_total =
+                EXCLUDED.viagens_total,
+            viagens_sem_ocorrencia =
+                EXCLUDED.viagens_sem_ocorrencia,
+            viagens_com_desvio =
+                EXCLUDED.viagens_com_desvio,
+            incidentes_total =
+                EXCLUDED.incidentes_total,
+            duracao_media_min =
+                EXCLUDED.duracao_media_min,
+            combustivel_medio_l =
+                EXCLUDED.combustivel_medio_l,
+            score_confiabilidade =
+                EXCLUDED.score_confiabilidade,
+            ultima_viagem_em =
+                CURRENT_TIMESTAMP,
+            atualizada_em =
+                CURRENT_TIMESTAMP
+    `, [
+        viagem.id_rota,
+        assinatura,
+        veiculo.comprimento,
+        veiculo.largura,
+        viagem.altura_total,
+        viagem.peso_total ||
+            veiculo.peso,
+        novaMemoria.viagens_total,
+        novaMemoria.viagens_sem_ocorrencia,
+        novaMemoria.viagens_com_desvio,
+        novaMemoria.incidentes_total,
+        novaDuracaoMedia,
+        novoCombMedio,
+        score
+    ]);
+
+    // Registra evidência operacional de passagem
+    // somente por restrições globais próximas da rota aprovada.
+    const restricoes =
+        await buscarRestricoesValidadasAtivas(
+            client
+        );
+
+    const geojson =
+        viagem.rota_aprovada_geojson ||
+        viagem.rota_especifica_geojson;
+
+    if (geojson) {
+        for (const r of restricoes) {
+            const analise =
+                analisarPosicaoNaRota(
+                    geojson,
+                    Number(r.lat),
+                    Number(r.lng)
+                );
+
+            const raioKm =
+                Math.max(
+                    0.05,
+                    Number(
+                        r.raio_metros || 180
+                    ) / 1000
+                );
+
+            if (
+                analise.distanciaRotaKm !== null &&
+                Number(
+                    analise.distanciaRotaKm
+                ) <= raioKm
+            ) {
+                await client.query(`
+                    INSERT INTO passagens_restricoes
+                    (
+                        id_restricao,
+                        id_viagem,
+                        id_veiculo,
+                        comprimento,
+                        largura,
+                        altura,
+                        peso,
+                        passou_sem_ocorrencia
+                    )
+                    VALUES
+                    ($1,$2,$3,$4,$5,$6,$7,$8)
+                    ON CONFLICT
+                        (id_restricao, id_viagem)
+                    DO NOTHING
+                `, [
+                    r.id,
+                    viagem.id,
+                    viagem.id_veiculo,
+                    veiculo.comprimento,
+                    veiculo.largura,
+                    viagem.altura_total,
+                    viagem.peso_total ||
+                        veiculo.peso,
+                    semOcorrencia
+                ]);
+            }
+        }
+    }
+}
+
+
+function distanciaHaversineKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const rad = v => Number(v) * Math.PI / 180;
+
+    const dLat = rad(Number(lat2) - Number(lat1));
+    const dLon = rad(Number(lon2) - Number(lon1));
+
+    const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(rad(lat1)) *
+        Math.cos(rad(lat2)) *
+        Math.sin(dLon / 2) ** 2;
+
+    return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function resumoGeoJsonRota(geojson) {
+    const props = geojson?.features?.[0]?.properties || {};
+    const segmento = props?.segments?.[0] || {};
+    const summary = props?.summary || {};
+
+    return {
+        distancia_m:
+            Number(summary.distance) ||
+            Number(segmento.distance) ||
+            0,
+        duracao_s:
+            Number(summary.duration) ||
+            Number(segmento.duration) ||
+            0
+    };
+}
+
+async function calcularVelocidadeMediaRecente(idViagem, client = pool) {
+    const r = await client.query(`
+        SELECT lat, lon, registrado_em
+        FROM historico_localizacoes
+        WHERE id_viagem = $1
+          AND registrado_em > CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+        ORDER BY registrado_em DESC
+        LIMIT 12
+    `, [idViagem]);
+
+    if (r.rows.length < 2) return null;
+
+    let distanciaKm = 0;
+
+    for (let i = 1; i < r.rows.length; i++) {
+        distanciaKm += distanciaHaversineKm(
+            Number(r.rows[i - 1].lat),
+            Number(r.rows[i - 1].lon),
+            Number(r.rows[i].lat),
+            Number(r.rows[i].lon)
+        );
+    }
+
+    const novo = new Date(r.rows[0].registrado_em).getTime();
+    const antigo = new Date(r.rows[r.rows.length - 1].registrado_em).getTime();
+    const horas = Math.max(1 / 3600, (novo - antigo) / 3600000);
+    const kmh = distanciaKm / horas;
+
+    return Number.isFinite(kmh)
+        ? Math.max(0, Math.min(140, kmh))
+        : null;
+}
+
+async function atualizarEstadoDesvioTempoReal({
+    viagem,
+    lat,
+    lon,
+    client = pool,
+    usuario = null,
+    req = null
+}) {
+    const geojson =
+        viagem.rota_aprovada_geojson ||
+        viagem.dados_geojson;
+
+    if (!geojson) return null;
+
+    const analise = analisarPosicaoNaRota(
+        geojson,
+        Number(lat),
+        Number(lon)
+    );
+
+    const distancia = Number(analise.distanciaRotaKm);
+    const progresso = Number(analise.progresso || 0);
+
+    if (!Number.isFinite(distancia)) return null;
+
+    const anterior = viagem.estado_monitoramento || 'normal';
+    let novoEstado = anterior;
+    let desvioInicio = viagem.desvio_inicio_em || null;
+
+    if (distancia > 0.5) {
+        if (!desvioInicio) {
+            desvioInicio = new Date();
+        } else {
+            const persistencia =
+                Date.now() - new Date(desvioInicio).getTime();
+
+            if (
+                persistencia >= 90000 &&
+                anterior !== 'fora_rota'
+            ) {
+                novoEstado = 'fora_rota';
+
+                await registrarAuditoriaViagem({
+                    client,
+                    idViagem: viagem.id,
+                    usuario,
+                    acao: 'SAIU_DA_ROTA',
+                    statusAnterior: anterior,
+                    statusNovo: novoEstado,
+                    detalhes: {
+                        distancia_rota_km:
+                            Number(distancia.toFixed(3)),
+                        persistencia_segundos:
+                            Math.round(persistencia / 1000)
+                    },
+                    req
+                });
+            }
+        }
+
+    } else if (
+        distancia <= 0.2 &&
+        anterior === 'fora_rota'
+    ) {
+        novoEstado = 'normal';
+        desvioInicio = null;
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario,
+            acao: 'RETORNOU_A_ROTA',
+            statusAnterior: anterior,
+            statusNovo: novoEstado,
+            detalhes: {
+                distancia_rota_km:
+                    Number(distancia.toFixed(3))
+            },
+            req
+        });
+
+    } else if (distancia <= 0.3) {
+        desvioInicio = null;
+
+        if (
+            !['gps_offline','revisao_obrigatoria']
+                .includes(anterior)
+        ) {
+            novoEstado = 'normal';
+        }
+    }
+
+    await client.query(`
+        UPDATE viagens
+        SET
+            estado_monitoramento = $1,
+            desvio_inicio_em = $2,
+            ultima_distancia_rota_km = $3,
+            ultimo_progresso = $4,
+            gps_offline_desde = NULL
+        WHERE id = $5
+    `, [
+        novoEstado,
+        desvioInicio,
+        distancia,
+        progresso,
+        viagem.id
+    ]);
+
+    return {
+        distancia_rota_km: distancia,
+        progresso,
+        estado: novoEstado
+    };
+}
+
+async function revalidarAprovacaoViagem({
+    viagem,
+    client = pool,
+    usuario = null,
+    req = null
+}) {
+    if (
+        viagem.status !== 'planejada' ||
+        viagem.status_aprovacao !== 'aprovada'
+    ) {
+        return { alterada:false };
+    }
+
+    const ultima =
+        viagem.ultima_revalidacao_em
+            ? new Date(viagem.ultima_revalidacao_em).getTime()
+            : 0;
+
+    if (ultima && Date.now() - ultima < 60000) {
+        return { alterada:false };
+    }
+
+    const atual = await obterViagemParaAprovacao(
+        viagem.id,
+        client,
+        false
+    );
+
+    if (!atual) return { alterada:false };
+
+    const versaoAtual = Number(atual.rota_especifica_versao || 0);
+    const versaoAprovada = Number(atual.versao_rota_aprovada || 0);
+
+    let motivo = null;
+
+    if (
+        atual.id_rota_especifica_aprovada &&
+        atual.id_rota_especifica &&
+        Number(atual.id_rota_especifica_aprovada) !==
+            Number(atual.id_rota_especifica)
+    ) {
+        motivo =
+            'A rota específica vinculada à viagem mudou após a aprovação.';
+
+    } else if (
+        versaoAprovada > 0 &&
+        versaoAtual > 0 &&
+        versaoAprovada !== versaoAtual
+    ) {
+        motivo =
+            `A rota mudou da versão ${versaoAprovada} para ${versaoAtual}.`;
+    }
+
+    const check = await checarSegurancaFormalViagem(
+        {
+            ...atual,
+            dados_geojson:
+                atual.rota_aprovada_geojson ||
+                atual.dados_geojson
+        },
+        client
+    );
+
+    if (!check.liberada) {
+        motivo =
+            'Nova restrição global validada tornou a rota aprovada incompatível.';
+    }
+
+    if (motivo) {
+        await client.query(`
+            UPDATE viagens
+            SET
+                status_aprovacao = 'revisao_obrigatoria',
+                liberacao_rota = 'bloqueada',
+                estado_monitoramento = 'revisao_obrigatoria',
+                aprovacao_invalidada_em = CURRENT_TIMESTAMP,
+                motivo_invalidacao_aprovacao = $1,
+                ultima_revalidacao_em = CURRENT_TIMESTAMP
+            WHERE id = $2
+        `, [
+            motivo,
+            viagem.id
+        ]);
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario,
+            acao: 'APROVACAO_INVALIDADA',
+            statusAnterior: 'aprovada',
+            statusNovo: 'revisao_obrigatoria',
+            detalhes: {
+                motivo,
+                versao_rota_aprovada: versaoAprovada,
+                versao_rota_atual: versaoAtual,
+                checagem: check
+            },
+            req
+        });
+
+        return {
+            alterada:true,
+            motivo
+        };
+    }
+
+    await client.query(`
+        UPDATE viagens
+        SET ultima_revalidacao_em = CURRENT_TIMESTAMP
+        WHERE id = $1
+    `, [viagem.id]);
+
+    return { alterada:false };
+}
+
+async function processarGpsOfflineMonitoramento(viagens, req) {
+    const agora = Date.now();
+
+    for (const v of viagens) {
+        if (v.status !== 'em_andamento') continue;
+
+        const ultima =
+            v.ultima_atualizacao
+                ? new Date(v.ultima_atualizacao).getTime()
+                : 0;
+
+        const offline =
+            !ultima ||
+            agora - ultima > 5 * 60 * 1000;
+
+        if (
+            offline &&
+            v.estado_monitoramento !== 'gps_offline'
+        ) {
+            await pool.query(`
+                UPDATE viagens
+                SET
+                    estado_monitoramento = 'gps_offline',
+                    gps_offline_desde =
+                        COALESCE(gps_offline_desde, CURRENT_TIMESTAMP)
+                WHERE id = $1
+            `, [v.id]);
+
+            await registrarAuditoriaViagem({
+                idViagem: v.id,
+                usuario: req.usuario,
+                acao: 'GPS_OFFLINE',
+                statusAnterior:
+                    v.estado_monitoramento || 'normal',
+                statusNovo: 'gps_offline',
+                detalhes: {
+                    ultima_atualizacao:
+                        v.ultima_atualizacao || null
+                },
+                req
+            });
+        }
+    }
+}
+
+
+async function obterViagemParaAprovacao(idViagem, client = pool, lock = false) {
+    const result = await client.query(`
+        SELECT
+            vg.*,
+            v.placa,
+            v.frota,
+            v.modelo,
+            v.comprimento,
+            v.largura,
+            COALESCE(vg.peso_total, v.peso) AS peso_operacional,
+            r.nome AS rota_nome,
+            r.origem,
+            r.destino,
+            COALESCE(re.dados_geojson, r.dados_geojson) AS dados_geojson,
+            re.versao AS rota_especifica_versao
+        FROM viagens vg
+        JOIN veiculos v ON v.id = vg.id_veiculo
+        JOIN rotas r ON r.id = vg.id_rota
+        LEFT JOIN rotas_especificas re
+            ON re.id = vg.id_rota_especifica
+        WHERE vg.id = $1
+        LIMIT 1
+        ${lock ? 'FOR UPDATE OF vg' : ''}
+    `, [idViagem]);
+
+    return result.rows[0] || null;
+}
+
+async function checarSegurancaFormalViagem(viagem, client = pool) {
+    if (!viagem?.dados_geojson) {
+        throw new Error('Viagem sem geometria para pré-checagem.');
+    }
+
+    return preChecarRotaSegura({
+        geojson: viagem.dados_geojson,
+        comprimento: viagem.comprimento,
+        largura: viagem.largura,
+        altura: viagem.altura_total,
+        peso: viagem.peso_operacional,
+        client
+    });
+}
+
+
 function valorPositivoOuNulo(v) {
     if (v === null || v === undefined || v === '') return null;
     const n = Number(v);
@@ -2392,6 +3760,7 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
                 r.restricoes,
 
                 COALESCE(
+                    vg.rota_aprovada_geojson,
                     re.dados_geojson,
                     r.dados_geojson
                 ) AS dados_geojson,
@@ -2411,6 +3780,19 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
                 vg.id_rota_especifica,
                 vg.liberacao_rota,
                 vg.checagem_seguranca,
+                vg.status_aprovacao,
+                vg.aprovado_em,
+                vg.versao_aprovacao,
+                vg.distancia_estimada_km,
+                vg.duracao_estimada_min,
+                vg.combustivel_estimado_l,
+                vg.custo_combustivel_estimado,
+                vg.score_rota,
+                vg.consumo_real_km_l,
+                vg.combustivel_real_l,
+                vg.custo_combustivel_real,
+                vg.variacao_consumo_percentual,
+                vg.consumo_anormal,
 
                 v.id AS veiculo_id,
                 v.placa,
@@ -2434,6 +3816,7 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
             WHERE vg.id_veiculo = $1
               AND vg.status IN ('planejada', 'em_andamento')
               AND COALESCE(vg.liberacao_rota, 'liberada') <> 'bloqueada'
+              AND COALESCE(vg.status_aprovacao, 'aguardando_aprovacao') = 'aprovada'
 
             ORDER BY
                 CASE
@@ -2514,20 +3897,31 @@ async function finalizarSegurancaNovaViagem({
             ? 'liberada'
             : 'bloqueada';
 
+    const statusAprovacao =
+        check.liberada
+            ? 'aguardando_aprovacao'
+            : 'bloqueada';
+
     await client.query(`
         UPDATE viagens
         SET
             liberacao_rota = $1,
-            checagem_seguranca = $2::jsonb
-        WHERE id = $3
+            checagem_seguranca = $2::jsonb,
+            status_aprovacao = $3,
+            aprovado_por = NULL,
+            aprovado_em = NULL,
+            snapshot_seguranca_aprovado = '{}'::jsonb
+        WHERE id = $4
     `, [
         liberacao,
         JSON.stringify(check),
+        statusAprovacao,
         viagem.id
     ]);
 
     return {
         liberacao_rota: liberacao,
+        status_aprovacao: statusAprovacao,
         checagem_seguranca: check
     };
 }
@@ -2559,7 +3953,11 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
         const veiculoResult = await client.query(`
             SELECT
                 id, placa, frota, modelo,
-                comprimento, largura, peso, ativo
+                comprimento, largura, peso,
+                consumo_medio_km_l,
+                tipo_combustivel,
+                preco_combustivel_ref,
+                ativo
             FROM veiculos
             WHERE id = $1
             LIMIT 1
@@ -2827,6 +4225,35 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                     peso
                 });
 
+                const inteligencia = await salvarEstimativaInteligenciaViagem({
+                    viagemId: viagem.rows[0].id,
+                    idRota: req.body.id_rota,
+                    geojson: rotaEspecifica.dados_geojson,
+                    comprimento,
+                    largura,
+                    altura,
+                    peso,
+                    consumoKmL: veiculo.consumo_medio_km_l,
+                    precoLitro: veiculo.preco_combustivel_ref,
+                    client: client2
+                });
+
+                await registrarAuditoriaViagem({
+                    client: client2,
+                    idViagem: viagem.rows[0].id,
+                    usuario: req.usuario,
+                    acao: 'VIAGEM_CRIADA',
+                    statusAnterior: null,
+                    statusNovo: seguranca.status_aprovacao,
+                    detalhes: {
+                        rota_especifica_id: rotaEspecifica.id,
+                        rota_reutilizada: false,
+                        liberacao_rota: seguranca.liberacao_rota,
+                        checagem_seguranca: seguranca.checagem_seguranca
+                    },
+                    req
+                });
+
                 await client2.query('COMMIT');
 
                 return res.status(201).json({
@@ -2836,9 +4263,11 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                             : 'Viagem criada, mas BLOQUEADA por restrição validada incompatível',
                     viagem: {
                         ...viagem.rows[0],
-                        ...seguranca
+                        ...seguranca,
+                        ...inteligencia
                     },
                     seguranca,
+                    inteligencia,
                     rota_especifica: {
                         id: rotaEspecifica.id,
                         reutilizada: false,
@@ -2916,6 +4345,35 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
             peso
         });
 
+        const inteligencia = await salvarEstimativaInteligenciaViagem({
+            viagemId: viagem.rows[0].id,
+            idRota: req.body.id_rota,
+            geojson: rotaEspecifica.dados_geojson,
+            comprimento,
+            largura,
+            altura,
+            peso,
+            consumoKmL: veiculo.consumo_medio_km_l,
+            precoLitro: veiculo.preco_combustivel_ref,
+            client
+        });
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.rows[0].id,
+            usuario: req.usuario,
+            acao: 'VIAGEM_CRIADA',
+            statusAnterior: null,
+            statusNovo: seguranca.status_aprovacao,
+            detalhes: {
+                rota_especifica_id: rotaEspecifica.id,
+                rota_reutilizada: true,
+                liberacao_rota: seguranca.liberacao_rota,
+                checagem_seguranca: seguranca.checagem_seguranca
+            },
+            req
+        });
+
         await client.query('COMMIT');
 
         res.status(201).json({
@@ -2925,9 +4383,11 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
                     : 'Viagem criada, mas BLOQUEADA por restrição validada incompatível',
             viagem: {
                 ...viagem.rows[0],
-                ...seguranca
+                ...seguranca,
+                ...inteligencia
             },
             seguranca,
+            inteligencia,
             rota_especifica: {
                 id: rotaEspecifica.id,
                 reutilizada: true,
@@ -2960,6 +4420,7 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
               AND u.id_veiculo = vg.id_veiculo
               AND vg.status IN ('planejada','em_andamento')
               AND COALESCE(vg.liberacao_rota, 'liberada') <> 'bloqueada'
+              AND COALESCE(vg.status_aprovacao, 'aguardando_aprovacao') = 'aprovada'
             RETURNING vg.*
         `, [req.usuario.id, req.params.id]);
 
@@ -2970,9 +4431,88 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
             WHERE id = $1
         `, [resultado.rows[0].id_rota]);
 
+        await registrarAuditoriaViagem({
+            idViagem: resultado.rows[0].id,
+            usuario: req.usuario,
+            acao: 'VIAGEM_INICIADA',
+            statusAnterior: 'planejada',
+            statusNovo: 'em_andamento',
+            detalhes: {
+                versao_aprovacao: resultado.rows[0].versao_aprovacao
+            },
+            req
+        });
+
         res.json({ mensagem: 'Viagem iniciada', viagem: resultado.rows[0] });
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
+    }
+});
+
+
+app.post('/viagens/:id/consumo-real', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') {
+        return res.status(403).json({ erro:'Acesso negado' });
+    }
+
+    const consumo = Number(req.body?.consumo_real_km_l);
+
+    if (!Number.isFinite(consumo) || consumo <= 0) {
+        return res.status(400).json({
+            erro:'Informe a média real da viagem em km/L.'
+        });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const r = await client.query(`
+            SELECT
+                vg.*,
+                v.consumo_medio_km_l,
+                v.preco_combustivel_ref,
+                v.tipo_combustivel
+            FROM viagens vg
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            JOIN usuarios u
+              ON u.id = $1
+             AND u.id_veiculo = vg.id_veiculo
+            WHERE vg.id = $2
+              AND vg.status IN ('em_andamento','concluida')
+            LIMIT 1
+            FOR UPDATE OF vg
+        `, [req.usuario.id, req.params.id]);
+
+        if (!r.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro:'Viagem não encontrada.' });
+        }
+
+        const resultado = await registrarConsumoRealViagem({
+            viagem: r.rows[0],
+            consumoRealKmL: consumo,
+            client,
+            usuario: req.usuario,
+            req
+        });
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:
+                resultado.consumo_anormal
+                    ? 'Consumo registrado, abaixo do padrão histórico.'
+                    : 'Consumo real registrado.',
+            consumo: resultado
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        res.status(500).json({ erro:erro.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -2990,10 +4530,15 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             SELECT
                 vg.*,
                 re.dados_geojson AS rota_especifica_geojson,
-                re.reutilizavel
+                re.reutilizavel,
+                v.consumo_medio_km_l,
+                v.preco_combustivel_ref,
+                v.tipo_combustivel
             FROM viagens vg
             LEFT JOIN rotas_especificas re
                 ON re.id = vg.id_rota_especifica
+            JOIN veiculos v
+                ON v.id = vg.id_veiculo
             JOIN usuarios u
                 ON u.id = $1
                AND u.id_veiculo = vg.id_veiculo
@@ -3107,6 +4652,50 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             }
         }
 
+        let consumoRealResultado = null;
+
+        if (
+            req.body?.consumo_real_km_l !== undefined &&
+            req.body?.consumo_real_km_l !== null &&
+            req.body?.consumo_real_km_l !== ''
+        ) {
+            consumoRealResultado =
+                await registrarConsumoRealViagem({
+                    viagem,
+                    consumoRealKmL: Number(req.body.consumo_real_km_l),
+                    client,
+                    usuario: req.usuario,
+                    req
+                });
+
+            viagem.consumo_real_km_l =
+                consumoRealResultado.consumo_real_km_l;
+
+            viagem.combustivel_real_l =
+                consumoRealResultado.combustivel_real_l;
+        }
+
+        await atualizarMemoriaAposConclusao({
+            viagem,
+            validacao,
+            client
+        });
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario: req.usuario,
+            acao: 'VIAGEM_CONCLUIDA',
+            statusAnterior: 'em_andamento',
+            statusNovo: 'concluida',
+            detalhes: {
+                rota_validada: rotaPodeSerValidada,
+                max_desvio_km: validacao.maxDesvioKm,
+                desvio_longo: validacao.desvioLongo
+            },
+            req
+        });
+
         await client.query('COMMIT');
 
         res.json({
@@ -3119,7 +4708,8 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
                 max_desvio_km: validacao.maxDesvioKm,
                 regra:
                     'Desvio maior que 1 km por 5 minutos ou mais impede a validação.'
-            }
+            },
+            consumo_real: consumoRealResultado
         });
 
     } catch (erro) {
@@ -3128,6 +4718,520 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
         res.status(500).json({ erro: erro.message });
     } finally {
         client.release();
+    }
+});
+
+
+// ======================================================
+// APROVAÇÃO FORMAL DE VIAGENS
+// ======================================================
+app.post('/viagens/:id/aprovar', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const viagem = await obterViagemParaAprovacao(
+            req.params.id,
+            client,
+            true
+        );
+
+        if (!viagem) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
+        }
+
+        if (viagem.status !== 'planejada') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: 'Somente viagens planejadas podem ser aprovadas.'
+            });
+        }
+
+        const statusAnterior =
+            viagem.status_aprovacao || 'aguardando_aprovacao';
+
+        const check =
+            await checarSegurancaFormalViagem(
+                viagem,
+                client
+            );
+
+        if (!check.liberada) {
+            await client.query(`
+                UPDATE viagens
+                SET
+                    liberacao_rota = 'bloqueada',
+                    status_aprovacao = 'bloqueada',
+                    checagem_seguranca = $1::jsonb,
+                    aprovado_por = NULL,
+                    aprovado_em = NULL,
+                    aprovacao_invalidada_em = CURRENT_TIMESTAMP,
+                    motivo_invalidacao_aprovacao =
+                        'Pré-checagem formal encontrou restrição validada incompatível.'
+                WHERE id = $2
+            `, [
+                JSON.stringify(check),
+                viagem.id
+            ]);
+
+            await registrarAuditoriaViagem({
+                client,
+                idViagem: viagem.id,
+                usuario: req.usuario,
+                acao: 'APROVACAO_NEGADA_SEGURANCA',
+                statusAnterior,
+                statusNovo: 'bloqueada',
+                detalhes: {
+                    observacao: req.body?.observacao || null,
+                    checagem: check
+                },
+                req
+            });
+
+            await client.query('COMMIT');
+
+            return res.status(409).json({
+                erro:
+                    'A viagem não pode ser aprovada: existe restrição global validada incompatível.',
+                status_aprovacao: 'bloqueada',
+                checagem: check
+            });
+        }
+
+        const atualizado = await client.query(`
+            UPDATE viagens
+            SET
+                liberacao_rota = 'liberada',
+                status_aprovacao = 'aprovada',
+                aprovado_por = $1,
+                aprovado_em = CURRENT_TIMESTAMP,
+                observacao_aprovacao = $2,
+                versao_aprovacao =
+                    COALESCE(versao_aprovacao,0) + 1,
+                snapshot_seguranca_aprovado = $3::jsonb,
+                checagem_seguranca = $3::jsonb,
+                rota_aprovada_geojson = $4::jsonb,
+                id_rota_especifica_aprovada = id_rota_especifica,
+                versao_rota_aprovada = COALESCE($5, 1),
+                rota_aprovada_em = CURRENT_TIMESTAMP,
+                estado_monitoramento = 'normal',
+                aprovacao_invalidada_em = NULL,
+                motivo_invalidacao_aprovacao = NULL,
+                ultima_revalidacao_em = CURRENT_TIMESTAMP
+            WHERE id = $6
+            RETURNING *
+        `, [
+            req.usuario.id,
+            req.body?.observacao
+                ? String(req.body.observacao).slice(0,1500)
+                : null,
+            JSON.stringify(check),
+            JSON.stringify(viagem.dados_geojson),
+            viagem.rota_especifica_versao || 1,
+            viagem.id
+        ]);
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario: req.usuario,
+            acao: 'VIAGEM_APROVADA',
+            statusAnterior,
+            statusNovo: 'aprovada',
+            detalhes: {
+                observacao: req.body?.observacao || null,
+                versao_aprovacao:
+                    atualizado.rows[0].versao_aprovacao,
+                versao_rota_aprovada:
+                    atualizado.rows[0].versao_rota_aprovada,
+                id_rota_especifica_aprovada:
+                    atualizado.rows[0].id_rota_especifica_aprovada,
+                checagem: check
+            },
+            req
+        });
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:
+                'Viagem formalmente aprovada e liberada ao motorista.',
+            viagem: atualizado.rows[0],
+            checagem: check
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch(_) {}
+        res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/viagens/:id/bloquear-aprovacao', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const motivo =
+        String(req.body?.motivo || '').trim();
+
+    if (!motivo) {
+        return res.status(400).json({
+            erro: 'Informe o motivo do bloqueio.'
+        });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const viagem =
+            await obterViagemParaAprovacao(
+                req.params.id,
+                client,
+                true
+            );
+
+        if (!viagem) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
+        }
+
+        if (viagem.status !== 'planejada') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: 'Somente viagem planejada pode ser bloqueada antes da saída.'
+            });
+        }
+
+        const anterior =
+            viagem.status_aprovacao || 'aguardando_aprovacao';
+
+        const atualizado = await client.query(`
+            UPDATE viagens
+            SET
+                status_aprovacao = 'bloqueada',
+                liberacao_rota = 'bloqueada',
+                aprovado_por = NULL,
+                aprovado_em = NULL,
+                aprovacao_invalidada_em = CURRENT_TIMESTAMP,
+                motivo_invalidacao_aprovacao = $1
+            WHERE id = $2
+            RETURNING *
+        `, [
+            motivo.slice(0,1500),
+            viagem.id
+        ]);
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario: req.usuario,
+            acao: 'VIAGEM_BLOQUEADA_GESTOR',
+            statusAnterior: anterior,
+            statusNovo: 'bloqueada',
+            detalhes: { motivo },
+            req
+        });
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem: 'Viagem bloqueada pelo gestor.',
+            viagem: atualizado.rows[0]
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch(_) {}
+        res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
+    }
+});
+
+app.post('/viagens/:id/reabrir-aprovacao', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const viagem =
+            await obterViagemParaAprovacao(
+                req.params.id,
+                client,
+                true
+            );
+
+        if (!viagem) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
+        }
+
+        if (viagem.status !== 'planejada') {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                erro: 'A aprovação só pode ser reaberta antes do início da viagem.'
+            });
+        }
+
+        const anterior =
+            viagem.status_aprovacao || 'aguardando_aprovacao';
+
+        const check =
+            await checarSegurancaFormalViagem(
+                viagem,
+                client
+            );
+
+        const novoStatus =
+            check.liberada
+                ? 'aguardando_aprovacao'
+                : 'bloqueada';
+
+        const liberacao =
+            check.liberada
+                ? 'liberada'
+                : 'bloqueada';
+
+        const atualizado = await client.query(`
+            UPDATE viagens
+            SET
+                status_aprovacao = $1,
+                liberacao_rota = $2,
+                checagem_seguranca = $3::jsonb,
+                aprovado_por = NULL,
+                aprovado_em = NULL,
+                snapshot_seguranca_aprovado = '{}'::jsonb,
+                rota_aprovada_geojson = NULL,
+                id_rota_especifica_aprovada = NULL,
+                versao_rota_aprovada = NULL,
+                rota_aprovada_em = NULL,
+                aprovacao_invalidada_em = CURRENT_TIMESTAMP,
+                motivo_invalidacao_aprovacao = $4
+            WHERE id = $5
+            RETURNING *
+        `, [
+            novoStatus,
+            liberacao,
+            JSON.stringify(check),
+            req.body?.motivo
+                ? String(req.body.motivo).slice(0,1500)
+                : 'Aprovação reaberta pelo gestor.',
+            viagem.id
+        ]);
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem: viagem.id,
+            usuario: req.usuario,
+            acao: 'APROVACAO_REABERTA',
+            statusAnterior: anterior,
+            statusNovo: novoStatus,
+            detalhes: {
+                motivo: req.body?.motivo || null,
+                checagem: check
+            },
+            req
+        });
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:
+                novoStatus === 'aguardando_aprovacao'
+                    ? 'Viagem voltou para aguardando aprovação.'
+                    : 'Pré-checagem continua bloqueando a viagem.',
+            viagem: atualizado.rows[0],
+            checagem: check
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch(_) {}
+        res.status(500).json({ erro: erro.message });
+    } finally {
+        client.release();
+    }
+});
+
+app.get('/viagens/:id/auditoria', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                a.*,
+                u.nome AS usuario_nome,
+                v.placa,
+                r.origem,
+                r.destino
+            FROM auditoria_viagens a
+            JOIN viagens vg ON vg.id = a.id_viagem
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            JOIN rotas r ON r.id = vg.id_rota
+            LEFT JOIN usuarios u ON u.id = a.id_usuario
+            WHERE a.id_viagem = $1
+            ORDER BY a.criado_em DESC
+            LIMIT 300
+        `, [req.params.id]);
+
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/auditoria/viagens', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const placa =
+        String(req.query.placa || '')
+            .trim()
+            .toUpperCase();
+
+    const acao =
+        String(req.query.acao || '')
+            .trim();
+
+    try {
+        const resultado = await pool.query(`
+            SELECT
+                a.*,
+                u.nome AS usuario_nome,
+                v.placa,
+                r.origem,
+                r.destino
+            FROM auditoria_viagens a
+            JOIN viagens vg ON vg.id = a.id_viagem
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            JOIN rotas r ON r.id = vg.id_rota
+            LEFT JOIN usuarios u ON u.id = a.id_usuario
+            WHERE
+                ($1 = '' OR UPPER(v.placa) LIKE '%' || $1 || '%')
+                AND ($2 = '' OR a.acao = $2)
+            ORDER BY a.criado_em DESC
+            LIMIT 500
+        `, [
+            placa,
+            acao
+        ]);
+
+        res.json(resultado.rows);
+    } catch (erro) {
+        res.status(500).json({ erro: erro.message });
+    }
+});
+
+
+
+
+app.get('/veiculos/:id/historico-consumo', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro:'Acesso negado' });
+    }
+
+    try {
+        const viagens = await pool.query(`
+            SELECT h.*, r.origem, r.destino
+            FROM historico_consumo_viagens h
+            JOIN rotas r ON r.id = h.id_rota
+            WHERE h.id_veiculo = $1
+            ORDER BY h.criado_em DESC
+            LIMIT 100
+        `, [req.params.id]);
+
+        const resumo = await pool.query(`
+            SELECT
+                AVG(consumo_real_km_l) AS media_geral,
+                AVG(consumo_real_km_l) FILTER (
+                    WHERE criado_em >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+                ) AS media_30_dias,
+                COUNT(*)::int AS viagens_total,
+                COUNT(*) FILTER (
+                    WHERE consumo_anormal = TRUE
+                )::int AS viagens_anormais
+            FROM historico_consumo_viagens
+            WHERE id_veiculo = $1
+        `, [req.params.id]);
+
+        res.json({
+            resumo: resumo.rows[0],
+            viagens: viagens.rows
+        });
+
+    } catch (erro) {
+        res.status(500).json({ erro:erro.message });
+    }
+});
+
+app.get('/viagens/:id/inteligencia', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({
+            erro:'Acesso negado'
+        });
+    }
+
+    try {
+        const r = await pool.query(`
+            SELECT
+                vg.id,
+                vg.id_rota,
+                vg.id_veiculo,
+                vg.distancia_estimada_km,
+                vg.duracao_estimada_min,
+                vg.combustivel_estimado_l,
+                vg.custo_combustivel_estimado,
+                vg.score_rota,
+                vg.memoria_rota_snapshot,
+                vg.altura_total,
+                vg.peso_total,
+                v.placa,
+                v.frota,
+                v.modelo,
+                v.consumo_medio_km_l,
+                v.tipo_combustivel,
+                v.preco_combustivel_ref,
+                r.nome AS rota_nome,
+                r.origem,
+                r.destino
+            FROM viagens vg
+            JOIN veiculos v
+                ON v.id = vg.id_veiculo
+            JOIN rotas r
+                ON r.id = vg.id_rota
+            WHERE vg.id = $1
+            LIMIT 1
+        `, [
+            req.params.id
+        ]);
+
+        if (!r.rows.length) {
+            return res.status(404).json({
+                erro:'Viagem não encontrada'
+            });
+        }
+
+        res.json(r.rows[0]);
+
+    } catch (erro) {
+        res.status(500).json({
+            erro: erro.message
+        });
     }
 });
 
@@ -3140,6 +5244,7 @@ app.get('/monitoramento/resumo', autenticar, async (req, res) => {
             FROM viagens vg
             JOIN rotas r ON r.id = vg.id_rota
             LEFT JOIN usuarios u ON u.id = vg.id_motorista
+            LEFT JOIN usuarios aprovador ON aprovador.id = vg.aprovado_por
             LEFT JOIN localizacoes l ON l.id_motorista = u.id
             WHERE vg.status IN ('planejada','em_andamento')
         `);
@@ -3244,70 +5349,319 @@ app.get('/alertas', autenticar, async (req, res) => {
 });
 
 app.get('/monitoramento/viagens', autenticar, async (req, res) => {
-    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({
+            erro:'Acesso negado'
+        });
+    }
 
     try {
-        const resultado = await pool.query(`
-            SELECT
-                vg.*,
-                v.placa, v.frota, v.modelo,
-                u.nome AS motorista,
-                r.nome AS rota_nome, r.origem, r.destino, r.dados_geojson,
-                l.lat, l.lon, l.ultima_atualizacao
-            FROM viagens vg
-            JOIN veiculos v ON v.id = vg.id_veiculo
-            JOIN rotas r ON r.id = vg.id_rota
-            LEFT JOIN usuarios u ON u.id = vg.id_motorista
-            LEFT JOIN localizacoes l ON l.id_motorista = u.id
-            WHERE vg.status IN ('planejada','em_andamento')
-            ORDER BY vg.saida_prevista ASC NULLS LAST, vg.criada_em DESC
-        `);
+        const buscar = async () =>
+            pool.query(`
+                SELECT
+                    vg.*,
+
+                    v.placa,
+                    v.frota,
+                    v.modelo,
+
+                    u.nome AS motorista,
+                    aprovador.nome AS aprovado_por_nome,
+
+                    r.nome AS rota_nome,
+                    r.origem,
+                    r.destino,
+
+                    COALESCE(
+                        vg.rota_aprovada_geojson,
+                        re.dados_geojson,
+                        r.dados_geojson
+                    ) AS dados_geojson,
+
+                    re.versao AS rota_especifica_versao_atual,
+
+                    l.lat,
+                    l.lon,
+                    l.ultima_atualizacao
+
+                FROM viagens vg
+
+                JOIN veiculos v
+                    ON v.id = vg.id_veiculo
+
+                JOIN rotas r
+                    ON r.id = vg.id_rota
+
+                LEFT JOIN rotas_especificas re
+                    ON re.id = vg.id_rota_especifica
+
+                LEFT JOIN usuarios u
+                    ON u.id = vg.id_motorista
+
+                LEFT JOIN usuarios aprovador
+                    ON aprovador.id = vg.aprovado_por
+
+                LEFT JOIN localizacoes l
+                    ON l.id_motorista = u.id
+
+                WHERE vg.status IN (
+                    'planejada',
+                    'em_andamento'
+                )
+
+                ORDER BY
+                    vg.saida_prevista ASC NULLS LAST,
+                    vg.criada_em DESC
+            `);
+
+        let resultado = await buscar();
+
+        for (const row of resultado.rows) {
+            await revalidarAprovacaoViagem({
+                viagem: row,
+                usuario: req.usuario,
+                req
+            });
+        }
+
+        resultado = await buscar();
+
+        await processarGpsOfflineMonitoramento(
+            resultado.rows,
+            req
+        );
+
+        resultado = await buscar();
 
         const agora = new Date();
+        const dados = [];
 
-        const dados = resultado.rows.map(row => {
-            let desvioKm = null;
-            let progresso = 0;
-            let eta = row.chegada_prevista ? new Date(row.chegada_prevista) : null;
-            let atrasoMin = 0;
+        for (const row of resultado.rows) {
+            let desvioKm =
+                Number.isFinite(
+                    Number(row.ultima_distancia_rota_km)
+                )
+                    ? Number(row.ultima_distancia_rota_km)
+                    : null;
 
-            if (Number.isFinite(Number(row.lat)) && Number.isFinite(Number(row.lon))) {
-                const analise = analisarPosicaoNaRota(row.dados_geojson, Number(row.lat), Number(row.lon));
-                desvioKm = analise.distanciaRotaKm;
-                progresso = analise.progresso;
+            let progresso =
+                Number.isFinite(
+                    Number(row.ultimo_progresso)
+                )
+                    ? Number(row.ultimo_progresso)
+                    : 0;
 
-                const duracaoTotal =
-                    Number(row.dados_geojson?.features?.[0]?.properties?.segments?.[0]?.duration) || 0;
+            if (
+                Number.isFinite(Number(row.lat)) &&
+                Number.isFinite(Number(row.lon))
+            ) {
+                const analise = analisarPosicaoNaRota(
+                    row.dados_geojson,
+                    Number(row.lat),
+                    Number(row.lon)
+                );
 
-                if (row.status === 'em_andamento' && duracaoTotal > 0) {
-                    const restanteSeg = duracaoTotal * (1 - progresso);
-                    eta = new Date(agora.getTime() + restanteSeg * 1000);
+                desvioKm =
+                    analise.distanciaRotaKm;
 
-                    if (row.chegada_prevista) {
-                        atrasoMin = Math.max(
-                            0,
-                            Math.round((eta.getTime() - new Date(row.chegada_prevista).getTime()) / 60000)
-                        );
-                    }
-                }
+                progresso =
+                    analise.progresso;
             }
 
-            return {
+            const resumo =
+                resumoGeoJsonRota(
+                    row.dados_geojson
+                );
+
+            const distanciaTotalKm =
+                resumo.distancia_m > 0
+                    ? resumo.distancia_m / 1000
+                    : 0;
+
+            const restanteKm =
+                distanciaTotalKm > 0
+                    ? Math.max(
+                        0,
+                        distanciaTotalKm *
+                            (1 - progresso)
+                    )
+                    : null;
+
+            const velocidadeMedia =
+                row.status === 'em_andamento'
+                    ? await calcularVelocidadeMediaRecente(
+                        row.id
+                    )
+                    : null;
+
+            let eta =
+                row.chegada_prevista
+                    ? new Date(row.chegada_prevista)
+                    : null;
+
+            let atrasoMin = 0;
+
+            if (
+                row.status === 'em_andamento' &&
+                restanteKm !== null &&
+                velocidadeMedia !== null &&
+                velocidadeMedia >= 15
+            ) {
+                const horas =
+                    restanteKm /
+                    velocidadeMedia;
+
+                eta =
+                    new Date(
+                        agora.getTime() +
+                        horas * 3600000
+                    );
+
+            } else if (
+                row.status === 'em_andamento' &&
+                resumo.duracao_s > 0
+            ) {
+                eta =
+                    new Date(
+                        agora.getTime() +
+                        resumo.duracao_s *
+                        (1 - progresso) *
+                        1000
+                    );
+            }
+
+            if (
+                eta &&
+                row.chegada_prevista
+            ) {
+                atrasoMin =
+                    Math.max(
+                        0,
+                        Math.round(
+                            (
+                                eta.getTime() -
+                                new Date(
+                                    row.chegada_prevista
+                                ).getTime()
+                            ) / 60000
+                        )
+                    );
+            }
+
+            const ultimaGpsMs =
+                row.ultima_atualizacao
+                    ? new Date(
+                        row.ultima_atualizacao
+                    ).getTime()
+                    : 0;
+
+            const gpsIdadeSeg =
+                ultimaGpsMs
+                    ? Math.max(
+                        0,
+                        Math.round(
+                            (
+                                agora.getTime() -
+                                ultimaGpsMs
+                            ) / 1000
+                        )
+                    )
+                    : null;
+
+            const gpsStatus =
+                gpsIdadeSeg === null
+                    ? 'sem_gps'
+                    : gpsIdadeSeg > 300
+                        ? 'offline'
+                        : gpsIdadeSeg > 60
+                            ? 'atrasado'
+                            : 'online';
+
+            let severidade = 'normal';
+
+            if (
+                row.status_aprovacao === 'revisao_obrigatoria' ||
+                row.liberacao_rota === 'bloqueada' ||
+                row.estado_monitoramento === 'gps_offline' ||
+                row.estado_monitoramento === 'fora_rota'
+            ) {
+                severidade = 'critico';
+
+            } else if (
+                (
+                    desvioKm !== null &&
+                    desvioKm > 0.3
+                ) ||
+                atrasoMin >= 10 ||
+                gpsStatus === 'atrasado'
+            ) {
+                severidade = 'atencao';
+            }
+
+            dados.push({
                 ...row,
                 dados_geojson: undefined,
+
                 desvio_km: desvioKm,
-                fora_da_rota: desvioKm !== null && desvioKm > 0.5,
-                progresso_percentual: Math.round(progresso * 100),
-                eta_atual: eta,
-                atraso_minutos: atrasoMin,
-                atrasada: atrasoMin >= 10
-            };
-        });
+
+                fora_da_rota:
+                    row.estado_monitoramento === 'fora_rota',
+
+                progresso_percentual:
+                    Math.round(
+                        progresso * 100
+                    ),
+
+                distancia_total_km:
+                    distanciaTotalKm || null,
+
+                restante_km:
+                    restanteKm,
+
+                velocidade_media_kmh:
+                    velocidadeMedia !== null
+                        ? Math.round(
+                            velocidadeMedia
+                        )
+                        : null,
+
+                eta_atual:
+                    eta,
+
+                atraso_minutos:
+                    atrasoMin,
+
+                atrasada:
+                    atrasoMin >= 10,
+
+                gps_idade_segundos:
+                    gpsIdadeSeg,
+
+                gps_status:
+                    gpsStatus,
+
+                severidade_operacional:
+                    severidade,
+
+                rota_snapshot_ativa:
+                    !!row.rota_aprovada_geojson,
+
+                versao_rota_atual:
+                    row.rota_especifica_versao_atual || null
+            });
+        }
 
         res.json(dados);
+
     } catch (erro) {
-        console.error('❌ Monitoramento:', erro);
-        res.status(500).json({ erro: erro.message });
+        console.error(
+            '❌ Monitoramento V18:',
+            erro
+        );
+
+        res.status(500).json({
+            erro: erro.message
+        });
     }
 });
 
@@ -3483,10 +5837,31 @@ app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
             SELECT
                 rc.*,
                 v.placa,
-                r.nome AS rota_nome
+                r.nome AS rota_nome,
+                rv.id AS restricao_global_id,
+                COALESCE(pr.passagens_total,0) AS passagens_total,
+                COALESCE(pr.passagens_sem_ocorrencia,0) AS passagens_sem_ocorrencia,
+                pr.maior_altura_passou,
+                pr.maior_peso_passou,
+                pr.ultima_passagem
             FROM restricoes_candidatas rc
             JOIN veiculos v ON v.id = rc.id_veiculo
             JOIN rotas r ON r.id = rc.id_rota
+            LEFT JOIN restricoes_validadas rv
+                ON rv.fonte = rc.fonte
+               AND rv.fonte_id = rc.fonte_id
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*)::int AS passagens_total,
+                    COUNT(*) FILTER (
+                        WHERE passou_sem_ocorrencia = TRUE
+                    )::int AS passagens_sem_ocorrencia,
+                    MAX(altura) AS maior_altura_passou,
+                    MAX(peso) AS maior_peso_passou,
+                    MAX(registrado_em) AS ultima_passagem
+                FROM passagens_restricoes
+                WHERE id_restricao = rv.id
+            ) pr ON TRUE
             WHERE rc.id_viagem = $1
             ORDER BY
                 CASE rc.status_validacao
@@ -4146,15 +6521,33 @@ app.post('/reportar', autenticar, validar(schemas.reporte), async (req, res) => 
         const contexto = await pool.query(`
             SELECT
                 u.id_veiculo,
-                (
-                    SELECT vg.id
-                    FROM viagens vg
-                    WHERE vg.id_veiculo = u.id_veiculo
-                      AND vg.status = 'em_andamento'
-                    ORDER BY vg.saida_real DESC NULLS LAST
-                    LIMIT 1
-                ) AS id_viagem
+                vg.id AS id_viagem,
+                vg.status,
+                vg.estado_monitoramento,
+                vg.desvio_inicio_em,
+                vg.rota_aprovada_geojson,
+                COALESCE(
+                    vg.rota_aprovada_geojson,
+                    re.dados_geojson,
+                    r.dados_geojson
+                ) AS dados_geojson
             FROM usuarios u
+
+            LEFT JOIN LATERAL (
+                SELECT *
+                FROM viagens
+                WHERE id_veiculo = u.id_veiculo
+                  AND status = 'em_andamento'
+                ORDER BY saida_real DESC NULLS LAST
+                LIMIT 1
+            ) vg ON TRUE
+
+            LEFT JOIN rotas r
+                ON r.id = vg.id_rota
+
+            LEFT JOIN rotas_especificas re
+                ON re.id = vg.id_rota_especifica
+
             WHERE u.id = $1
         `, [req.usuario.id]);
 
@@ -4265,20 +6658,39 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
         const contexto = await pool.query(`
             SELECT
                 u.id_veiculo,
-                (
-                    SELECT vg.id
-                    FROM viagens vg
-                    WHERE vg.id_veiculo = u.id_veiculo
-                      AND vg.status = 'em_andamento'
-                    ORDER BY vg.saida_real DESC NULLS LAST
-                    LIMIT 1
-                ) AS id_viagem
+                vg.id AS id_viagem,
+                vg.status,
+                vg.estado_monitoramento,
+                vg.desvio_inicio_em,
+                vg.rota_aprovada_geojson,
+                COALESCE(
+                    vg.rota_aprovada_geojson,
+                    re.dados_geojson,
+                    r.dados_geojson
+                ) AS dados_geojson
             FROM usuarios u
+            LEFT JOIN LATERAL (
+                SELECT *
+                FROM viagens
+                WHERE id_veiculo = u.id_veiculo
+                  AND status = 'em_andamento'
+                ORDER BY saida_real DESC NULLS LAST
+                LIMIT 1
+            ) vg ON TRUE
+            LEFT JOIN rotas r
+                ON r.id = vg.id_rota
+            LEFT JOIN rotas_especificas re
+                ON re.id = vg.id_rota_especifica
             WHERE u.id = $1
         `, [req.usuario.id]);
 
-        const idVeiculo = contexto.rows[0]?.id_veiculo || null;
-        const idViagem = contexto.rows[0]?.id_viagem || null;
+        const contextoViagem = contexto.rows[0] || {};
+
+        const idVeiculo =
+            contextoViagem.id_veiculo || null;
+
+        const idViagem =
+            contextoViagem.id_viagem || null;
 
         await pool.query(`
             INSERT INTO localizacoes (id_motorista,lat,lon,ultima_atualizacao)
@@ -4303,7 +6715,46 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
             )
         `, [req.usuario.id, idVeiculo, idViagem, req.body.lat, req.body.lon]);
 
-        res.json({ mensagem: 'Localização atualizada' });
+        let monitoramento = null;
+
+        if (
+            idViagem &&
+            contextoViagem.dados_geojson
+        ) {
+            if (
+                contextoViagem.estado_monitoramento === 'gps_offline'
+            ) {
+                await registrarAuditoriaViagem({
+                    idViagem,
+                    usuario: req.usuario,
+                    acao: 'GPS_RECUPERADO',
+                    statusAnterior: 'gps_offline',
+                    statusNovo: 'normal',
+                    detalhes: {
+                        lat: req.body.lat,
+                        lon: req.body.lon
+                    },
+                    req
+                });
+            }
+
+            monitoramento =
+                await atualizarEstadoDesvioTempoReal({
+                    viagem: {
+                        ...contextoViagem,
+                        id: idViagem
+                    },
+                    lat: req.body.lat,
+                    lon: req.body.lon,
+                    usuario: req.usuario,
+                    req
+                });
+        }
+
+        res.json({
+            mensagem: 'Localização atualizada',
+            monitoramento
+        });
     } catch (erro) {
         console.error('❌ Localização:', erro);
         res.status(500).json({ erro: erro.message });
