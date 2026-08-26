@@ -1587,62 +1587,178 @@ app.get('/rotas', autenticar, async (req, res) => {
     }
 });
 
-app.get('/rotas/minha-rota', autenticar, async (req, res) => {
-    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
+app.get('/motorista/diagnostico-viagem', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
 
     try {
-        const usuario = await pool.query(`SELECT id,id_veiculo FROM usuarios WHERE id = $1 LIMIT 1`, [req.usuario.id]);
-        const user = usuario.rows[0];
-        let resultado;
+        const usuario = await pool.query(`
+            SELECT id, nome, login, id_veiculo
+            FROM usuarios
+            WHERE id = $1
+            LIMIT 1
+        `, [req.usuario.id]);
 
-        if (user?.id_veiculo) {
-            resultado = await pool.query(`
-                SELECT
-                    r.id,
-                    r.nome,
-                    r.origem,
-                    r.destino,
-                    r.restricoes,
-                    COALESCE(re.dados_geojson, r.dados_geojson) AS dados_geojson,
-                    r.status,
-                    r.criada_em,
-                    vg.id AS viagem_id,
-                    vg.status AS viagem_status,
-                    vg.carga,
-                    vg.altura_total,
-                    vg.peso_total,
-                    vg.saida_prevista,
-                    vg.saida_real,
-                    vg.chegada_prevista,
-                    vg.chegada_real,
-                    vg.rota_reutilizada,
-                    vg.id_rota_especifica
-                FROM rotas r
-                LEFT JOIN viagens vg
-                    ON vg.id_rota = r.id
-                   AND vg.status IN ('planejada','em_andamento')
-                LEFT JOIN rotas_especificas re
-                    ON re.id = vg.id_rota_especifica
-                WHERE r.id_veiculo = $1
-                  AND r.status IN ('pendente','em_andamento')
-                ORDER BY r.criada_em DESC
-                LIMIT 1
-            `, [user.id_veiculo]);
-        } else {
-            resultado = await pool.query(`
-                SELECT r.*, NULL::INTEGER AS viagem_id
-                FROM rotas r
-                WHERE r.id_motorista = $1
-                  AND r.status IN ('pendente','em_andamento')
-                ORDER BY r.criada_em DESC
-                LIMIT 1
-            `, [req.usuario.id]);
+        const user = usuario.rows[0];
+
+        if (!user) {
+            return res.status(404).json({ erro: 'Usuário não encontrado' });
         }
 
-        if (!resultado.rows.length) return res.status(404).json({ mensagem: 'Nenhuma rota ativa' });
-        res.json(resultado.rows[0]);
+        let veiculo = null;
+        let viagens = [];
+
+        if (user.id_veiculo) {
+            const v = await pool.query(`
+                SELECT id, placa, frota, modelo, ativo
+                FROM veiculos
+                WHERE id = $1
+                LIMIT 1
+            `, [user.id_veiculo]);
+
+            veiculo = v.rows[0] || null;
+
+            const vg = await pool.query(`
+                SELECT
+                    id,
+                    id_rota,
+                    id_veiculo,
+                    status,
+                    saida_prevista,
+                    saida_real,
+                    chegada_prevista
+                FROM viagens
+                WHERE id_veiculo = $1
+                ORDER BY id DESC
+                LIMIT 10
+            `, [user.id_veiculo]);
+
+            viagens = vg.rows;
+        }
+
+        res.json({
+            motorista: user,
+            veiculo,
+            viagens,
+            viagem_ativa: viagens.find(v =>
+                ['planejada', 'em_andamento'].includes(v.status)
+            ) || null
+        });
+
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
+    }
+});
+
+app.get('/rotas/minha-rota', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    try {
+        const usuario = await pool.query(`
+            SELECT id, id_veiculo
+            FROM usuarios
+            WHERE id = $1
+            LIMIT 1
+        `, [req.usuario.id]);
+
+        const user = usuario.rows[0];
+
+        if (!user) {
+            return res.status(404).json({
+                erro: 'Usuário não encontrado'
+            });
+        }
+
+        if (!user.id_veiculo) {
+            return res.status(404).json({
+                mensagem: 'Motorista sem veículo vinculado'
+            });
+        }
+
+        /*
+         * A rota não é mais atribuída diretamente ao veículo.
+         * Quem recebe o veículo é a VIAGEM.
+         *
+         * Fluxo:
+         * motorista -> id_veiculo -> viagens -> rota base/específica
+         */
+        const resultado = await pool.query(`
+            SELECT
+                r.id,
+                r.nome,
+                r.origem,
+                r.destino,
+                r.restricoes,
+
+                COALESCE(
+                    re.dados_geojson,
+                    r.dados_geojson
+                ) AS dados_geojson,
+
+                r.criada_em,
+
+                vg.id AS viagem_id,
+                vg.status AS viagem_status,
+                vg.carga,
+                vg.altura_total,
+                vg.peso_total,
+                vg.saida_prevista,
+                vg.saida_real,
+                vg.chegada_prevista,
+                vg.chegada_real,
+                vg.rota_reutilizada,
+                vg.id_rota_especifica,
+
+                v.id AS veiculo_id,
+                v.placa,
+                v.frota,
+                v.modelo,
+                v.comprimento,
+                v.largura,
+                v.peso AS peso_veiculo
+
+            FROM viagens vg
+
+            JOIN rotas r
+                ON r.id = vg.id_rota
+
+            JOIN veiculos v
+                ON v.id = vg.id_veiculo
+
+            LEFT JOIN rotas_especificas re
+                ON re.id = vg.id_rota_especifica
+
+            WHERE vg.id_veiculo = $1
+              AND vg.status IN ('planejada', 'em_andamento')
+
+            ORDER BY
+                CASE
+                    WHEN vg.status = 'em_andamento' THEN 0
+                    ELSE 1
+                END,
+                vg.saida_prevista ASC NULLS LAST,
+                vg.id DESC
+
+            LIMIT 1
+        `, [user.id_veiculo]);
+
+        if (!resultado.rows.length) {
+            return res.status(404).json({
+                mensagem: 'Nenhuma viagem ativa para este veículo'
+            });
+        }
+
+        res.json(resultado.rows[0]);
+
+    } catch (erro) {
+        console.error('❌ Minha rota:', erro);
+
+        res.status(500).json({
+            erro: erro.message
+        });
     }
 });
 
