@@ -16,10 +16,19 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .sidebar .subtitle { font-size:13px; color:#ff6600; border-bottom:1px solid #2a2a3e; padding-bottom:16px; margin-bottom:20px; }
 .user-info { display:flex; justify-content:space-between; align-items:center; background:#0a0a12; padding:8px 12px; border-radius:8px; margin-bottom:16px; font-size:13px; }
 .logout-btn { background:none; border:none; color:#d63031; cursor:pointer; font-weight:bold; }
-.tab-nav { display:flex; gap:6px; margin-bottom:20px; border-bottom:1px solid #2a2a3e; padding-bottom:10px; flex-wrap:wrap; }
-.tab-btn { background:transparent; border:none; color:#888; font-size:12px; font-weight:600; cursor:pointer; padding:8px 10px; border-radius:8px; transition:all .2s; }
-.tab-btn:hover { color:#fff; background:#2a2a3e; }
-.tab-btn.active { color:#ff6600; background:rgba(255,102,0,.15); }
+.tab-nav { margin-bottom:18px; padding:6px; background:#0a0a12; border:1px solid #242437; border-radius:12px; }
+.tab-main-row { display:flex; gap:7px; }
+.tab-btn { flex:1; background:transparent; border:none; color:#8f8f9f; font-size:12px; font-weight:600; cursor:pointer; padding:10px 8px; border-radius:9px; transition:all .2s; white-space:nowrap; }
+.tab-btn:hover { color:#fff; background:#202032; }
+.tab-btn.active { color:#fff; background:#ff6600; }
+.nav-icon { font-size:13px; margin-right:5px; opacity:.9; }
+.frota-main-wrap { flex:1; }
+.frota-main-wrap > .tab-btn { width:100%; }
+.frota-submenu { display:none; grid-template-columns:repeat(6,1fr); gap:6px; margin-top:6px; padding-top:6px; border-top:1px solid #242437; }
+.frota-submenu.open { display:grid; }
+.frota-submenu button { border:0; background:#151522; color:#aaa; padding:8px 5px; border-radius:8px; cursor:pointer; font-size:10px; text-align:center; transition:.2s; }
+.frota-submenu button:hover { background:#242437; color:#fff; }
+.frota-submenu button.active { background:rgba(255,102,0,.16); color:#ff7a22; }
 .tab-content { display:none; }
 .tab-content.active { display:block; }
 .grupo { margin-bottom:16px; }
@@ -28,6 +37,7 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .grupo input:focus,.grupo select:focus { outline:none; border-color:#ff6600; }
 .btn-primary { width:100%; padding:12px; background:#ff6600; color:white; border:none; border-radius:8px; font-size:15px; font-weight:bold; cursor:pointer; transition:.2s; margin-top:8px; }
 .btn-primary:hover { background:#e05a00; }
+.btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
 .btn-success { background:#00b894; }
 .btn-success:hover { background:#00a381; }
 .btn-secondary { background:#6c757d; }
@@ -51,7 +61,7 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .frota-status.online { background:rgba(34,197,94,.15); color:#22c55e; }
 .frota-status.offline { background:rgba(161,161,170,.15); color:#a1a1aa; }
 .frota-detalhes { margin-top:6px; color:#a1a1aa; font-size:11px; line-height:1.5; }
-.resumo-frota { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:12px; }
+.resumo-frota { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; margin-bottom:12px; }
 .resumo-item { background:#0a0a12; border:1px solid #2a2a3e; border-radius:8px; padding:8px 4px; text-align:center; }
 .resumo-item strong { display:block; font-size:18px; color:#ff6600; }
 .resumo-item span { color:#888; font-size:9px; }
@@ -60,6 +70,40 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 #tabela-reportes thead { background:#2a2a3e; position:sticky; top:0; z-index:10; }
 #tabela-reportes th { padding:8px; text-align:left; }
 #tabela-reportes td { padding:7px 8px; border-bottom:1px solid #2a2a3e; }
+.kpi-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:7px; margin:10px 0 14px; }
+.kpi { background:#0a0a12; border:1px solid #2a2a3e; border-radius:9px; padding:9px; }
+.kpi strong { display:block; font-size:20px; color:#ff6600; }
+.kpi span { font-size:10px; color:#8b8b99; }
+.alert-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:7px; }
+.alert-pill { min-width:22px; height:22px; border-radius:11px; background:#d63031; color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; padding:0 6px; }
+.alert-item { background:#0a0a12; border-left:3px solid #f59e0b; padding:8px 9px; margin-bottom:6px; border-radius:7px; font-size:11px; }
+.alert-item.alta { border-left-color:#ef4444; }
+.rota-card { background:#0a0a12; border:1px solid #2a2a3e; border-radius:9px; padding:10px; margin-top:8px; }
+.rota-card small { color:#9a9aa6; display:block; margin-top:5px; line-height:1.5; }
+.report-status { font-size:9px; border-radius:10px; padding:2px 6px; display:inline-block; }
+.report-status.ativo { background:rgba(34,197,94,.16); color:#22c55e; }
+.report-status.resolvido { background:rgba(59,130,246,.16); color:#60a5fa; }
+.report-status.expirado { background:rgba(161,161,170,.14); color:#a1a1aa; }
+.cache-rota-box { background:#0a0a12; border:1px solid #2a2a3e; border-radius:9px; padding:10px; margin-top:10px; font-size:11px; line-height:1.55; }
+.cache-rota-ok { color:#22c55e; }
+.cache-rota-nova { color:#f59e0b; }
+.monitor-card { background:#0a0a12; border:1px solid #2a2a3e; border-radius:10px; padding:12px; margin-bottom:9px; }
+.monitor-card.alerta { border-color:#ef4444; }
+.monitor-card.atraso { border-color:#f59e0b; }
+.monitor-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.monitor-badges { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.monitor-badge { font-size:10px; border-radius:12px; padding:3px 7px; background:#27272a; }
+.monitor-badge.red { background:rgba(239,68,68,.16); color:#ef4444; }
+.monitor-badge.orange { background:rgba(245,158,11,.16); color:#f59e0b; }
+.monitor-badge.green { background:rgba(34,197,94,.16); color:#22c55e; }
+.hist-box { background:#0a0a12; border:1px solid #2a2a3e; padding:10px; border-radius:9px; margin-top:10px; font-size:11px; }
+.veiculo-card { background:#0a0a12; border:1px solid #2a2a3e; border-radius:10px; padding:12px; margin-top:8px; }
+.veiculo-card-top { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+.veiculo-card small { color:#a1a1aa; line-height:1.55; display:block; margin-top:6px; }
+.veiculo-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.veiculo-info-rota { background:#0a0a12; border:1px solid #2a2a3e; border-radius:8px; padding:10px; margin-bottom:14px; font-size:12px; color:#c4c4cc; line-height:1.6; }
+.badge-ativo { color:#22c55e; font-size:11px; font-weight:700; }
+.badge-inativo { color:#ef4444; font-size:11px; font-weight:700; }
 .badge-reporte { display:inline-block; padding:2px 7px; border-radius:12px; font-size:10px; font-weight:700; }
 .badge-radar { background:#f97316; }
 .badge-acidente { background:#ef4444; }
@@ -71,11 +115,316 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .legenda-titulo { font-size:12px; font-weight:700; margin-bottom:6px; }
 .legenda-item { display:flex; align-items:center; gap:7px; margin-bottom:4px; }
 .cor-bolinha { width:10px; height:10px; border-radius:50%; }
+
+.restricao-box { background:#0a0a12; border:1px solid #2a2a3e; border-radius:10px; padding:10px; margin-top:10px; }
+.restricao-box.aviso { border-color:#f59e0b; }
+.restricao-box.alto { border-color:#ef4444; }
+.restricao-top { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+.restricao-badges { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.restricao-badge { padding:3px 7px; border-radius:12px; font-size:9px; font-weight:700; background:#27272a; color:#ddd; }
+.restricao-badge.alto { background:rgba(239,68,68,.16); color:#ef4444; }
+.restricao-badge.medio { background:rgba(245,158,11,.16); color:#f59e0b; }
+.restricao-badge.baixo { background:rgba(34,197,94,.12); color:#86efac; }
+.restricao-badge.validada { background:rgba(34,197,94,.18); color:#22c55e; }
+.restricao-badge.confirmada { background:rgba(59,130,246,.18); color:#60a5fa; }
+.restricao-badge.descoberta { background:rgba(245,158,11,.16); color:#fbbf24; }
+.restricao-badge.rejeitada { background:rgba(161,161,170,.16); color:#a1a1aa; }
+.restricao-actions { display:flex; gap:5px; flex-wrap:wrap; margin-top:8px; }
+.restricao-actions button { border:0; border-radius:7px; padding:6px 8px; cursor:pointer; font-size:9px; font-weight:700; }
+.restricao-actions .confirmar { background:#2563eb; color:#fff; }
+.restricao-actions .validar { background:#16a34a; color:#fff; }
+.restricao-actions .rejeitar { background:#52525b; color:#fff; }
+.restricao-actions .mapa { background:#f97316; color:#fff; }
+.scan-info { background:#151522; border-left:3px solid #f59e0b; border-radius:8px; padding:9px; font-size:10px; color:#c4c4cc; line-height:1.5; margin:8px 0; }
+
 @media(max-width:768px){ .sidebar { width:100%; height:52%; bottom:auto; position:fixed; } #mapa { left:0; top:52%; height:48%; } #legenda-geral { bottom:10px; right:10px; font-size:9px; } }
+
+/* ===== VERIFICAÇÃO DO TRAJETO - MODOS LISTA / MAPA ===== */
+body.verificacao-full #mapa {
+    display:none !important;
+}
+body.verificacao-full .sidebar {
+    width:100% !important;
+    right:0 !important;
+    max-width:none !important;
+    padding:20px 24px 30px !important;
+}
+body.verificacao-full .sidebar > h1,
+body.verificacao-full .sidebar > .subtitle,
+body.verificacao-full .sidebar > .user-info,
+body.verificacao-full .tab-nav {
+    max-width:100%;
+}
+body.verificacao-full #tab-viagens {
+    display:block !important;
+}
+body.verificacao-full #tab-viagens > *:not(.verificacao-trajeto-wrap) {
+    display:none !important;
+}
+.verificacao-trajeto-wrap {
+    margin-top:14px;
+    border-top:1px solid #2a2a3e;
+    padding-top:12px;
+}
+.verificacao-toolbar {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+    margin-bottom:10px;
+}
+.verificacao-toolbar h3 {
+    font-size:18px !important;
+    margin:0 !important;
+}
+.verificacao-actions-top {
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+}
+.verificacao-actions-top button {
+    border:0;
+    border-radius:8px;
+    padding:9px 12px;
+    font-size:11px;
+    font-weight:800;
+    cursor:pointer;
+}
+.btn-modo-lista {
+    background:#0ea5e9;
+    color:#001018;
+}
+.btn-modo-mapa {
+    background:#f97316;
+    color:white;
+}
+.btn-voltar-viagens {
+    background:#27272a;
+    color:white;
+}
+.verificacao-resumo-grid {
+    display:grid;
+    grid-template-columns:repeat(4,minmax(140px,1fr));
+    gap:10px;
+    margin:12px 0;
+}
+.verificacao-kpi {
+    background:#0a0a12;
+    border:1px solid #2a2a3e;
+    border-radius:10px;
+    padding:12px;
+}
+.verificacao-kpi strong {
+    display:block;
+    font-size:24px;
+    color:#ff6600;
+}
+.verificacao-kpi span {
+    font-size:10px;
+    color:#9a9aa6;
+}
+.verificacao-filtros {
+    display:flex;
+    gap:7px;
+    flex-wrap:wrap;
+    margin:10px 0 14px;
+}
+.verificacao-filtros button {
+    border:1px solid #303044;
+    background:#151522;
+    color:#bbb;
+    padding:7px 10px;
+    border-radius:16px;
+    font-size:10px;
+    cursor:pointer;
+}
+.verificacao-filtros button.active {
+    background:#ff6600;
+    color:white;
+    border-color:#ff6600;
+}
+#lista-restricoes-candidatas.grid-cards {
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:12px;
+    align-items:start;
+}
+#lista-restricoes-candidatas.grid-cards .restricao-box {
+    margin:0;
+    height:100%;
+}
+.restricao-card-resumo {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+}
+.restricao-resumo-info {
+    min-width:0;
+}
+.restricao-resumo-info strong {
+    display:block;
+    font-size:14px;
+}
+.restricao-resumo-info .linha-mini {
+    font-size:10px;
+    color:#aaa;
+    margin-top:3px;
+}
+.restricao-detalhes {
+    display:none;
+    border-top:1px solid #232336;
+    margin-top:8px;
+    padding-top:8px;
+}
+.restricao-box.aberto .restricao-detalhes {
+    display:block;
+}
+.btn-detalhes {
+    border:0;
+    border-radius:7px;
+    padding:6px 8px;
+    cursor:pointer;
+    font-size:9px;
+    font-weight:700;
+    background:#303044;
+    color:white;
+}
+#verificacao-mapa-layout {
+    display:none;
+    grid-template-columns:minmax(320px,420px) 1fr;
+    gap:12px;
+    height:calc(100vh - 150px);
+}
+#verificacao-mapa-layout.ativo {
+    display:grid;
+}
+#verificacao-mapa-lista {
+    overflow-y:auto;
+    padding-right:4px;
+}
+#verificacao-mapa {
+    min-height:500px;
+    border-radius:12px;
+    overflow:hidden;
+    border:1px solid #2a2a3e;
+}
+body.verificacao-mapa #mapa {
+    display:none !important;
+}
+body.verificacao-mapa .sidebar {
+    width:100% !important;
+}
+body.verificacao-mapa #tab-viagens > *:not(.verificacao-trajeto-wrap) {
+    display:none !important;
+}
+body.verificacao-mapa #lista-restricoes-candidatas {
+    display:none !important;
+}
+body.verificacao-mapa #verificacao-lista-wrap {
+    display:none !important;
+}
+@media(max-width:900px){
+    .verificacao-resumo-grid {
+        grid-template-columns:repeat(2,1fr);
+    }
+    #verificacao-mapa-layout {
+        grid-template-columns:1fr;
+        height:auto;
+    }
+    #verificacao-mapa {
+        min-height:55vh;
+    }
+}
+
+
+/* ===== APROVAÇÃO FORMAL / AUDITORIA ===== */
+.aprovacao-badge {
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    padding:4px 8px;
+    border-radius:12px;
+    font-size:9px;
+    font-weight:800;
+}
+.aprovacao-badge.aguardando_aprovacao {
+    background:rgba(245,158,11,.16);color:#fbbf24;
+}
+.aprovacao-badge.aprovada {
+    background:rgba(34,197,94,.16);color:#22c55e;
+}
+.aprovacao-badge.bloqueada {
+    background:rgba(239,68,68,.16);color:#ef4444;
+}
+.aprovacao-badge.revisao_obrigatoria {
+    background:rgba(168,85,247,.18);color:#c084fc;
+}
+.aprovacao-actions {
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(110px,1fr));
+    gap:6px;
+    margin-top:8px;
+}
+.aprovacao-actions button {
+    border:0;border-radius:7px;padding:7px 8px;
+    font-size:9px;font-weight:800;cursor:pointer;
+}
+.btn-aprovar-viagem { background:#16a34a;color:#fff; }
+.btn-bloquear-viagem { background:#dc2626;color:#fff; }
+.btn-reabrir-viagem { background:#7c3aed;color:#fff; }
+.btn-auditoria-viagem { background:#334155;color:#fff; }
+.audit-item {
+    position:relative;
+    border-left:3px solid #475569;
+    background:#0a0a12;
+    border-radius:8px;
+    padding:10px 11px;
+    margin-bottom:8px;
+}
+.audit-item.aprovacao { border-left-color:#22c55e; }
+.audit-item.bloqueio { border-left-color:#ef4444; }
+.audit-item.inicio { border-left-color:#3b82f6; }
+.audit-item.fim { border-left-color:#a855f7; }
+.audit-item .audit-top {
+    display:flex;justify-content:space-between;gap:10px;align-items:flex-start;
+}
+.audit-item .audit-title { font-size:12px;font-weight:800; }
+.audit-item .audit-date { font-size:9px;color:#888;white-space:nowrap; }
+.audit-item .audit-meta {
+    font-size:10px;color:#aaa;line-height:1.5;margin-top:5px;
+}
+
+
+/* ===== V18 MONITOR OPERACIONAL ===== */
+.monitor-card.oper-normal { border-color:#234b35; }
+.monitor-card.oper-atencao { border-color:#f59e0b; box-shadow:0 0 0 1px rgba(245,158,11,.12); }
+.monitor-card.oper-critico { border-color:#ef4444; box-shadow:0 0 0 1px rgba(239,68,68,.18); }
+.oper-status { display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:14px;font-size:9px;font-weight:900; }
+.oper-status.normal { background:rgba(34,197,94,.16);color:#22c55e; }
+.oper-status.atencao { background:rgba(245,158,11,.16);color:#fbbf24; }
+.oper-status.critico { background:rgba(239,68,68,.16);color:#ef4444; }
+.monitor-progress { height:7px;background:#20202d;border-radius:8px;overflow:hidden;margin-top:8px; }
+.monitor-progress > div { height:100%;background:#2563eb;border-radius:8px;transition:width .35s ease; }
+.monitor-oper-grid { display:grid;grid-template-columns:repeat(2,1fr);gap:5px 10px;margin-top:8px;font-size:9px;color:#a8a8b3; }
+.rota-version-badge { padding:3px 7px;border-radius:10px;background:rgba(59,130,246,.13);color:#60a5fa;font-size:9px;font-weight:700; }
+
+
+.route-score-pill {
+    display:inline-flex;
+    padding:4px 8px;
+    border-radius:12px;
+    font-size:9px;
+    font-weight:900;
+    background:rgba(59,130,246,.15);
+    color:#93c5fd;
+}
 </style>
 </head>
 <body>
 
+<!-- LOGIN -->
 <div id="login-overlay">
 <div class="login-card">
 <h2>🚛 <span>GPS</span> Gestão</h2>
@@ -87,6 +436,7 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 </div>
 </div>
 
+<!-- SIDEBAR -->
 <div class="sidebar">
 <h1>🚛 Gestão de Rotas</h1>
 <div class="subtitle">Gestão e monitoramento da frota</div>
@@ -95,30 +445,60 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 <button class="logout-btn" onclick="fazerLogout()">Sair</button>
 </div>
 <div class="tab-nav">
-<button class="tab-btn active" onclick="trocarAba('rotas')">🗺️ Rotas</button>
-<button class="tab-btn" onclick="trocarAba('frota')">🚚 Frota</button>
-<button class="tab-btn" onclick="trocarAba('reportes')">📍 Reportes</button>
-<button class="tab-btn" onclick="trocarAba('motoristas')">👤 Cadastrar</button>
+<div class="tab-main-row">
+<button class="tab-btn active" data-main="rotas" onclick="trocarAba('rotas')"><span class="nav-icon">🗺</span>Rotas</button>
+
+<div class="frota-main-wrap">
+<button class="tab-btn" id="btn-frota-principal" data-main="frota" onclick="toggleSubmenuFrota(event)"><span class="nav-icon">🚛</span>Frota <span id="seta-frota" style="font-size:9px;margin-left:3px;">▼</span></button>
 </div>
+
+<button class="tab-btn" data-main="reportes" onclick="trocarAba('reportes')"><span class="nav-icon">📍</span>Reportes</button>
+</div>
+
+<div id="submenu-frota" class="frota-submenu">
+<button data-sub="frota" onclick="abrirSubmenuFrota('frota')">🚚<br>Monitoramento</button>
+<button data-sub="veiculos" onclick="abrirSubmenuFrota('veiculos')">➕<br>Cadastro</button>
+<button data-sub="viagens" onclick="abrirSubmenuFrota('viagens')">🛰<br>Viagens</button>
+<button data-sub="historico" onclick="abrirSubmenuFrota('historico')">📜<br>Histórico</button>
+<button data-sub="restricoes" onclick="abrirSubmenuFrota('restricoes')">🛡️<br>Restrições</button>
+<button data-sub="auditoria" onclick="abrirSubmenuFrota('auditoria')">📋<br>Auditoria</button>
+</div>
+</div>
+
+<!-- ABA ROTAS -->
 <div id="tab-rotas" class="tab-content active">
-<div class="grupo"><label>👨‍✈️ Nome do Motorista</label><input type="text" id="nome-motorista" value="Motorista José"></div>
-<div class="grupo"><label>🚗 Tipo de Veículo</label><select id="tipo-veiculo" onchange="toggleRestricoes()"><option value="driving-car">Carro</option><option value="driving-hgv" selected>Caminhão</option></select></div>
 <div class="grupo"><label>⚙️ Preferência</label><select id="preferencia-rota"><option value="fastest">Mais Rápida</option><option value="shortest">Mais Curta</option></select></div>
 <hr style="border-color:#2a2a3e;margin:16px 0;">
 <div class="grupo"><label>📌 Nome da Rota</label><input type="text" id="nome-rota" value="Rota Teste 01"></div>
 <div class="grupo"><label>📍 Origem</label><input type="text" id="origem" value="Linhares, ES"></div>
 <div class="grupo"><label>🏁 Destino</label><input type="text" id="destino" value="Vitória, ES"></div>
-<div id="container-restricoes">
-<div class="grupo"><label>📏 Altura (m)</label><input type="number" id="altura" value="4.2"></div>
-<div class="grupo"><label>⚖️ Peso (t)</label><input type="number" id="peso" value="15"></div>
-<div class="grupo"><label>📐 Comprimento (m)</label><input type="number" id="comprimento" value="12"></div>
+
+<button class="btn-primary" id="btn-calcular" onclick="calcularRota()">🗺️ Criar Rota</button>
+<button class="btn-primary btn-success" id="btn-salvar" onclick="salvarRota()" style="display:none;">💾 Salvar na Biblioteca</button>
+
+<div style="margin-top:18px;border-top:1px solid #2a2a3e;padding-top:12px;">
+<h3 style="font-size:14px;margin-bottom:8px;">📚 Rotas Salvas</h3>
+<div id="lista-rotas-biblioteca"><div style="color:#888;text-align:center;padding:12px;">Carregando rotas...</div></div>
 </div>
-<button class="btn-primary" onclick="calcularRota()">🗺️ Calcular Rota</button>
-<button class="btn-primary btn-success" id="btn-salvar" onclick="salvarRota()" style="display:none;">💾 Salvar Rota</button>
+
 <div class="grupo" style="margin-top:20px;"><label>🎯 Filtrar Incidentes</label><select id="filtro-tomtom"><option value="completo">Modo Completo</option><option value="transito" selected>Modo Trânsito</option></select></div>
 <button class="btn-primary btn-tomtom" onclick="carregarTomTom()">📡 Atualizar Trânsito</button>
 <div id="status-dashboard" class="status-box">Dashboard pronto.</div>
 </div>
+
+<!-- ABA ROTAS VALIDADAS -->
+<div id="tab-validadas" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:5px;">✅ Rotas Validadas</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:12px;">
+Rotas específicas aprovadas pelo histórico real das viagens. Rotas vencidas ou bloqueadas não são reutilizadas automaticamente.
+</p>
+<button class="btn-primary btn-tomtom" onclick="verificarReportesRotas()">⚠️ Verificar Reportes</button>
+<button class="btn-primary btn-success" onclick="carregarRotasValidadas()">🔄 Atualizar</button>
+<div id="status-validadas" class="status-box">Aguardando consulta.</div>
+<div id="lista-rotas-validadas" style="margin-top:12px;"></div>
+</div>
+
+<!-- ABA FROTA -->
 <div id="tab-frota" class="tab-content">
 <h2 style="font-size:18px;margin-bottom:5px;">🚚 Frota em Tempo Real</h2>
 <p style="color:#aaa;font-size:11px;margin-bottom:12px;">Só aparecem no mapa veículos que enviaram GPS nos últimos 60 segundos.</p>
@@ -127,26 +507,375 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 <div id="lista-frota" style="margin-top:12px;"><div style="color:#888;text-align:center;padding:20px;">📡 Aguardando localização...</div></div>
 <div id="status-frota" class="status-box">Atualização automática a cada 5 segundos.</div>
 </div>
+
+<!-- ABA VIAGENS / MONITORAMENTO -->
+<div id="tab-viagens" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:5px;">🛰️ Viagens</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:12px;">Crie uma viagem escolhendo uma rota salva e um veículo.</p>
+
+<div class="grupo">
+<label>🗺️ Rota</label>
+<select id="viagem-rota" onchange="atualizarResumoRotaViagem()"><option value="">Selecione uma rota</option></select>
+</div>
+
+<div id="resumo-rota-viagem" class="veiculo-info-rota">
+Selecione uma rota da biblioteca.
+</div>
+
+<div class="grupo">
+<label>🚛 Veículo / Placa</label>
+<select id="viagem-veiculo" onchange="atualizarDadosVeiculoViagem()"><option value="">Selecione um veículo</option></select>
+</div>
+
+<div id="dados-veiculo-viagem" class="veiculo-info-rota">
+Selecione o caminhão para carregar suas medidas e peso cadastrados.
+</div>
+
+<div class="grupo"><label>📦 Carga</label><input type="text" id="viagem-carga" placeholder="Ex.: café, grãos, madeira..."></div>
+
+<div class="grupo">
+<label>📏 Altura total carregada (m)</label>
+<input type="number" id="viagem-altura" min="0.1" step="0.1" placeholder="Ex.: 4.60">
+<div style="font-size:10px;color:#888;margin-top:4px;">Altura real do caminhão + carga nesta viagem.</div>
+</div>
+
+<div class="grupo">
+<label>⚖️ Peso total da viagem (t)</label>
+<input type="number" id="viagem-peso" min="0.1" step="0.1" placeholder="Preenchido com o peso cadastrado">
+<div style="font-size:10px;color:#888;margin-top:4px;">Pode ajustar caso a carga altere o peso total utilizado no roteamento.</div>
+</div>
+
+<div class="grupo"><label>🕒 Saída prevista</label><input type="datetime-local" id="viagem-saida"></div>
+<button class="btn-primary btn-success" onclick="criarNovaViagem()">➕ Criar Viagem</button>
+<div id="status-nova-viagem" class="status-box">Escolha rota e veículo.</div>
+<div id="status-rota-especifica" class="cache-rota-box" style="display:none;"></div>
+
+
+<div class="verificacao-trajeto-wrap">
+    <div class="verificacao-toolbar">
+        <div>
+            <h3>🔎 Verificação do Trajeto</h3>
+            <div style="font-size:11px;color:#aaa;margin-top:3px;">
+                ANTT • análise de infraestrutura oficial próxima da rota
+            </div>
+        </div>
+        <div class="verificacao-actions-top">
+            <button class="btn-modo-lista" onclick="ativarModoListaRestricoes()">📋 Lista</button>
+            <button class="btn-modo-mapa" onclick="ativarModoMapaRestricoes()">🗺️ Mapa</button>
+            <button class="btn-voltar-viagens" onclick="sairModoVerificacao()">← Voltar</button>
+        </div>
+    </div>
+
+    <div class="scan-info">
+        O scanner consulta a <strong>base oficial da ANTT</strong> e procura no trajeto pontes,
+        viadutos, pontilhões, passagens e equipamentos de detecção de altura das rodovias concedidas.
+        <br><br>
+        ⚠️ <strong>Nenhum achado automático altera a rota.</strong><br>
+        Só uma restrição conferida e marcada como <strong>VALIDADA</strong> poderá ser usada
+        futuramente para bloquear/recalcular trajetos.
+    </div>
+
+    <div class="grupo" style="max-width:520px;">
+        <label>🚛 Viagem para verificar</label>
+        <select id="scan-viagem">
+            <option value="">Crie ou selecione uma viagem monitorada</option>
+        </select>
+    </div>
+
+    <button class="btn-primary btn-tomtom" onclick="varrerRestricoesSelecionada()" style="max-width:520px;">
+        🏛️ Varrer infraestrutura ANTT
+    </button>
+
+    <div id="status-scan-restricoes" class="status-box" style="max-width:720px;">
+        Aguardando seleção de uma viagem.
+    </div>
+
+    <div class="verificacao-resumo-grid">
+        <div class="verificacao-kpi"><strong id="vr-total">0</strong><span>ENCONTRADOS</span></div>
+        <div class="verificacao-kpi"><strong id="vr-risco">0</strong><span>POSSÍVEL RISCO</span></div>
+        <div class="verificacao-kpi"><strong id="vr-pendentes">0</strong><span>PENDENTES</span></div>
+        <div class="verificacao-kpi"><strong id="vr-validados">0</strong><span>VALIDADOS</span></div>
+    </div>
+
+    <div class="verificacao-filtros">
+        <button class="active" data-filtro-restricao="todos" onclick="filtrarRestricoesCards('todos',this)">Todos</button>
+        <button data-filtro-restricao="risco" onclick="filtrarRestricoesCards('risco',this)">⚠️ Possível risco</button>
+        <button data-filtro-restricao="pendentes" onclick="filtrarRestricoesCards('pendentes',this)">🔎 Pendentes</button>
+        <button data-filtro-restricao="validados" onclick="filtrarRestricoesCards('validados',this)">✅ Validados</button>
+        <button data-filtro-restricao="rejeitados" onclick="filtrarRestricoesCards('rejeitados',this)">✖ Rejeitados</button>
+    </div>
+
+    <div id="verificacao-lista-wrap">
+        <div id="lista-restricoes-candidatas" class="grid-cards"></div>
+    </div>
+
+    <div id="verificacao-mapa-layout">
+        <div id="verificacao-mapa-lista"></div>
+        <div id="verificacao-mapa"></div>
+    </div>
+</div>
+
+<div style="margin-top:18px;border-top:1px solid #2a2a3e;padding-top:12px;">
+<h3 style="font-size:14px;margin-bottom:8px;">Monitoramento</h3>
+<div class="kpi-grid">
+<div class="kpi"><strong id="kpi-em-viagem">0</strong><span>EM VIAGEM</span></div>
+<div class="kpi"><strong id="kpi-planejadas">0</strong><span>NORMAIS</span></div>
+<div class="kpi"><strong id="kpi-atrasadas">0</strong><span>ATENÇÃO</span></div>
+<div class="kpi"><strong id="kpi-fora-rota">0</strong><span>CRÍTICOS</span></div>
+</div>
+<div class="alert-header"><strong style="font-size:13px;">🔔 Alertas</strong><span id="alert-count" class="alert-pill">0</span></div>
+<div id="lista-alertas"><div style="color:#888;font-size:11px;">Sem alertas.</div></div>
+<button class="btn-primary btn-success" onclick="carregarMonitoramento(true)">🔄 Atualizar</button>
+<div id="lista-monitoramento" style="margin-top:12px;"><div style="color:#888;text-align:center;padding:20px;">Aguardando viagens...</div></div>
+<div id="status-monitoramento" class="status-box">Atualização automática a cada 15 segundos.</div>
+</div>
+</div>
+
+<div id="tab-historico" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:5px;">📜 Histórico</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:12px;">Histórico geral das viagens por veículo.</p>
+<div class="grupo"><label>🔎 Filtrar por placa</label><input type="text" id="filtro-historico-placa" placeholder="Ex.: QRM4B97" oninput="renderizarHistoricoGeral()"></div>
+<div id="lista-historico-geral"><div style="color:#888;text-align:center;padding:20px;">Carregando...</div></div>
+</div>
+
+
+<!-- ABA CENTRAL DE RESTRIÇÕES -->
+<div id="tab-restricoes" class="tab-content">
+    <h2 style="font-size:18px;margin-bottom:5px;">🛡️ Central de Restrições</h2>
+    <p style="color:#aaa;font-size:11px;margin-bottom:12px;">
+        Base global validada. Só estas restrições podem bloquear ou forçar recálculo de uma rota.
+    </p>
+
+    <div class="kpi-grid">
+        <div class="kpi"><strong id="kpi-rv-ativas">0</strong><span>ATIVAS</span></div>
+        <div class="kpi"><strong id="kpi-rv-altura">0</strong><span>COM ALTURA</span></div>
+        <div class="kpi"><strong id="kpi-rv-peso">0</strong><span>COM PESO</span></div>
+        <div class="kpi"><strong id="kpi-rv-vencendo">0</strong><span>VENCEM EM 30 DIAS</span></div>
+    </div>
+
+    <button class="btn-primary btn-success" onclick="carregarRestricoesGlobais()">
+        🔄 Atualizar base global
+    </button>
+
+    <div id="status-restricoes-globais" class="status-box">
+        Aguardando consulta.
+    </div>
+
+    <div id="lista-restricoes-globais" style="margin-top:12px;"></div>
+</div>
+
+
+<!-- ABA AUDITORIA -->
+<div id="tab-auditoria" class="tab-content">
+    <h2 style="font-size:18px;margin-bottom:5px;">📋 Auditoria de Viagens</h2>
+    <p style="color:#aaa;font-size:11px;margin-bottom:12px;">
+        Linha do tempo de criação, aprovação, bloqueio, início e conclusão das viagens.
+    </p>
+
+    <div class="veiculo-grid">
+        <div class="grupo">
+            <label>🚛 Filtrar placa</label>
+            <input type="text" id="auditoria-filtro-placa"
+                placeholder="Ex.: OCV8952"
+                oninput="agendarCarregarAuditoria()">
+        </div>
+
+        <div class="grupo">
+            <label>⚙️ Ação</label>
+            <select id="auditoria-filtro-acao" onchange="carregarAuditoriaGeral()">
+                <option value="">Todas</option>
+                <option value="VIAGEM_CRIADA">Viagem criada</option>
+                <option value="VIAGEM_APROVADA">Viagem aprovada</option>
+                <option value="APROVACAO_NEGADA_SEGURANCA">Aprovação negada</option>
+                <option value="VIAGEM_BLOQUEADA_GESTOR">Bloqueada pelo gestor</option>
+                <option value="APROVACAO_REABERTA">Aprovação reaberta</option>
+                <option value="VIAGEM_INICIADA">Viagem iniciada</option>
+                <option value="VIAGEM_CONCLUIDA">Viagem concluída</option>
+                <option value="APROVACAO_INVALIDADA">Aprovação invalidada</option>
+                <option value="SAIU_DA_ROTA">Saiu da rota</option>
+                <option value="RETORNOU_A_ROTA">Retornou à rota</option>
+                <option value="GPS_OFFLINE">GPS offline</option>
+                <option value="GPS_RECUPERADO">GPS recuperado</option>
+                <option value="CONSUMO_REAL_INFORMADO">Consumo informado</option>
+                <option value="CONSUMO_REAL_ANORMAL">Consumo anormal</option>
+            </select>
+        </div>
+    </div>
+
+    <button class="btn-primary btn-success" onclick="carregarAuditoriaGeral()">
+        🔄 Atualizar auditoria
+    </button>
+
+    <div id="status-auditoria" class="status-box">
+        Aguardando consulta.
+    </div>
+
+    <div id="lista-auditoria" style="margin-top:12px;"></div>
+</div>
+
+<!-- ABA REPORTES -->
 <div id="tab-reportes" class="tab-content">
-<h2 style="font-size:18px;margin-bottom:12px;">📍 Reportes</h2>
+<h2 style="font-size:18px;margin-bottom:5px;">📍 Reportes</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:10px;">Ativos interferem na navegação. Resolvidos e expirados ficam no histórico.</p>
+<div class="grupo"><label>Status</label><select id="filtro-status-reporte" onchange="carregarReportes(false)"><option value="todos">Todos</option><option value="ativo" selected>Ativos</option><option value="resolvido">Resolvidos</option><option value="expirado">Expirados</option></select></div>
 <div style="display:flex;gap:8px;margin-bottom:12px;">
 <button class="btn-primary btn-success" onclick="carregarReportes(true)" style="flex:1;">🔄 Atualizar</button>
 <button class="btn-primary btn-danger" onclick="limparReportes()" style="flex:1;">🗑️ Limpar</button>
 </div>
-<div id="tabela-reportes"><table><thead><tr><th>Motorista</th><th>Tipo</th><th>Local</th></tr></thead><tbody id="corpo-reportes"><tr><td colspan="3" style="text-align:center;padding:20px;color:#888;">Nenhum reporte.</td></tr></tbody></table></div>
+<div id="tabela-reportes"><table><thead><tr><th>Motorista</th><th>Tipo</th><th>Status</th><th>Local</th></tr></thead><tbody id="corpo-reportes"><tr><td colspan="4" style="text-align:center;padding:20px;color:#888;">Nenhum reporte.</td></tr></tbody></table></div>
 <div id="status-reportes" class="status-box">Aguardando...</div>
 </div>
-<div id="tab-motoristas" class="tab-content">
-<h2 style="font-size:18px;margin-bottom:16px;">➕ Cadastrar Motorista</h2>
-<div class="grupo"><label>👤 Nome</label><input type="text" id="novo-nome"></div>
-<div class="grupo"><label>Login</label><input type="text" id="novo-login"></div>
-<div class="grupo"><label>Senha</label><input type="password" id="novo-senha"></div>
-<button class="btn-primary btn-secondary" onclick="cadastrarMotorista()">✅ Cadastrar</button>
-<div id="status-cadastro" class="status-box">Preencha os dados.</div>
+
+<!-- ABA VEÍCULOS -->
+<div id="tab-veiculos" class="tab-content">
+<h2 style="font-size:18px;margin-bottom:5px;">🧾 Cadastro de Veículos</h2>
+<p style="color:#aaa;font-size:11px;margin-bottom:14px;">Comprimento, largura e peso ficam cadastrados no veículo. A altura total carregada é informada ao criar cada viagem.</p>
+
+<div class="grupo"><label>🚛 Placa</label><input type="text" id="veiculo-placa" maxlength="8" placeholder="ABC1D23" style="text-transform:uppercase;"></div>
+<div class="grupo"><label>🔢 Frota</label><input type="text" id="veiculo-frota" placeholder="Ex.: 1178"></div>
+<div class="grupo"><label>🏷️ Modelo</label><input type="text" id="veiculo-modelo" placeholder="Ex.: M.BENZ AXOR 2536S"></div>
+
+<div class="veiculo-grid">
+<div class="grupo"><label>📐 Comprimento (m)</label><input type="number" id="veiculo-comprimento" min="0.1" step="0.1" value="12"></div>
+<div class="grupo"><label>↔️ Largura (m)</label><input type="number" id="veiculo-largura" min="0.1" step="0.1" value="2.6"></div>
+</div>
+
+<div class="grupo"><label>⚖️ Peso (t)</label><input type="number" id="veiculo-peso" min="0.1" step="0.1" value="15"></div>
+
+<div class="veiculo-grid">
+    <div class="grupo">
+        <label>⛽ Consumo médio (km/L)</label>
+        <input type="number" id="veiculo-consumo" min="0.1" step="0.01" value="2.5" placeholder="Ex.: 2.50">
+    </div>
+
+    <div class="grupo">
+        <label>💰 Preço ref. combustível (R$/L)</label>
+        <input type="number" id="veiculo-preco-combustivel" min="0.01" step="0.01" placeholder="Ex.: 6.20">
+    </div>
+</div>
+
+<div class="grupo">
+    <label>🛢️ Combustível</label>
+    <select id="veiculo-tipo-combustivel">
+        <option value="diesel">Diesel</option>
+        <option value="diesel_s10">Diesel S10</option>
+        <option value="gasolina">Gasolina</option>
+        <option value="etanol">Etanol</option>
+        <option value="outro">Outro</option>
+    </select>
+</div>
+
+<button class="btn-primary btn-success" id="btn-cadastrar-veiculo" onclick="salvarVeiculo()">✅ Cadastrar Veículo</button>
+<button class="btn-primary btn-secondary" id="btn-cancelar-edicao" onclick="cancelarEdicaoVeiculo()" style="display:none;">Cancelar edição</button>
+<div id="status-veiculos" class="status-box">Cadastre os veículos autorizados a usar o aplicativo.</div>
+
+<h3 style="font-size:14px;margin-top:18px;margin-bottom:8px;">Veículos cadastrados</h3>
+<div id="lista-veiculos"><div style="color:#888;text-align:center;padding:15px;">Carregando...</div></div>
+<div id="historico-veiculo" class="hist-box" style="display:none;"></div>
 </div>
 </div>
 
+
+<!-- MODAL VALIDAÇÃO GLOBAL -->
+<div id="modal-validacao-restricao" style="
+    display:none;position:fixed;inset:0;z-index:12000;
+    background:rgba(0,0,0,.82);align-items:center;justify-content:center;
+    padding:20px;">
+    <div style="
+        width:min(620px,100%);max-height:90vh;overflow:auto;
+        background:#161625;border:1px solid #34344a;border-radius:16px;
+        padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.65);">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div>
+                <h2 style="font-size:18px;">🛡️ Validar para Roteamento</h2>
+                <div id="modal-validacao-titulo" style="font-size:11px;color:#aaa;margin-top:4px;"></div>
+            </div>
+            <button onclick="fecharModalValidacao()" style="border:0;background:#333;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>
+        </div>
+
+        <div class="scan-info" style="margin-top:12px;">
+            Esta ação adiciona o ponto à <strong>base global</strong>.
+            Informe somente valores realmente conferidos.
+        </div>
+
+        <input type="hidden" id="validacao-candidato-id">
+
+        <div class="veiculo-grid">
+            <div class="grupo"><label>📏 Altura máx. (m)</label><input type="number" step="0.01" id="vr-altura" placeholder="Ex.: 4.40"></div>
+            <div class="grupo"><label>↔️ Largura máx. (m)</label><input type="number" step="0.01" id="vr-largura" placeholder="Opcional"></div>
+            <div class="grupo"><label>📐 Comprimento máx. (m)</label><input type="number" step="0.01" id="vr-comprimento" placeholder="Opcional"></div>
+            <div class="grupo"><label>⚖️ Peso máx. (t)</label><input type="number" step="0.01" id="vr-peso" placeholder="Opcional"></div>
+        </div>
+
+        <div class="grupo">
+            <label>🧾 Tipo validado</label>
+            <select id="vr-tipo">
+                <option value="limite_altura">Limite de altura</option>
+                <option value="limite_largura">Limite de largura</option>
+                <option value="limite_peso">Limite de peso</option>
+                <option value="limite_comprimento">Limite de comprimento</option>
+                <option value="proibicao_caminhao">Proibição de caminhão</option>
+                <option value="acesso_restrito">Acesso restrito</option>
+                <option value="ponte_viaduto">Ponte/viaduto com restrição confirmada</option>
+            </select>
+        </div>
+
+        <div class="grupo"><label>🔗 Evidência / link</label><input type="text" id="vr-evidencia-url" placeholder="Foto, documento, Street View interno, fonte oficial..."></div>
+        <div class="grupo"><label>📝 Evidência / observação</label><input type="text" id="vr-evidencia-texto" placeholder="Ex.: placa física 4,40 m confirmada pela logística"></div>
+        <div class="grupo"><label>📅 Validade (dias)</label><input type="number" id="vr-valida-dias" value="180" min="1" max="3650"></div>
+        <div class="grupo"><label>📍 Raio de bloqueio (m)</label><input type="number" id="vr-raio" value="180" min="30" max="1500"></div>
+
+        <button class="btn-primary btn-success" onclick="confirmarValidacaoGlobal()">
+            🛡️ Confirmar e adicionar à base global
+        </button>
+    </div>
+</div>
+
+
+<!-- MODAL AUDITORIA DA VIAGEM -->
+<div id="modal-auditoria-viagem" style="
+    display:none;position:fixed;inset:0;z-index:12100;
+    background:rgba(0,0,0,.84);align-items:center;justify-content:center;padding:20px;">
+    <div style="
+        width:min(760px,100%);max-height:90vh;overflow:auto;
+        background:#161625;border:1px solid #34344a;border-radius:16px;
+        padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.65);">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+                <h2 style="font-size:18px;">📋 Auditoria da Viagem</h2>
+                <div id="modal-auditoria-titulo" style="font-size:11px;color:#aaa;margin-top:4px;"></div>
+            </div>
+            <button onclick="fecharAuditoriaViagem()"
+                style="border:0;background:#333;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>
+        </div>
+        <div id="modal-auditoria-lista" style="margin-top:14px;"></div>
+    </div>
+</div>
+
+
+<div id="modal-historico-consumo" style="
+    display:none;position:fixed;inset:0;z-index:12200;
+    background:rgba(0,0,0,.84);align-items:center;justify-content:center;padding:20px;">
+    <div style="
+        width:min(760px,100%);max-height:90vh;overflow:auto;
+        background:#161625;border:1px solid #34344a;border-radius:16px;padding:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+                <h2 style="font-size:18px;">⛽ Histórico de Consumo</h2>
+                <div id="hist-consumo-titulo" style="font-size:11px;color:#aaa;margin-top:4px;"></div>
+            </div>
+            <button onclick="fecharHistoricoConsumo()"
+                style="border:0;background:#333;color:#fff;width:32px;height:32px;border-radius:50%;cursor:pointer;">✕</button>
+        </div>
+        <div id="hist-consumo-resumo" class="kpi-grid" style="margin-top:14px;"></div>
+        <div id="hist-consumo-lista" style="margin-top:12px;"></div>
+    </div>
+</div>
+
+<!-- MAPA -->
 <div id="mapa"></div>
+
+<!-- LEGENDA -->
 <div id="legenda-geral" class="legenda-mapa">
 <div class="legenda-titulo">🗺️ Mapa</div>
 <div class="legenda-item">🚛 Veículo ativo</div>
@@ -169,11 +898,19 @@ const API_BASE = 'https://sistema-gps-cpf7.onrender.com';
 // ======================================================
 let mapa = null, tokenJWT = null, dadosUsuario = null, rotaAtual = null;
 let marcadorOrigem = null, marcadorDestino = null, geoJsonCalculado = null;
-let motoristasList = [], camadaCalor = null, camadaTomTom = null;
+let motoristasList = [], veiculosList = [], rotasBiblioteca = [], historicoGeral = [], veiculoEditandoId = null, camadaCalor = null, camadaTomTom = null;
 let marcadoresFrotaLayer = null, intervalFrota = null, primeiraCargaFrota = true;
 const INTERVALO_FROTA = 5000;
 const LIMITE_ATUALIZACAO_MAPA = 60;
 let marcadoresReportesLayer = null, intervalReportes = null;
+let intervalMonitoramentoViagens = null, camadaHistoricoGps = null;
+let viagensMonitoradasAtual = [];
+let restricoesCandidatasAtual = [];
+let filtroRestricaoAtual = 'todos';
+let mapaRestricoes = null;
+let layerRestricoes = null;
+let layerRotaRestricoes = null;
+let viagemRestricaoAtualId = null;
 
 // ======================================================
 // MAP
@@ -190,12 +927,63 @@ function initMapa() {
 // TABS
 // ======================================================
 function trocarAba(aba) {
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    document.querySelector(`.tab-btn[onclick="trocarAba('${aba}')"]`)?.classList.add('active');
+    document.querySelectorAll('.tab-btn[data-main]').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.frota-submenu button').forEach(b => b.classList.remove('active'));
+
     document.getElementById(`tab-${aba}`)?.classList.add('active');
+
+    const abasFrota = ['frota', 'veiculos', 'viagens', 'historico'];
+
+    if (abasFrota.includes(aba)) {
+        document.getElementById('btn-frota-principal')?.classList.add('active');
+        document.querySelector(`.frota-submenu button[data-sub="${aba}"]`)?.classList.add('active');
+    } else {
+        document.querySelector(`.tab-btn[data-main="${aba}"]`)?.classList.add('active');
+        fecharSubmenuFrota();
+    }
+
     if (aba === 'frota') carregarLocalizacoes(true);
     if (aba === 'reportes') carregarReportes(true);
+    if (aba === 'validadas') carregarRotasValidadas();
+    if (aba === 'veiculos') carregarVeiculos();
+    if (aba === 'viagens') {
+        carregarMonitoramento(true);
+        carregarResumoMonitoramento();
+        carregarAlertas();
+        preencherCombosViagem();
+    }
+    if (aba === 'historico') carregarHistoricoGeral();
+}
+
+function toggleSubmenuFrota(event) {
+    if (event) event.stopPropagation();
+
+    const menu = document.getElementById('submenu-frota');
+    const seta = document.getElementById('seta-frota');
+
+    if (!menu) return;
+
+    const aberto = menu.classList.toggle('open');
+    if (seta) seta.textContent = aberto ? '▲' : '▼';
+}
+
+function abrirSubmenuFrota(aba) {
+    trocarAba(aba);
+
+    const menu = document.getElementById('submenu-frota');
+    const seta = document.getElementById('seta-frota');
+
+    if (menu) menu.classList.add('open');
+    if (seta) seta.textContent = '▲';
+}
+
+function fecharSubmenuFrota() {
+    const menu = document.getElementById('submenu-frota');
+    const seta = document.getElementById('seta-frota');
+
+    if (menu) menu.classList.remove('open');
+    if (seta) seta.textContent = '▼';
 }
 
 // ======================================================
@@ -221,10 +1009,15 @@ async function fazerLogin() {
         document.getElementById('login-overlay').classList.add('hidden');
         initMapa();
         await carregarMotoristas();
+        await carregarVeiculos();
+        await carregarRotasBiblioteca();
         iniciarMonitoramentoFrota();
         iniciarMonitoramentoReportes();
+        iniciarMonitoramentoViagens();
         await carregarLocalizacoes(true);
         await carregarReportes(false);
+        await carregarResumoMonitoramento();
+        await carregarAlertas();
         atualizarStatus('✅ Dashboard conectado.', 'sucesso');
         status.innerHTML = '✅ Login realizado!';
         status.className = 'status-box sucesso';
@@ -237,6 +1030,7 @@ function fazerLogout() {
     tokenJWT = null;
     if (intervalFrota) { clearInterval(intervalFrota); intervalFrota = null; }
     if (intervalReportes) { clearInterval(intervalReportes); intervalReportes = null; }
+    if (intervalMonitoramentoViagens) { clearInterval(intervalMonitoramentoViagens); intervalMonitoramentoViagens = null; }
     if (marcadoresFrotaLayer) marcadoresFrotaLayer.clearLayers();
     if (marcadoresReportesLayer) marcadoresReportesLayer.clearLayers();
     primeiraCargaFrota = true;
@@ -244,36 +1038,2514 @@ function fazerLogout() {
 }
 
 // ======================================================
-// MOTORISTAS / CADASTRO
+// MOTORISTAS / VEÍCULOS
 // ======================================================
 async function carregarMotoristas() {
     try {
-        const resp = await fetch(`${API_BASE}/motoristas`, { headers: { 'Authorization': tokenJWT } });
+        const resp = await fetch(`${API_BASE}/motoristas`, {
+            headers: { 'Authorization': tokenJWT }
+        });
         if (!resp.ok) throw new Error('Erro ao carregar motoristas');
         motoristasList = await resp.json();
-    } catch(erro) { console.error(erro); }
+    } catch(erro) {
+        console.error(erro);
+    }
 }
-async function cadastrarMotorista() {
-    const nome = document.getElementById('novo-nome').value.trim();
-    const login = document.getElementById('novo-login').value.trim();
-    const senha = document.getElementById('novo-senha').value.trim();
-    const status = document.getElementById('status-cadastro');
-    if (!nome || !login || !senha) { status.innerHTML = '❌ Preencha todos os campos.'; return; }
+
+function placaNormalizada(valor) {
+    return String(valor || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+async function carregarVeiculos() {
+    if (!tokenJWT) return;
+
     try {
-        const resp = await fetch(`${API_BASE}/motoristas`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
-            body: JSON.stringify({ nome, login, senha })
+        const resp = await fetch(`${API_BASE}/veiculos`, {
+            headers: { 'Authorization': tokenJWT }
         });
+
         const data = await resp.json();
-        if (!resp.ok) throw new Error(data.erro || 'Erro');
-        status.innerHTML = `✅ ${nome} cadastrado!`;
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar veículos');
+
+        veiculosList = data;
+
+        const select = document.getElementById('veiculo-rota');
+        const selecionado = select?.value || '';
+
+        if (select) {
+            select.innerHTML =
+                '<option value="">Selecione um veículo</option>' +
+                veiculosList
+                    .filter(v => v.ativo)
+                    .map(v => `<option value="${v.id}">${v.placa}${v.frota ? ` • Frota ${v.frota}` : ''}${v.modelo ? ` • ${v.modelo}` : ''}</option>`)
+                    .join('');
+
+            if (selecionado && veiculosList.some(v => String(v.id) === String(selecionado) && v.ativo)) {
+                select.value = selecionado;
+            }
+        }
+
+        renderizarListaVeiculos();
+        atualizarVeiculoSelecionado();
+        atualizarDadosVeiculoViagem();
+
+    } catch(erro) {
+        console.error('Erro veículos:', erro);
+        const status = document.getElementById('status-veiculos');
+        if (status) {
+            status.innerHTML = `❌ ${erro.message}`;
+            status.className = 'status-box erro';
+        }
+    }
+}
+
+function renderizarListaVeiculos() {
+    const lista = document.getElementById('lista-veiculos');
+    if (!lista) return;
+
+    if (!veiculosList.length) {
+        lista.innerHTML = '<div style="color:#888;text-align:center;padding:15px;">Nenhum veículo cadastrado.</div>';
+        return;
+    }
+
+    lista.innerHTML = veiculosList.map(v => `
+        <div class="veiculo-card">
+            <div class="veiculo-card-top">
+                <strong>🚛 ${v.placa}</strong>
+                <span class="${v.ativo ? 'badge-ativo' : 'badge-inativo'}">${v.ativo ? 'ATIVO' : 'INATIVO'}</span>
+            </div>
+            <small>
+                ${v.frota ? `🔢 Frota: ${v.frota}<br>` : ''}
+                ${v.modelo ? `🏷️ ${v.modelo}<br>` : ''}
+                📐 ${Number(v.comprimento || 0).toFixed(2)} m &nbsp;
+                ↔️ ${Number(v.largura || 0).toFixed(2)} m &nbsp;
+                ⚖️ ${Number(v.peso || 0).toFixed(2)} t
+                ${v.consumo_medio_km_l ? `<br>⛽ ${Number(v.consumo_medio_km_l).toFixed(2)} km/L • ${v.tipo_combustivel || 'diesel'}` : ''}
+                ${v.preco_combustivel_ref ? ` • R$ ${Number(v.preco_combustivel_ref).toFixed(2)}/L` : ''}
+                ${v.motorista ? `<br>👤 Vinculado: ${v.motorista}` : '<br>👤 Sem motorista vinculado'}
+            </small>
+            <div style="display:flex;gap:6px;margin-top:9px;">
+                <button class="btn-primary btn-secondary" style="margin:0;padding:7px;font-size:11px;" onclick="editarVeiculo(${v.id})">✏️ Editar</button>
+                <button class="btn-primary btn-secondary" style="margin:0;padding:7px;font-size:11px;" onclick="abrirHistoricoVeiculo(${v.id})">📜 Histórico</button>
+                <button class="btn-primary btn-secondary" style="margin:0;padding:7px;font-size:11px;" onclick="abrirHistoricoConsumoVeiculo(${v.id},'${String(v.placa || '').replace(/'/g,'')}')">⛽ Consumo</button>
+                <button class="btn-primary ${v.ativo ? 'btn-danger' : 'btn-success'}" style="margin:0;padding:7px;font-size:11px;" onclick="alterarStatusVeiculo(${v.id}, ${!v.ativo})">${v.ativo ? '⛔ Desativar' : '✅ Ativar'}</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function salvarVeiculo() {
+    const placa = placaNormalizada(document.getElementById('veiculo-placa').value);
+    const frota = document.getElementById('veiculo-frota').value.trim();
+    const modelo = document.getElementById('veiculo-modelo').value.trim();
+    const comprimento = Number(document.getElementById('veiculo-comprimento').value);
+    const largura = Number(document.getElementById('veiculo-largura').value);
+    const peso = Number(document.getElementById('veiculo-peso').value);
+    const consumo_medio_km_l =
+        Number(document.getElementById('veiculo-consumo').value) || null;
+    const preco_combustivel_ref =
+        Number(document.getElementById('veiculo-preco-combustivel').value) || null;
+    const tipo_combustivel =
+        document.getElementById('veiculo-tipo-combustivel').value || 'diesel';
+
+    const status = document.getElementById('status-veiculos');
+    const btn = document.getElementById('btn-cadastrar-veiculo');
+
+    if (placa.length < 7) {
+        status.innerHTML = '❌ Informe uma placa válida.';
+        status.className = 'status-box erro';
+        return;
+    }
+
+    if (![comprimento, largura, peso].every(v => Number.isFinite(v) && v > 0)) {
+        status.innerHTML = '❌ Comprimento, largura e peso devem ser maiores que zero.';
+        status.className = 'status-box erro';
+        return;
+    }
+
+    btn.disabled = true;
+    status.innerHTML = veiculoEditandoId ? '🔄 Atualizando veículo...' : '🔄 Cadastrando veículo...';
+    status.className = 'status-box carregando';
+
+    try {
+        const url = veiculoEditandoId
+            ? `${API_BASE}/veiculos/${veiculoEditandoId}`
+            : `${API_BASE}/veiculos`;
+
+        const resp = await fetch(url, {
+            method: veiculoEditandoId ? 'PUT' : 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': tokenJWT
+            },
+            body: JSON.stringify({
+                placa,
+                frota,
+                modelo,
+                comprimento,
+                largura,
+                peso,
+                consumo_medio_km_l,
+                tipo_combustivel,
+                preco_combustivel_ref
+            })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao salvar veículo');
+
+        status.innerHTML = `✅ Veículo ${placa} ${veiculoEditandoId ? 'atualizado' : 'cadastrado'}!`;
         status.className = 'status-box sucesso';
-        await carregarMotoristas();
+        limparFormularioVeiculo();
+        await carregarVeiculos();
+
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function editarVeiculo(id) {
+    const v = veiculosList.find(item => Number(item.id) === Number(id));
+    if (!v) return;
+
+    veiculoEditandoId = v.id;
+    document.getElementById('veiculo-placa').value = v.placa || '';
+    document.getElementById('veiculo-frota').value = v.frota || '';
+    document.getElementById('veiculo-modelo').value = v.modelo || '';
+    document.getElementById('veiculo-comprimento').value = v.comprimento || '';
+    document.getElementById('veiculo-largura').value = v.largura || '';
+    document.getElementById('veiculo-peso').value = v.peso || '';
+    document.getElementById('veiculo-consumo').value =
+        v.consumo_medio_km_l || '';
+    document.getElementById('veiculo-preco-combustivel').value =
+        v.preco_combustivel_ref || '';
+    document.getElementById('veiculo-tipo-combustivel').value =
+        v.tipo_combustivel || 'diesel';
+
+    document.getElementById('btn-cadastrar-veiculo').innerHTML = '💾 Salvar Alterações';
+    document.getElementById('btn-cancelar-edicao').style.display = 'block';
+    document.getElementById('status-veiculos').innerHTML = `✏️ Editando ${v.placa}`;
+}
+
+function cancelarEdicaoVeiculo() {
+    limparFormularioVeiculo();
+    document.getElementById('status-veiculos').innerHTML = 'Edição cancelada.';
+    document.getElementById('status-veiculos').className = 'status-box';
+}
+
+function limparFormularioVeiculo() {
+    veiculoEditandoId = null;
+    document.getElementById('veiculo-placa').value = '';
+    document.getElementById('veiculo-frota').value = '';
+    document.getElementById('veiculo-modelo').value = '';
+    document.getElementById('veiculo-comprimento').value = '12';
+    document.getElementById('veiculo-largura').value = '2.6';
+    document.getElementById('veiculo-peso').value = '15';
+    document.getElementById('veiculo-consumo').value = '2.5';
+    document.getElementById('veiculo-preco-combustivel').value = '';
+    document.getElementById('veiculo-tipo-combustivel').value = 'diesel';
+    document.getElementById('btn-cadastrar-veiculo').innerHTML = '✅ Cadastrar Veículo';
+    document.getElementById('btn-cancelar-edicao').style.display = 'none';
+}
+
+async function alterarStatusVeiculo(id, ativo) {
+    try {
+        const resp = await fetch(`${API_BASE}/veiculos/${id}/status`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': tokenJWT
+            },
+            body: JSON.stringify({ ativo })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao alterar veículo');
+
+        await carregarVeiculos();
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+function getVeiculoSelecionado() {
+    const id = Number(document.getElementById('veiculo-rota')?.value);
+    if (!id) return null;
+    return veiculosList.find(v => Number(v.id) === id) || null;
+}
+
+function atualizarVeiculoSelecionado() {
+    const div = document.getElementById('info-veiculo-rota');
+    if (!div) return;
+
+    const v = getVeiculoSelecionado();
+
+    if (!v) {
+        div.innerHTML = 'Selecione o veículo que receberá a rota.';
+        return;
+    }
+
+    div.innerHTML = `
+        <strong>🚛 ${v.placa}</strong>${v.frota ? ` • Frota ${v.frota}` : ''}<br>
+        ${v.modelo ? `🏷️ ${v.modelo}<br>` : ''}
+        📐 Comprimento: <strong>${Number(v.comprimento).toFixed(2)} m</strong><br>
+        ↔️ Largura: <strong>${Number(v.largura).toFixed(2)} m</strong><br>
+        ⚖️ Peso: <strong>${Number(v.peso).toFixed(2)} t</strong><br>
+        📏 Altura: <strong>será definida para esta rota conforme a carga</strong>
+    `;
+}
+
+// ======================================================
+// ROTAS VALIDADAS
+// ======================================================
+async function carregarRotasValidadas() {
+    const lista = document.getElementById('lista-rotas-validadas');
+    const status = document.getElementById('status-validadas');
+    if (!lista || !tokenJWT) return;
+
+    try {
+        status.innerHTML = '🔄 Consultando rotas específicas...';
+        const resp = await fetch(`${API_BASE}/rotas-especificas`, {
+            headers: { 'Authorization': tokenJWT }
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || 'Erro ao consultar rotas');
+
+        const agora = Date.now();
+
+        lista.innerHTML = dados.length ? dados.map(r => {
+            const vencida = r.valida_ate && new Date(r.valida_ate).getTime() <= agora;
+            let estado = '🧪 TESTE';
+            if (r.bloqueada) estado = '⛔ BLOQUEADA';
+            else if (vencida) estado = '⌛ VENCIDA';
+            else if (r.nivel_confianca === 'confiavel') estado = '🟢 CONFIÁVEL';
+            else if (r.nivel_confianca === 'validada') estado = '✅ VALIDADA';
+            else if (r.nivel_confianca === 'revisao') estado = '🟠 REVISÃO';
+
+            return `
+                <div class="rota-card">
+                    <strong>${estado} • ${r.rota_base}</strong>
+                    <small>
+                        ${r.origem} → ${r.destino}<br>
+                        📐 ${Number(r.comprimento).toFixed(2)} × ${Number(r.largura).toFixed(2)} m
+                        • Altura ${Number(r.altura).toFixed(2)} m
+                        • ${Number(r.peso).toFixed(2)} t<br>
+                        🧾 Versão ${r.versao || 1}
+                        • Viagens: ${r.viagens_concluidas || 0}
+                        • Com desvio: ${r.viagens_com_desvio || 0}<br>
+                        ${r.valida_ate ? `📅 Válida até: ${formatarDataHora(r.valida_ate)}<br>` : ''}
+                        ${r.motivo_bloqueio ? `⚠️ ${r.motivo_bloqueio}<br>` : ''}
+                    </small>
+                    <button class="btn-primary btn-secondary" style="padding:7px;font-size:10px;" onclick="alterarBloqueioRota(${r.id}, ${!r.bloqueada})">
+                        ${r.bloqueada ? '🔓 Desbloquear' : '⛔ Bloquear'}
+                    </button>
+                    <button class="btn-primary btn-tomtom" style="padding:7px;font-size:10px;" onclick="forcarRecalculoRota(${r.id})">
+                        🔄 Forçar Recálculo
+                    </button>
+                </div>
+            `;
+        }).join('') : '<div style="color:#888;text-align:center;padding:20px;">Nenhuma rota específica encontrada.</div>';
+
+        status.innerHTML = `✅ ${dados.length} rota(s) específica(s) encontrada(s).`;
+        status.className = 'status-box sucesso';
+
     } catch(erro) {
         status.innerHTML = `❌ ${erro.message}`;
         status.className = 'status-box erro';
     }
+}
+
+async function alterarBloqueioRota(id, bloquear) {
+    const motivo = bloquear ? 'Bloqueada manualmente pelo gestor' : '';
+
+    try {
+        const resp = await fetch(`${API_BASE}/rotas-especificas/${id}/bloqueio`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': tokenJWT
+            },
+            body: JSON.stringify({ bloqueada: bloquear, motivo })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro');
+        await carregarRotasValidadas();
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+async function forcarRecalculoRota(id) {
+    if (!confirm('Forçar recálculo? Esta rota deixará de ser reutilizada até uma nova viagem validá-la.')) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/rotas-especificas/${id}/forcar-recalculo`, {
+            method: 'POST',
+            headers: { 'Authorization': tokenJWT }
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro');
+        await carregarRotasValidadas();
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+async function verificarReportesRotas() {
+    const status = document.getElementById('status-validadas');
+
+    try {
+        status.innerHTML = '🔄 Verificando reportes ativos próximos às rotas...';
+
+        const resp = await fetch(`${API_BASE}/rotas-especificas/verificar-reportes`, {
+            method: 'POST',
+            headers: { 'Authorization': tokenJWT }
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro');
+
+        status.innerHTML = `⚠️ ${data.verificadas} rota(s) verificadas; ${data.bloqueadas.length} bloqueada(s) por reportes ativos.`;
+        status.className = data.bloqueadas.length ? 'status-box carregando' : 'status-box sucesso';
+
+        await carregarRotasValidadas();
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+// ======================================================
+// BIBLIOTECA / NOVA VIAGEM / ALERTAS
+// ======================================================
+async function carregarRotasBiblioteca() {
+    if (!tokenJWT) return;
+    try {
+        const resp = await fetch(`${API_BASE}/rotas`, { headers: { 'Authorization': tokenJWT } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar rotas');
+        rotasBiblioteca = data;
+        renderizarRotasBiblioteca();
+        preencherCombosViagem();
+    } catch(erro) { console.error(erro); }
+}
+
+function renderizarRotasBiblioteca() {
+    const lista = document.getElementById('lista-rotas-biblioteca');
+    if (!lista) return;
+    if (!rotasBiblioteca.length) {
+        lista.innerHTML = '<div style="color:#888;text-align:center;padding:12px;">Nenhuma rota salva.</div>';
+        return;
+    }
+
+    lista.innerHTML = rotasBiblioteca.map(r => {
+        const seg = r.dados_geojson?.features?.[0]?.properties?.segments?.[0];
+        const km = seg ? (Number(seg.distance) / 1000).toFixed(1) : '-';
+        const dur = seg ? Number(seg.duration) : 0;
+        const h = Math.floor(dur / 3600);
+        const m = Math.floor((dur % 3600) / 60);
+        return `<div class="rota-card">
+            <strong>🗺️ ${r.nome || 'Rota'}</strong>
+            <small>${r.origem} → ${r.destino}<br>🛣️ ${km} km • ⏱️ ${h}h ${m}min</small>
+            <button class="btn-primary btn-secondary" style="padding:7px;font-size:11px;" onclick="visualizarRotaSalva(${r.id})">👁 Visualizar</button>
+        </div>`;
+    }).join('');
+}
+
+function visualizarRotaSalva(id) {
+    const rota = rotasBiblioteca.find(r => Number(r.id) === Number(id));
+    if (!rota?.dados_geojson) return;
+    geoJsonCalculado = rota.dados_geojson;
+    desenharRota(rota.dados_geojson);
+    atualizarStatus(`🗺️ Visualizando "${rota.nome}"`, 'sucesso');
+}
+
+function preencherCombosViagem() {
+    const sr = document.getElementById('viagem-rota');
+    const sv = document.getElementById('viagem-veiculo');
+
+    if (sr) {
+        const atual = sr.value;
+        sr.innerHTML = '<option value="">Selecione uma rota</option>' +
+            rotasBiblioteca.map(r => `<option value="${r.id}">${r.nome} • ${r.origem} → ${r.destino}</option>`).join('');
+        if (atual) sr.value = atual;
+        atualizarResumoRotaViagem();
+    }
+
+    if (sv) {
+        const atual = sv.value;
+        sv.innerHTML = '<option value="">Selecione um veículo</option>' +
+            veiculosList.filter(v => v.ativo).map(v => `<option value="${v.id}">${v.placa}${v.frota ? ` • Frota ${v.frota}` : ''}</option>`).join('');
+        if (atual) sv.value = atual;
+        atualizarDadosVeiculoViagem();
+    }
+}
+
+
+function atualizarResumoRotaViagem() {
+    const id = Number(document.getElementById('viagem-rota')?.value);
+    const div = document.getElementById('resumo-rota-viagem');
+    if (!div) return;
+
+    const rota = rotasBiblioteca.find(r => Number(r.id) === id);
+
+    if (!rota) {
+        div.innerHTML = 'Selecione uma rota da biblioteca.';
+        return;
+    }
+
+    const segmento = rota.dados_geojson?.features?.[0]?.properties?.segments?.[0];
+    const km = segmento ? (Number(segmento.distance) / 1000).toFixed(1) : '-';
+    const duracao = segmento ? Number(segmento.duration) : 0;
+    const horas = Math.floor(duracao / 3600);
+    const minutos = Math.floor((duracao % 3600) / 60);
+
+    div.innerHTML = `
+        <strong>🗺️ ${rota.nome || 'Rota'}</strong><br>
+        📍 ${rota.origem}<br>
+        🏁 ${rota.destino}<br>
+        🛣️ ${km} km &nbsp; • &nbsp; ⏱️ ${horas}h ${minutos}min
+    `;
+}
+
+function atualizarDadosVeiculoViagem() {
+    const id = Number(document.getElementById('viagem-veiculo')?.value);
+    const div = document.getElementById('dados-veiculo-viagem');
+    const pesoInput = document.getElementById('viagem-peso');
+
+    if (!div) return;
+
+    const veiculo = veiculosList.find(v => Number(v.id) === id);
+
+    if (!veiculo) {
+        div.innerHTML = 'Selecione o caminhão para carregar suas medidas e peso cadastrados.';
+        if (pesoInput) pesoInput.value = '';
+        return;
+    }
+
+    const comprimento = Number(veiculo.comprimento);
+    const largura = Number(veiculo.largura);
+    const peso = Number(veiculo.peso);
+
+    div.innerHTML = `
+        <strong>🚛 ${veiculo.placa}</strong>
+        ${veiculo.frota ? ` • Frota ${veiculo.frota}` : ''}<br>
+        ${veiculo.modelo ? `🏷️ ${veiculo.modelo}<br>` : ''}
+        📐 Comprimento: <strong>${Number.isFinite(comprimento) ? comprimento.toFixed(2) : '-'} m</strong><br>
+        ↔️ Largura: <strong>${Number.isFinite(largura) ? largura.toFixed(2) : '-'} m</strong><br>
+        ⚖️ Peso cadastrado: <strong>${Number.isFinite(peso) ? peso.toFixed(2) : '-'} t</strong>
+    `;
+
+    if (pesoInput && Number.isFinite(peso) && peso > 0) {
+        pesoInput.value = peso;
+    }
+}
+
+async function criarNovaViagem() {
+    const status = document.getElementById('status-nova-viagem');
+    const id_rota = Number(document.getElementById('viagem-rota').value);
+    const id_veiculo = Number(document.getElementById('viagem-veiculo').value);
+    const carga = document.getElementById('viagem-carga').value.trim();
+    const altura_total = Number(document.getElementById('viagem-altura').value);
+    const peso = Number(document.getElementById('viagem-peso').value);
+    const saida = document.getElementById('viagem-saida').value;
+
+    if (!id_rota || !id_veiculo) {
+        status.innerHTML = '❌ Selecione rota e veículo.';
+        status.className = 'status-box erro';
+        return;
+    }
+    if (!Number.isFinite(altura_total) || altura_total <= 0) {
+        status.innerHTML = '❌ Informe a altura total carregada.';
+        status.className = 'status-box erro';
+        return;
+    }
+
+    const body = {
+        id_rota, id_veiculo, carga, altura_total,
+        saida_prevista: saida ? new Date(saida).toISOString() : null
+    };
+    if (Number.isFinite(peso) && peso > 0) body.peso_total = peso;
+
+    try {
+        status.innerHTML = '🔄 Criando viagem...';
+        status.className = 'status-box carregando';
+
+        const resp = await fetch(`${API_BASE}/viagens`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify(body)
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao criar viagem');
+
+        const segurancaViagem =
+            data.seguranca ||
+            data.viagem?.checagem_seguranca ||
+            null;
+
+        if (data.viagem?.liberacao_rota === 'bloqueada') {
+            const check =
+                segurancaViagem?.checagem_seguranca ||
+                segurancaViagem ||
+                {};
+
+            const qtd =
+                Array.isArray(check?.incompativeis)
+                    ? check.incompativeis.length
+                    : 0;
+
+            status.innerHTML = `
+                🚫 <strong>VIAGEM BLOQUEADA PARA O MOTORISTA</strong><br>
+                ${data.mensagem || 'Restrição validada incompatível.'}<br>
+                🛡️ ${qtd} restrição(ões) incompatível(is) encontrada(s).<br>
+                <span style="color:#fbbf24;">
+                    A viagem foi salva para revisão, mas não será entregue ao app do motorista.
+                </span>
+            `;
+            status.className = 'status-box erro';
+        } else {
+            status.innerHTML = `
+                ✅ <strong>Viagem criada.</strong><br>
+                🛡️ Pré-checagem global: rota segura.<br>
+                🕒 <strong>Aguardando aprovação formal do gestor.</strong><br>
+                Ela só aparecerá no app do motorista após ser aprovada.
+            `;
+
+            if (data.inteligencia) {
+                const i = data.inteligencia;
+
+                status.innerHTML += `
+                    <br><br>
+                    <strong>🧠 Inteligência da rota</strong><br>
+                    ⭐ Score: ${i.score_rota}/100<br>
+                    🛣️ Distância: ${i.distancia_estimada_km ?? '-'} km<br>
+                    ⏱️ Tempo estimado: ${i.duracao_estimada_min ? Math.round(i.duracao_estimada_min/60) + 'h ' + Math.round(i.duracao_estimada_min%60) + 'min' : '-'}<br>
+                    ⛽ Combustível estimado: ${i.combustivel_estimado_l ?? '-'} L
+                    ${i.custo_combustivel_estimado ? `<br>💰 Custo estimado: R$ ${Number(i.custo_combustivel_estimado).toFixed(2)}` : ''}
+                    <br>🚚 Viagens equivalentes: ${i.memoria?.viagens_total || 0}
+                `;
+            }
+            status.className = 'status-box sucesso';
+        }
+
+        const cacheBox = document.getElementById('status-rota-especifica');
+
+        if (cacheBox && data.rota_especifica) {
+            cacheBox.style.display = 'block';
+
+            const bloqueada =
+                data.viagem?.liberacao_rota === 'bloqueada';
+
+            if (bloqueada) {
+                cacheBox.innerHTML = `
+                    <span style="color:#ef4444;">
+                        🚫 <strong>Rota não liberada</strong>
+                    </span><br>
+                    Existe pelo menos uma restrição GLOBAL VALIDADA incompatível
+                    ainda interceptando o trajeto. Revise a Central de Restrições.
+                `;
+            } else 
+
+            if (data.rota_especifica.reutilizada) {
+                cacheBox.innerHTML = `
+                    <span class="cache-rota-ok">
+                        ♻️ <strong>Rota específica reutilizada</strong>
+                    </span><br>
+                    Já existia uma rota validada para esta rota base e este conjunto
+                    de comprimento, largura, altura e peso. O ORS não precisou
+                    calcular outra rota.
+                `;
+            } else {
+                cacheBox.innerHTML = `
+                    <span class="cache-rota-nova">
+                        🧪 <strong>Nova rota específica calculada</strong>
+                    </span><br>
+                    Esta rota ficará em teste. Quando a viagem for concluída sem
+                    desvio maior que 1 km por pelo menos 5 minutos, ela será
+                    liberada para reutilização por outro veículo com as mesmas restrições.
+                `;
+            }
+        }
+
+        await carregarMonitoramento(false);
+        await carregarResumoMonitoramento();
+        await carregarAlertas();
+
+        if (data.viagem?.id) {
+            preencherComboScannerViagens();
+            const comboScan = document.getElementById('scan-viagem');
+
+            if (comboScan) {
+                comboScan.value = String(data.viagem.id);
+            }
+
+            // A viagem já está salva. A varredura é informativa e
+            // nunca bloqueia/recalcula automaticamente.
+            varrerRestricoesViagem(data.viagem.id, true);
+        }
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+async function carregarResumoMonitoramento() {
+    if (!tokenJWT) return;
+    try {
+        const resp = await fetch(`${API_BASE}/monitoramento/resumo`, { headers: { 'Authorization': tokenJWT } });
+        const d = await resp.json();
+        if (!resp.ok) return;
+        // V18: KPIs são calculados pelo monitor operacional detalhado.
+    } catch(e) {}
+}
+
+async function carregarAlertas() {
+    if (!tokenJWT) return;
+    try {
+        const resp = await fetch(`${API_BASE}/alertas`, { headers: { 'Authorization': tokenJWT } });
+        const a = await resp.json();
+        if (!resp.ok) return;
+        document.getElementById('alert-count').textContent = a.length;
+        const lista = document.getElementById('lista-alertas');
+        lista.innerHTML = a.length ? a.slice(0,8).map(x => `
+            <div class="alert-item ${x.severidade === 'alta' ? 'alta' : ''}">
+                <strong>${x.placa}${x.frota ? ` • ${x.frota}` : ''}</strong><br>${x.mensagem}
+            </div>`).join('') : '<div style="color:#888;font-size:11px;">Sem alertas.</div>';
+    } catch(e) {}
+}
+
+async function carregarHistoricoGeral() {
+    if (!tokenJWT) return;
+
+    const lista = document.getElementById('lista-historico-geral');
+    if (lista) lista.innerHTML = '🔄 Carregando histórico...';
+
+    try {
+        const resp = await fetch(`${API_BASE}/historico/viagens`, {
+            headers: { 'Authorization': tokenJWT }
+        });
+
+        const contentType = resp.headers.get('content-type') || '';
+
+        if (!contentType.includes('application/json')) {
+            const texto = await resp.text();
+
+            console.error(
+                '❌ /historico/viagens retornou resposta não-JSON:',
+                resp.status,
+                texto.substring(0, 500)
+            );
+
+            if (resp.status === 404 || texto.includes('Cannot GET')) {
+                throw new Error(
+                    'O backend publicado ainda não possui a rota /historico/viagens. ' +
+                    'Atualize o server.js no Render e faça um novo deploy.'
+                );
+            }
+
+            throw new Error(
+                `Servidor retornou HTTP ${resp.status} em vez de JSON.`
+            );
+        }
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(
+                data.erro ||
+                data.detalhe ||
+                `Erro HTTP ${resp.status}`
+            );
+        }
+
+        if (!Array.isArray(data)) {
+            throw new Error('Resposta do histórico em formato inválido.');
+        }
+
+        historicoGeral = data;
+        renderizarHistoricoGeral();
+
+    } catch(erro) {
+        console.error('❌ Histórico:', erro);
+
+        if (lista) {
+            lista.innerHTML = `
+                <div style="
+                    background:#0a0a12;
+                    border-left:3px solid #ef4444;
+                    border-radius:8px;
+                    padding:12px;
+                    color:#fca5a5;
+                    line-height:1.5;
+                ">
+                    ❌ ${erro.message}
+                </div>
+            `;
+        }
+    }
+}
+
+function renderizarHistoricoGeral() {
+    const lista = document.getElementById('lista-historico-geral');
+    if (!lista) return;
+    const filtro = String(document.getElementById('filtro-historico-placa')?.value || '').toUpperCase().trim();
+    const dados = historicoGeral.filter(v => !filtro || String(v.placa || '').toUpperCase().includes(filtro));
+
+    lista.innerHTML = dados.length ? dados.map(v => `
+        <div class="monitor-card">
+            <div class="monitor-top"><strong>🚛 ${v.placa}${v.frota ? ` • ${v.frota}` : ''}</strong><span>${v.status}</span></div>
+            <div style="font-size:11px;color:#aaa;margin-top:6px;">
+                🗺️ ${v.rota_nome}<br>${v.origem} → ${v.destino}<br>
+                👤 ${v.motorista || '-'}<br>📦 ${v.carga || '-'}<br>
+                Saída: ${formatarDataHora(v.saida_real || v.saida_prevista)}<br>
+                Chegada: ${formatarDataHora(v.chegada_real || v.chegada_prevista)}
+            </div>
+        </div>`).join('') : '<div style="color:#888;text-align:center;padding:20px;">Nenhuma viagem encontrada.</div>';
+}
+
+async function atualizarStatusReporte(id, novoStatus) {
+    try {
+        const resp = await fetch(`${API_BASE}/reportes/${id}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            body: JSON.stringify({ status: novoStatus })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao atualizar');
+        await carregarReportes(false);
+    } catch(erro) { alert(erro.message); }
+}
+
+// ======================================================
+// MONITORAMENTO DE VIAGENS / HISTÓRICO
+// ======================================================
+function iniciarMonitoramentoViagens() {
+    if (intervalMonitoramentoViagens) clearInterval(intervalMonitoramentoViagens);
+    intervalMonitoramentoViagens = setInterval(() => {
+        if (tokenJWT) {
+            carregarMonitoramento(false);
+            carregarResumoMonitoramento();
+            carregarAlertas();
+        }
+    }, 15000);
+}
+
+function formatarDataHora(valor) {
+    if (!valor) return '-';
+    const d = new Date(valor);
+    return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
+}
+
+async function carregarMonitoramento(centralizar = false) {
+    if (!tokenJWT) return;
+
+    const lista = document.getElementById('lista-monitoramento');
+    const status = document.getElementById('status-monitoramento');
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/monitoramento/viagens`,
+            { headers:{ 'Authorization':tokenJWT } }
+        );
+
+        const dados = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(dados.erro || 'Erro no monitoramento');
+        }
+
+        viagensMonitoradasAtual =
+            Array.isArray(dados) ? dados : [];
+
+        preencherComboScannerViagens();
+
+        const emViagem =
+            viagensMonitoradasAtual.filter(v => v.status === 'em_andamento');
+
+        const normais =
+            emViagem.filter(v => v.severidade_operacional === 'normal').length;
+
+        const atencao =
+            emViagem.filter(v => v.severidade_operacional === 'atencao').length;
+
+        const criticos =
+            emViagem.filter(v => v.severidade_operacional === 'critico').length;
+
+        document.getElementById('kpi-em-viagem').textContent = emViagem.length;
+        document.getElementById('kpi-planejadas').textContent = normais;
+        document.getElementById('kpi-atrasadas').textContent = atencao;
+        document.getElementById('kpi-fora-rota').textContent = criticos;
+
+        if (!dados.length) {
+            lista.innerHTML =
+                '<div style="color:#888;text-align:center;padding:20px;">Nenhuma viagem ativa ou planejada.</div>';
+            status.innerHTML = '📭 Sem viagens para monitorar.';
+            return;
+        }
+
+        lista.innerHTML = dados.map(v => {
+            const severidade =
+                v.severidade_operacional || 'normal';
+
+            const gps =
+                v.gps_status === 'online'
+                    ? `🟢 Online • ${v.gps_idade_segundos ?? 0}s`
+                    : v.gps_status === 'atrasado'
+                        ? `🟡 Atrasado • ${Math.round((v.gps_idade_segundos || 0)/60)} min`
+                        : v.gps_status === 'offline'
+                            ? `🔴 Offline • ${Math.round((v.gps_idade_segundos || 0)/60)} min`
+                            : '⚪ Sem GPS';
+
+            const eta =
+                v.eta_atual
+                    ? formatarDataHora(v.eta_atual)
+                    : '-';
+
+            const operLabel =
+                severidade === 'critico'
+                    ? '🔴 CRÍTICO'
+                    : severidade === 'atencao'
+                        ? '🟠 ATENÇÃO'
+                        : '🟢 NORMAL';
+
+            const statusAprovacao =
+                v.status_aprovacao || 'aguardando_aprovacao';
+
+            return `
+                <div
+                    class="monitor-card oper-${severidade}"
+                    ${
+                        v.lat && v.lon
+                            ? `onclick="focarMotorista(${Number(v.lat)},${Number(v.lon)})" style="cursor:pointer;"`
+                            : ''
+                    }
+                >
+                    <div class="monitor-top">
+                        <strong>🚛 ${v.placa}${v.frota ? ` • ${v.frota}` : ''}</strong>
+                        <span class="oper-status ${severidade}">
+                            ${operLabel}
+                        </span>
+                    </div>
+
+                    <div style="font-size:11px;color:#aaa;margin-top:6px;">
+                        ${v.origem} → ${v.destino}<br>
+                        👤 ${v.motorista || 'Motorista ainda não vinculado'}<br>
+                        📦 ${v.carga || 'Carga não informada'}
+                    </div>
+
+                    <div class="monitor-progress">
+                        <div style="width:${Math.max(0,Math.min(100,Number(v.progresso_percentual || 0)))}%"></div>
+                    </div>
+
+                    <div class="monitor-oper-grid">
+                        <span>📍 Progresso: <strong>${v.progresso_percentual || 0}%</strong></span>
+                        <span>🛣️ Restante: <strong>${
+                            v.restante_km !== null && v.restante_km !== undefined
+                                ? `${Number(v.restante_km).toFixed(1)} km`
+                                : '-'
+                        }</strong></span>
+                        <span>⏱️ ETA: <strong>${eta}</strong></span>
+                        <span>🚚 Vel. média: <strong>${
+                            v.velocidade_media_kmh !== null && v.velocidade_media_kmh !== undefined
+                                ? `${v.velocidade_media_kmh} km/h`
+                                : '-'
+                        }</strong></span>
+                        <span>📡 GPS: <strong>${gps}</strong></span>
+                        <span>📐 Desvio: <strong>${
+                            v.desvio_km !== null && v.desvio_km !== undefined
+                                ? `${Number(v.desvio_km).toFixed(2)} km`
+                                : '-'
+                        }</strong></span>
+                    </div>
+
+                    <div style="
+                        margin-top:8px;
+                        padding:8px;
+                        border-radius:8px;
+                        background:#0a0a12;
+                        border:1px solid #242436;
+                        font-size:9px;
+                        line-height:1.55;
+                        color:#aaa;
+                    ">
+                        🧠 <strong style="color:#e5e7eb;">Score da rota: ${v.score_rota ?? 55}/100</strong><br>
+                        ⛽ Est.: <strong>${v.combustivel_estimado_l !== null && v.combustivel_estimado_l !== undefined ? Number(v.combustivel_estimado_l).toFixed(1) + ' L' : '-'}</strong>
+                        ${v.custo_combustivel_estimado ? ` • R$ ${Number(v.custo_combustivel_estimado).toFixed(2)}` : ''}
+                        <br>
+                        🚚 Histórico equivalente:
+                        <strong>${v.memoria_rota_snapshot?.memoria?.viagens_total || 0} viagem(ns)</strong>
+                        • sem ocorrência:
+                        <strong>${v.memoria_rota_snapshot?.memoria?.viagens_sem_ocorrencia || 0}</strong>
+
+                        ${
+                            v.consumo_real_km_l
+                                ? `<br>⛽ Real: <strong>${Number(v.consumo_real_km_l).toFixed(2)} km/L</strong>
+                                   ${v.combustivel_real_l ? ` • ${Number(v.combustivel_real_l).toFixed(1)} L` : ''}
+                                   ${v.variacao_consumo_percentual !== null && v.variacao_consumo_percentual !== undefined ? ` • ${Number(v.variacao_consumo_percentual).toFixed(1)}% vs cadastro` : ''}
+                                   ${v.consumo_anormal ? `<br><span style="color:#ef4444;font-weight:900;">⚠️ CONSUMO ABAIXO DO PADRÃO</span>` : ''}`
+                                : ''
+                        }
+                    </div>
+
+                    <div class="monitor-badges">
+                        <span class="rota-version-badge">
+                            🧊 Rota aprovada v${v.versao_rota_aprovada || '-'}
+                        </span>
+
+                        ${
+                            v.rota_snapshot_ativa
+                                ? `<span class="monitor-badge green">🔒 Snapshot congelado</span>`
+                                : ''
+                        }
+
+                        ${
+                            v.fora_da_rota
+                                ? `<span class="monitor-badge red">⚠️ FORA DA ROTA</span>`
+                                : ''
+                        }
+
+                        ${
+                            v.estado_monitoramento === 'gps_offline'
+                                ? `<span class="monitor-badge red">📡 GPS OFFLINE</span>`
+                                : ''
+                        }
+
+                        ${
+                            v.atrasada
+                                ? `<span class="monitor-badge orange">⏰ +${v.atraso_minutos} min</span>`
+                                : ''
+                        }
+
+                        ${
+                            v.rota_reutilizada
+                                ? `<span class="monitor-badge green">♻️ Rota validada reutilizada</span>`
+                                : `<span class="monitor-badge">🧪 Rota específica em validação</span>`
+                        }
+
+                        ${
+                            v.liberacao_rota === 'bloqueada'
+                                ? `<span class="monitor-badge red">🚫 ROTA BLOQUEADA</span>`
+                                : `<span class="monitor-badge green">🛡️ Segurança OK</span>`
+                        }
+
+                        <span class="aprovacao-badge ${statusAprovacao}">
+                            ${
+                                statusAprovacao === 'aprovada'
+                                    ? '✅ APROVADA'
+                                    : statusAprovacao === 'bloqueada'
+                                        ? '🚫 BLOQUEADA'
+                                        : statusAprovacao === 'revisao_obrigatoria'
+                                            ? '🔄 REVISÃO OBRIGATÓRIA'
+                                            : '🕒 AGUARDANDO APROVAÇÃO'
+                            }
+                        </span>
+                    </div>
+
+                    ${
+                        v.motivo_invalidacao_aprovacao
+                            ? `
+                                <div style="
+                                    margin-top:8px;
+                                    padding:8px;
+                                    border-radius:7px;
+                                    background:rgba(239,68,68,.10);
+                                    color:#fca5a5;
+                                    font-size:10px;
+                                    line-height:1.45;
+                                ">
+                                    🔄 ${v.motivo_invalidacao_aprovacao}
+                                </div>
+                              `
+                            : ''
+                    }
+
+                    <div class="aprovacao-actions">
+                        ${
+                            v.status === 'planejada' &&
+                            [
+                                'aguardando_aprovacao',
+                                'revisao_obrigatoria',
+                                null,
+                                undefined
+                            ].includes(v.status_aprovacao)
+                                ? `
+                                    <button class="btn-aprovar-viagem"
+                                        onclick="event.stopPropagation();aprovarViagemFormal(${Number(v.id)})">
+                                        ✅ Aprovar
+                                    </button>
+
+                                    <button class="btn-bloquear-viagem"
+                                        onclick="event.stopPropagation();bloquearViagemFormal(${Number(v.id)})">
+                                        🚫 Bloquear
+                                    </button>
+                                  `
+                                : ''
+                        }
+
+                        ${
+                            v.status === 'planejada' &&
+                            ['aprovada','bloqueada'].includes(v.status_aprovacao)
+                                ? `
+                                    <button class="btn-reabrir-viagem"
+                                        onclick="event.stopPropagation();reabrirAprovacaoViagem(${Number(v.id)})">
+                                        🔄 Reabrir aprovação
+                                    </button>
+                                  `
+                                : ''
+                        }
+
+                        <button class="btn-auditoria-viagem"
+                            onclick="event.stopPropagation();abrirAuditoriaViagem(${Number(v.id)},'${String(v.placa || '').replace(/'/g,'')}')">
+                            📋 Auditoria
+                        </button>
+
+                        <button
+                            onclick="event.stopPropagation();selecionarViagemScanner(${Number(v.id)});"
+                            style="background:#0ea5e9;color:#001018;"
+                        >
+                            🏛️ Verificar ANTT
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+        status.innerHTML =
+            `✅ ${dados.length} viagem(ns) monitorada(s) • ` +
+            `${normais} normal(is) • ` +
+            `${atencao} atenção • ` +
+            `${criticos} crítico(s)`;
+
+        status.className =
+            criticos
+                ? 'status-box erro'
+                : atencao
+                    ? 'status-box carregando'
+                    : 'status-box sucesso';
+
+        if (centralizar && mapa) {
+            const ativos =
+                dados.filter(
+                    v =>
+                        Number.isFinite(Number(v.lat)) &&
+                        Number.isFinite(Number(v.lon))
+                );
+
+            if (ativos.length) {
+                mapa.fitBounds(
+                    ativos.map(
+                        v => [
+                            Number(v.lat),
+                            Number(v.lon)
+                        ]
+                    ),
+                    {
+                        padding:[30,30],
+                        maxZoom:14
+                    }
+                );
+            }
+        }
+
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+
+async function abrirHistoricoConsumoVeiculo(idVeiculo, placa = '') {
+    const modal = document.getElementById('modal-historico-consumo');
+    const resumo = document.getElementById('hist-consumo-resumo');
+    const lista = document.getElementById('hist-consumo-lista');
+
+    document.getElementById('hist-consumo-titulo').textContent =
+        placa ? `Veículo ${placa}` : `Veículo #${idVeiculo}`;
+
+    modal.style.display = 'flex';
+    resumo.innerHTML =
+        '<div class="kpi"><strong>...</strong><span>CARREGANDO</span></div>';
+    lista.innerHTML =
+        '<div style="color:#888;text-align:center;padding:20px;">🔄 Carregando...</div>';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/veiculos/${idVeiculo}/historico-consumo`,
+            { headers:{ 'Authorization':tokenJWT } }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(data.erro || 'Erro ao carregar histórico.');
+        }
+
+        const r = data.resumo || {};
+
+        resumo.innerHTML = `
+            <div class="kpi"><strong>${r.media_geral ? Number(r.media_geral).toFixed(2) : '-'}</strong><span>MÉDIA GERAL km/L</span></div>
+            <div class="kpi"><strong>${r.media_30_dias ? Number(r.media_30_dias).toFixed(2) : '-'}</strong><span>ÚLTIMOS 30 DIAS</span></div>
+            <div class="kpi"><strong>${r.viagens_total || 0}</strong><span>VIAGENS</span></div>
+            <div class="kpi"><strong>${r.viagens_anormais || 0}</strong><span>FORA DO PADRÃO</span></div>
+        `;
+
+        lista.innerHTML =
+            data.viagens?.length
+                ? data.viagens.map(v => `
+                    <div class="audit-item ${v.consumo_anormal ? 'bloqueio' : 'aprovacao'}">
+                        <div class="audit-top">
+                            <div class="audit-title">${v.origem} → ${v.destino}</div>
+                            <div class="audit-date">${formatarDataHora(v.criado_em)}</div>
+                        </div>
+                        <div class="audit-meta">
+                            ⛽ Real: <strong>${Number(v.consumo_real_km_l).toFixed(2)} km/L</strong><br>
+                            🛣️ ${v.distancia_km ? Number(v.distancia_km).toFixed(1) + ' km' : '-'}
+                            • ${v.combustivel_real_l ? Number(v.combustivel_real_l).toFixed(1) + ' L' : '-'}<br>
+                            📊 Previsto: ${v.consumo_previsto_km_l ? Number(v.consumo_previsto_km_l).toFixed(2) + ' km/L' : '-'}
+                            ${v.variacao_percentual !== null && v.variacao_percentual !== undefined ? ` • ${Number(v.variacao_percentual).toFixed(1)}%` : ''}
+                            ${v.consumo_anormal ? '<br><span style="color:#ef4444;font-weight:900;">⚠️ Consumo abaixo do padrão histórico</span>' : ''}
+                        </div>
+                    </div>
+                `).join('')
+                : '<div class="audit-item">Nenhum consumo real registrado.</div>';
+
+    } catch (erro) {
+        lista.innerHTML = `<div class="audit-item bloqueio">❌ ${erro.message}</div>`;
+    }
+}
+
+function fecharHistoricoConsumo() {
+    document.getElementById('modal-historico-consumo').style.display = 'none';
+}
+
+async function aprovarViagemFormal(idViagem) {
+    const observacao =
+        prompt(
+            'Observação da aprovação (opcional):',
+            'Rota e configuração conferidas pelo gestor.'
+        );
+
+    if (observacao === null) return;
+
+    const ok = confirm(
+        'APROVAR formalmente esta viagem?\\n\\n' +
+        'O sistema fará uma nova pré-checagem agora. ' +
+        'Se estiver segura, a viagem será liberada para o app do motorista.'
+    );
+
+    if (!ok) return;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/aprovar`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ observacao })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(
+                data.erro ||
+                'A viagem não pôde ser aprovada.'
+            );
+        }
+
+        alert('✅ Viagem aprovada e liberada ao motorista.');
+        await carregarMonitoramento(false);
+        await carregarResumoMonitoramento();
+
+    } catch(erro) {
+        alert(`🚫 ${erro.message}`);
+        await carregarMonitoramento(false);
+    }
+}
+
+async function bloquearViagemFormal(idViagem) {
+    const motivo =
+        prompt(
+            'Motivo obrigatório do bloqueio:',
+            ''
+        );
+
+    if (!motivo?.trim()) return;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/bloquear-aprovacao`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ motivo:motivo.trim() })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao bloquear.');
+
+        await carregarMonitoramento(false);
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+async function reabrirAprovacaoViagem(idViagem) {
+    const motivo =
+        prompt(
+            'Motivo da reabertura/revisão:',
+            'Revisão solicitada pelo gestor.'
+        );
+
+    if (motivo === null) return;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/reabrir-aprovacao`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ motivo })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao reabrir.');
+
+        await carregarMonitoramento(false);
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+function classeAuditAcao(acao) {
+    const a = String(acao || '');
+
+    if (
+        a.includes('APROV') &&
+        !a.includes('NEGADA')
+    ) return 'aprovacao';
+
+    if (
+        a.includes('BLOQUE') ||
+        a.includes('NEGADA')
+    ) return 'bloqueio';
+
+    if (
+        a.includes('SAIU_DA_ROTA') ||
+        a.includes('GPS_OFFLINE') ||
+        a.includes('INVALIDADA')
+    ) return 'bloqueio';
+
+    if (
+        a.includes('RETORNOU_A_ROTA') ||
+        a.includes('GPS_RECUPERADO')
+    ) return 'aprovacao';
+
+    if (a.includes('INICIADA')) return 'inicio';
+    if (a.includes('CONCLUIDA')) return 'fim';
+
+    return '';
+}
+
+function nomeAuditAcao(acao) {
+    const map = {
+        VIAGEM_CRIADA:'🆕 Viagem criada',
+        VIAGEM_APROVADA:'✅ Viagem aprovada',
+        APROVACAO_NEGADA_SEGURANCA:'🚫 Aprovação negada pela segurança',
+        VIAGEM_BLOQUEADA_GESTOR:'🚫 Viagem bloqueada pelo gestor',
+        APROVACAO_REABERTA:'🔄 Aprovação reaberta',
+        VIAGEM_INICIADA:'🚛 Viagem iniciada',
+        VIAGEM_CONCLUIDA:'🏁 Viagem concluída',
+        APROVACAO_INVALIDADA:'🔄 Aprovação invalidada',
+        SAIU_DA_ROTA:'⚠️ Saiu da rota',
+        RETORNOU_A_ROTA:'✅ Retornou à rota',
+        GPS_OFFLINE:'📡 GPS offline',
+        GPS_RECUPERADO:'📶 GPS recuperado',
+        CONSUMO_REAL_INFORMADO:'⛽ Consumo real informado',
+        CONSUMO_REAL_ANORMAL:'⚠️ Consumo real anormal'
+    };
+    return map[acao] || acao;
+}
+
+function renderItemAuditoria(a) {
+    const detalhes =
+        a.detalhes && typeof a.detalhes === 'object'
+            ? a.detalhes
+            : {};
+
+    const motivo =
+        detalhes.motivo ||
+        detalhes.observacao ||
+        '';
+
+    return `
+        <div class="audit-item ${classeAuditAcao(a.acao)}">
+            <div class="audit-top">
+                <div class="audit-title">${nomeAuditAcao(a.acao)}</div>
+                <div class="audit-date">${formatarDataHora(a.criado_em)}</div>
+            </div>
+
+            <div class="audit-meta">
+                🚛 ${a.placa || '-'} • ${a.origem || ''} → ${a.destino || ''}<br>
+                👤 ${a.usuario_nome || a.tipo_usuario || 'Sistema'}<br>
+                ${a.status_anterior || '-'} → <strong>${a.status_novo || '-'}</strong>
+                ${motivo ? `<br>📝 ${motivo}` : ''}
+                ${detalhes.versao_aprovacao ? `<br>🔢 Versão da aprovação: ${detalhes.versao_aprovacao}` : ''}
+            </div>
+        </div>
+    `;
+}
+
+async function abrirAuditoriaViagem(idViagem, placa = '') {
+    const modal =
+        document.getElementById('modal-auditoria-viagem');
+
+    const lista =
+        document.getElementById('modal-auditoria-lista');
+
+    document.getElementById('modal-auditoria-titulo').textContent =
+        `Viagem #${idViagem}${placa ? ' • ' + placa : ''}`;
+
+    lista.innerHTML =
+        '<div style="color:#888;padding:20px;text-align:center;">🔄 Carregando...</div>';
+
+    modal.style.display = 'flex';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/auditoria`,
+            {
+                headers:{ 'Authorization':tokenJWT }
+            }
+        );
+
+        const dados = await resp.json();
+
+        if (!resp.ok) throw new Error(dados.erro || 'Erro na auditoria.');
+
+        lista.innerHTML =
+            dados.length
+                ? dados.map(renderItemAuditoria).join('')
+                : '<div class="audit-item">Sem registros de auditoria.</div>';
+
+    } catch(erro) {
+        lista.innerHTML =
+            `<div class="audit-item bloqueio">❌ ${erro.message}</div>`;
+    }
+}
+
+function fecharAuditoriaViagem() {
+    document.getElementById('modal-auditoria-viagem').style.display = 'none';
+}
+
+let timerAuditoria = null;
+
+function agendarCarregarAuditoria() {
+    clearTimeout(timerAuditoria);
+    timerAuditoria =
+        setTimeout(carregarAuditoriaGeral, 350);
+}
+
+async function carregarAuditoriaGeral() {
+    const lista =
+        document.getElementById('lista-auditoria');
+
+    const status =
+        document.getElementById('status-auditoria');
+
+    if (!lista || !tokenJWT) return;
+
+    const placa =
+        document.getElementById('auditoria-filtro-placa')?.value || '';
+
+    const acao =
+        document.getElementById('auditoria-filtro-acao')?.value || '';
+
+    lista.innerHTML =
+        '<div style="color:#888;padding:20px;text-align:center;">🔄 Carregando auditoria...</div>';
+
+    try {
+        const params = new URLSearchParams();
+
+        if (placa.trim()) params.set('placa', placa.trim());
+        if (acao) params.set('acao', acao);
+
+        const resp = await fetch(
+            `${API_BASE}/auditoria/viagens?${params.toString()}`,
+            {
+                headers:{ 'Authorization':tokenJWT }
+            }
+        );
+
+        const dados = await resp.json();
+
+        if (!resp.ok) throw new Error(dados.erro || 'Erro ao carregar auditoria.');
+
+        status.innerHTML =
+            `✅ ${dados.length} evento(s) de auditoria.`;
+        status.className = 'status-box sucesso';
+
+        lista.innerHTML =
+            dados.length
+                ? dados.map(renderItemAuditoria).join('')
+                : '<div class="audit-item">Nenhum evento encontrado.</div>';
+
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+
+// ======================================================
+// SCANNER ANTT - INFRAESTRUTURA OFICIAL
+// ======================================================
+function preencherComboScannerViagens() {
+    const combo = document.getElementById('scan-viagem');
+    if (!combo) return;
+
+    const atual = combo.value;
+
+    combo.innerHTML =
+        '<option value="">Selecione uma viagem</option>' +
+        viagensMonitoradasAtual.map(v => `
+            <option value="${Number(v.id)}">
+                ${v.placa || 'Veículo'} • ${v.origem || ''} → ${v.destino || ''}
+            </option>
+        `).join('');
+
+    if (
+        atual &&
+        viagensMonitoradasAtual.some(v => String(v.id) === String(atual))
+    ) {
+        combo.value = atual;
+    }
+
+    combo.onchange = () => {
+        if (combo.value) {
+            carregarRestricoesCandidatas(Number(combo.value));
+        } else {
+            const lista = document.getElementById('lista-restricoes-candidatas');
+            if (lista) lista.innerHTML = '';
+        }
+    };
+}
+
+function selecionarViagemScanner(idViagem) {
+    abrirSubmenuFrota('viagens');
+    ativarModoListaRestricoes();
+
+    const combo = document.getElementById('scan-viagem');
+
+    if (combo) {
+        combo.value = String(idViagem);
+    }
+
+    carregarRestricoesCandidatas(idViagem);
+
+    setTimeout(() => {
+        document.getElementById('status-scan-restricoes')
+            ?.scrollIntoView({ behavior:'smooth', block:'center' });
+    }, 150);
+}
+
+async function varrerRestricoesSelecionada() {
+    const id = Number(
+        document.getElementById('scan-viagem')?.value
+    );
+
+    if (!id) {
+        const status = document.getElementById('status-scan-restricoes');
+        status.innerHTML = '❌ Selecione uma viagem.';
+        status.className = 'status-box erro';
+        return;
+    }
+
+    await varrerRestricoesViagem(id, false);
+}
+
+async function varrerRestricoesViagem(idViagem, automatico = false) {
+    const status = document.getElementById('status-scan-restricoes');
+
+    if (!idViagem || !tokenJWT) return;
+
+    try {
+        if (status) {
+            status.innerHTML =
+                automatico
+                    ? '🔄 Viagem criada. Varrendo possíveis restrições em segundo plano...'
+                    : '🔄 Consultando bases oficiais da ANTT e cruzando com o trajeto...';
+
+            status.className = 'status-box carregando';
+        }
+
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/scan-restricoes`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({})
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(
+                data.erro ||
+                data.detalhe ||
+                'Falha na varredura'
+            );
+        }
+
+        if (status) {
+            status.innerHTML = `
+                ✅ Varredura ANTT concluída.<br>
+                🌉 ${data.pontes_similares_na_rota || 0} ponte(s)/viaduto(s)/similar(es) no corredor.<br>
+                📏 ${data.equipamentos_altura_na_rota || 0} equipamento(s) de detecção de altura.<br>
+                🔎 ${data.candidatos_na_rota || 0} candidato(s) salvos para conferência.<br>
+                <span style="color:#fbbf24;">
+                    Fonte oficial ANTT. Nenhum candidato altera a rota sem validação humana.
+                </span>
+            `;
+            status.className = 'status-box sucesso';
+        }
+
+        await carregarRestricoesCandidatas(idViagem);
+
+    } catch(erro) {
+        console.error('Scanner restrições:', erro);
+
+        if (status) {
+            status.innerHTML = `❌ ${erro.message}`;
+            status.className = 'status-box erro';
+        }
+    }
+}
+
+function textoTipoRestricao(tipo) {
+    const mapaTipos = {
+        ponte_viaduto:'🌉 Ponte / viaduto',
+        tunel:'🚇 Túnel',
+        passagem_coberta:'🏗️ Passagem coberta',
+        limite_altura:'📏 Limite de altura',
+        limitador_altura:'📏 Limitador de altura',
+        limite_largura:'↔️ Limite de largura',
+        limite_comprimento:'📐 Limite de comprimento',
+        limite_peso:'⚖️ Limite de peso',
+        limite_eixo:'⚙️ Limite por eixo',
+        proibicao_caminhao:'🚫 Proibição de caminhão',
+        acesso_restrito:'⛔ Acesso restrito',
+        obra_via:'🚧 Via em obras',
+        travessia_agua:'🌊 Travessia de água',
+        passagem_inferior:'⬇️ Passagem inferior',
+        obra_arte_especial:'🌉 Obra de arte especial',
+        equipamento_deteccao_altura:'📡 Equipamento de detecção de altura',
+        infraestrutura_antt:'🏛️ Infraestrutura ANTT'
+    };
+
+    return mapaTipos[tipo] || `⚠️ ${tipo || 'Possível restrição'}`;
+}
+
+function formatarLimitesRestricao(r) {
+    const itens = [];
+
+    if (Number.isFinite(Number(r.limite_altura))) {
+        itens.push(`Altura máx.: <strong>${Number(r.limite_altura).toFixed(2)} m</strong>`);
+    }
+
+    if (Number.isFinite(Number(r.limite_largura))) {
+        itens.push(`Largura máx.: <strong>${Number(r.limite_largura).toFixed(2)} m</strong>`);
+    }
+
+    if (Number.isFinite(Number(r.limite_comprimento))) {
+        itens.push(`Comprimento máx.: <strong>${Number(r.limite_comprimento).toFixed(2)} m</strong>`);
+    }
+
+    if (Number.isFinite(Number(r.limite_peso))) {
+        itens.push(`Peso máx.: <strong>${Number(r.limite_peso).toFixed(2)} t</strong>`);
+    }
+
+    if (Number.isFinite(Number(r.limite_eixo))) {
+        itens.push(`Eixo máx.: <strong>${Number(r.limite_eixo).toFixed(2)} t</strong>`);
+    }
+
+    return itens.length
+        ? itens.join('<br>')
+        : 'Sem limite dimensional confirmado na fonte.';
+}
+
+async function carregarRestricoesCandidatas(idViagem) {
+    const lista = document.getElementById('lista-restricoes-candidatas');
+    if (!lista || !idViagem) return;
+
+    viagemRestricaoAtualId = Number(idViagem);
+
+    lista.innerHTML =
+        '<div style="color:#888;padding:10px;text-align:center;">🔄 Carregando candidatos...</div>';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/restricoes-candidatas`,
+            {
+                headers:{ 'Authorization':tokenJWT }
+            }
+        );
+
+        const dados = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(dados.erro || 'Erro ao carregar candidatos');
+        }
+
+        restricoesCandidatasAtual = Array.isArray(dados) ? dados : [];
+        atualizarResumoRestricoes();
+        renderizarRestricoesCards();
+
+        if (document.body.classList.contains('verificacao-mapa')) {
+            renderizarMapaRestricoes();
+        }
+
+    } catch(erro) {
+        lista.innerHTML = `
+            <div class="restricao-box alto">
+                ❌ ${erro.message}
+            </div>
+        `;
+    }
+}
+
+
+function ativarModoListaRestricoes() {
+    document.body.classList.remove('verificacao-mapa');
+    document.body.classList.add('verificacao-full');
+    renderizarRestricoesCards();
+}
+
+function ativarModoMapaRestricoes(idFoco = null) {
+    document.body.classList.remove('verificacao-full');
+    document.body.classList.add('verificacao-mapa');
+
+    const layout = document.getElementById('verificacao-mapa-layout');
+    if (layout) layout.classList.add('ativo');
+
+    setTimeout(() => {
+        renderizarMapaRestricoes(idFoco);
+    }, 80);
+}
+
+function sairModoVerificacao() {
+    document.body.classList.remove('verificacao-full','verificacao-mapa');
+
+    const layout = document.getElementById('verificacao-mapa-layout');
+    if (layout) layout.classList.remove('ativo');
+
+    abrirSubmenuFrota('viagens');
+}
+
+function atualizarResumoRestricoes() {
+    const dados = restricoesCandidatasAtual;
+
+    const total = dados.length;
+    const risco = dados.filter(r =>
+        r.compatibilidade === 'possivelmente_incompativel' ||
+        r.risco === 'alto'
+    ).length;
+
+    const pendentes = dados.filter(r =>
+        ['descoberta','confirmada'].includes(r.status_validacao)
+    ).length;
+
+    const validados = dados.filter(r =>
+        r.status_validacao === 'validada'
+    ).length;
+
+    document.getElementById('vr-total').textContent = total;
+    document.getElementById('vr-risco').textContent = risco;
+    document.getElementById('vr-pendentes').textContent = pendentes;
+    document.getElementById('vr-validados').textContent = validados;
+}
+
+function filtrarRestricoesCards(filtro, botao = null) {
+    filtroRestricaoAtual = filtro;
+
+    document.querySelectorAll('[data-filtro-restricao]')
+        .forEach(b => b.classList.remove('active'));
+
+    if (botao) botao.classList.add('active');
+
+    renderizarRestricoesCards();
+
+    if (document.body.classList.contains('verificacao-mapa')) {
+        renderizarMapaRestricoes();
+    }
+}
+
+function restricaoPassaFiltro(r) {
+    if (filtroRestricaoAtual === 'todos') return true;
+
+    if (filtroRestricaoAtual === 'risco') {
+        return (
+            r.compatibilidade === 'possivelmente_incompativel' ||
+            r.risco === 'alto'
+        );
+    }
+
+    if (filtroRestricaoAtual === 'pendentes') {
+        return ['descoberta','confirmada'].includes(r.status_validacao);
+    }
+
+    if (filtroRestricaoAtual === 'validados') {
+        return r.status_validacao === 'validada';
+    }
+
+    if (filtroRestricaoAtual === 'rejeitados') {
+        return r.status_validacao === 'rejeitada';
+    }
+
+    return true;
+}
+
+function cardResumoRestricao(r, modoMapa = false) {
+    const risco = String(r.risco || 'medio');
+    const status = String(r.status_validacao || 'descoberta');
+    const incompat =
+        r.compatibilidade === 'possivelmente_incompativel';
+
+    const tipo = textoTipoRestricao(r.tipo);
+
+    const rodovia =
+        r.tags?.rodovia ||
+        '';
+
+    const km =
+        r.tags?.km
+            ? `km ${r.tags.km}`
+            : '';
+
+    const tituloLocal =
+        [rodovia, km]
+            .filter(Boolean)
+            .join(' • ');
+
+    return `
+        <div class="restricao-box ${risco === 'alto' ? 'alto' : 'aviso'}"
+             data-status="${status}"
+             data-risco="${risco}"
+             data-comp="${r.compatibilidade || ''}">
+            <div class="restricao-card-resumo">
+                <div class="restricao-resumo-info">
+                    <strong>${tipo}</strong>
+                    <div class="linha-mini">
+                        ${r.nome || 'Sem nome'}
+                    </div>
+                    <div class="linha-mini">
+                        ${tituloLocal || `📍 ${Number(r.distancia_rota_km || 0).toFixed(2)} km da rota`}
+                    </div>
+                </div>
+
+                <span class="restricao-badge ${status}">
+                    ${status.toUpperCase()}
+                </span>
+            </div>
+
+            <div class="restricao-badges">
+                <span class="restricao-badge ${risco}">
+                    RISCO ${risco.toUpperCase()}
+                </span>
+                <span class="restricao-badge ${incompat ? 'alto' : 'medio'}">
+                    ${
+                        incompat
+                            ? '⚠️ POSSÍVEL INCOMPATIBILIDADE'
+                            : r.compatibilidade === 'compativel'
+                                ? '✅ APARENTEMENTE COMPATÍVEL'
+                                : '🔎 VERIFICAR'
+                    }
+                </span>
+            </div>
+
+            <div class="restricao-actions">
+                <button class="btn-detalhes"
+                    onclick="toggleDetalhesRestricao(this)">
+                    Detalhes
+                </button>
+                <button class="mapa"
+                    onclick="ativarModoMapaRestricoes(${Number(r.id)})">
+                    🗺️ Local
+                </button>
+
+                ${
+                    status === 'descoberta'
+                    ? `<button class="confirmar"
+                        onclick="confirmarExistenciaRestricao(${Number(r.id)})">
+                        ✅ Confirmar
+                       </button>`
+                    : ''
+                }
+
+                ${
+                    status !== 'validada' && status !== 'rejeitada'
+                    ? `<button class="validar"
+                        onclick="abrirModalValidacao(${Number(r.id)})">
+                        🛡️ Validar
+                       </button>`
+                    : ''
+                }
+
+                ${
+                    status !== 'rejeitada'
+                    ? `<button class="rejeitar"
+                        onclick="rejeitarRestricao(${Number(r.id)})">
+                        ✖ Rejeitar
+                       </button>`
+                    : ''
+                }
+            </div>
+
+            <div class="restricao-detalhes">
+                <div style="font-size:10px;color:#aaa;line-height:1.55;">
+                    📍 ${Number(r.lat).toFixed(6)}, ${Number(r.lng).toFixed(6)}<br>
+                    📏 Distância da rota: ${Number(r.distancia_rota_km || 0).toFixed(2)} km<br>
+                    ${formatarLimitesRestricao(r)}<br>
+                    🔗 Fonte: <strong>${String(r.fonte || '').toUpperCase()}</strong><br>
+                    ${r.tags?.concessionaria ? `🏢 ${r.tags.concessionaria}<br>` : ''}
+                    🧠 Confiança automática: ${r.confianca || 0}%<br>
+                    ${
+                        Number(r.passagens_total || 0) > 0
+                            ? `🚛 Frota já passou: <strong>${r.passagens_total}</strong> vez(es)
+                               • sem ocorrência: <strong>${r.passagens_sem_ocorrencia || 0}</strong>
+                               ${r.maior_altura_passou ? `<br>📏 Maior altura registrada: <strong>${Number(r.maior_altura_passou).toFixed(2)} m</strong>` : ''}
+                               ${r.maior_peso_passou ? ` • maior peso: <strong>${Number(r.maior_peso_passou).toFixed(1)} t</strong>` : ''}`
+                            : `🚛 Nenhuma passagem validada da frota registrada ainda`
+                    }
+                </div>
+
+                <div style="font-size:10px;color:#c4c4cc;margin-top:7px;line-height:1.45;">
+                    ${r.observacao || ''}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderizarRestricoesCards() {
+    const lista = document.getElementById('lista-restricoes-candidatas');
+    if (!lista) return;
+
+    const dados =
+        restricoesCandidatasAtual
+            .filter(restricaoPassaFiltro);
+
+    if (!dados.length) {
+        lista.innerHTML = `
+            <div class="restricao-box">
+                Nenhum registro para este filtro.
+            </div>
+        `;
+        return;
+    }
+
+    lista.classList.add('grid-cards');
+    lista.innerHTML =
+        dados
+            .map(r => cardResumoRestricao(r))
+            .join('');
+}
+
+function toggleDetalhesRestricao(botao) {
+    const card = botao.closest('.restricao-box');
+    if (!card) return;
+
+    card.classList.toggle('aberto');
+
+    botao.textContent =
+        card.classList.contains('aberto')
+            ? 'Ocultar'
+            : 'Detalhes';
+}
+
+function renderizarMapaRestricoes(idFoco = null) {
+    const mapaEl = document.getElementById('verificacao-mapa');
+    const listaMapa = document.getElementById('verificacao-mapa-lista');
+
+    if (!mapaEl || !listaMapa) return;
+
+    const dados =
+        restricoesCandidatasAtual
+            .filter(restricaoPassaFiltro);
+
+    listaMapa.innerHTML =
+        dados.map(r => cardResumoRestricao(r, true)).join('');
+
+    if (!mapaRestricoes) {
+        mapaRestricoes = L.map('verificacao-mapa');
+
+        L.tileLayer(
+            'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            {
+                maxZoom:19,
+                attribution:'&copy; OpenStreetMap'
+            }
+        ).addTo(mapaRestricoes);
+    }
+
+    if (layerRestricoes) {
+        layerRestricoes.clearLayers();
+    } else {
+        layerRestricoes = L.layerGroup().addTo(mapaRestricoes);
+    }
+
+    const bounds = [];
+
+    dados.forEach(r => {
+        const lat = Number(r.lat);
+        const lng = Number(r.lng);
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+        const cor =
+            r.status_validacao === 'validada'
+                ? '#22c55e'
+                : r.risco === 'alto'
+                    ? '#ef4444'
+                    : '#f59e0b';
+
+        const marker = L.circleMarker(
+            [lat,lng],
+            {
+                radius:8,
+                color:cor,
+                weight:3,
+                fillColor:cor,
+                fillOpacity:.75
+            }
+        )
+        .addTo(layerRestricoes)
+        .bindPopup(`
+            <strong>${textoTipoRestricao(r.tipo)}</strong><br>
+            ${r.nome || ''}<br>
+            ${r.tags?.rodovia || ''} ${r.tags?.km ? `km ${r.tags.km}` : ''}
+        `);
+
+        marker.__restricaoId = Number(r.id);
+        bounds.push([lat,lng]);
+
+        if (Number(idFoco) === Number(r.id)) {
+            setTimeout(() => {
+                mapaRestricoes.setView([lat,lng],18);
+                marker.openPopup();
+            }, 120);
+        }
+    });
+
+    desenharRotaNoMapaRestricoes();
+
+    if (!idFoco && bounds.length) {
+        mapaRestricoes.fitBounds(bounds, {
+            padding:[30,30],
+            maxZoom:15
+        });
+    }
+
+    setTimeout(() => {
+        mapaRestricoes.invalidateSize();
+    }, 150);
+}
+
+function desenharRotaNoMapaRestricoes() {
+    if (!mapaRestricoes) return;
+
+    if (layerRotaRestricoes) {
+        layerRotaRestricoes.remove();
+        layerRotaRestricoes = null;
+    }
+
+    const viagem =
+        viagensMonitoradasAtual.find(
+            v => Number(v.id) === Number(viagemRestricaoAtualId)
+        );
+
+    const coords =
+        viagem?.dados_geojson?.features?.[0]?.geometry?.coordinates;
+
+    if (!Array.isArray(coords) || coords.length < 2) return;
+
+    const latlngs = coords
+        .map(c => [Number(c[1]), Number(c[0])])
+        .filter(c =>
+            Number.isFinite(c[0]) &&
+            Number.isFinite(c[1])
+        );
+
+    layerRotaRestricoes =
+        L.polyline(
+            latlngs,
+            {
+                color:'#2563eb',
+                weight:6,
+                opacity:.9
+            }
+        )
+        .addTo(mapaRestricoes);
+}
+
+
+
+async function confirmarExistenciaRestricao(id) {
+    const observacao =
+        prompt('Observação da confirmação (opcional):', '') || '';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-candidatas/${id}/confirmar`,
+            {
+                method:'PATCH',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ observacao })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao confirmar');
+
+        await carregarRestricoesCandidatas(viagemRestricaoAtualId);
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+function abrirModalValidacao(id) {
+    const r =
+        restricoesCandidatasAtual.find(
+            x => Number(x.id) === Number(id)
+        );
+
+    if (!r) return;
+
+    document.getElementById('validacao-candidato-id').value = r.id;
+
+    document.getElementById('modal-validacao-titulo').textContent =
+        `${textoTipoRestricao(r.tipo)} • ${r.nome || 'Sem nome'} • ${r.tags?.rodovia || ''} ${r.tags?.km ? 'km ' + r.tags.km : ''}`;
+
+    document.getElementById('vr-altura').value =
+        r.limite_altura || '';
+
+    document.getElementById('vr-largura').value =
+        r.limite_largura || '';
+
+    document.getElementById('vr-comprimento').value =
+        r.limite_comprimento || '';
+
+    document.getElementById('vr-peso').value =
+        r.limite_peso || '';
+
+    document.getElementById('vr-evidencia-url').value = '';
+    document.getElementById('vr-evidencia-texto').value = '';
+    document.getElementById('vr-valida-dias').value = 180;
+    document.getElementById('vr-raio').value = 180;
+
+    const modal =
+        document.getElementById('modal-validacao-restricao');
+
+    modal.style.display = 'flex';
+}
+
+function fecharModalValidacao() {
+    document.getElementById('modal-validacao-restricao').style.display = 'none';
+}
+
+function numeroOuNull(id) {
+    const valor = document.getElementById(id)?.value;
+    if (valor === '' || valor === null || valor === undefined) return null;
+
+    const n = Number(valor);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+async function confirmarValidacaoGlobal() {
+    const id = Number(
+        document.getElementById('validacao-candidato-id').value
+    );
+
+    if (!id) return;
+
+    const payload = {
+        tipo: document.getElementById('vr-tipo').value,
+        limite_altura: numeroOuNull('vr-altura'),
+        limite_largura: numeroOuNull('vr-largura'),
+        limite_comprimento: numeroOuNull('vr-comprimento'),
+        limite_peso: numeroOuNull('vr-peso'),
+        evidencia_url:
+            document.getElementById('vr-evidencia-url').value.trim(),
+        evidencia_texto:
+            document.getElementById('vr-evidencia-texto').value.trim(),
+        valida_dias:
+            Number(document.getElementById('vr-valida-dias').value || 180),
+        raio_metros:
+            Number(document.getElementById('vr-raio').value || 180)
+    };
+
+    const ok = confirm(
+        'Adicionar esta restrição à BASE GLOBAL?\\n\\n' +
+        'A partir disso ela poderá bloquear viagens incompatíveis e forçar o ORS a buscar um desvio.'
+    );
+
+    if (!ok) return;
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-candidatas/${id}/validar-global`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify(payload)
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao validar');
+
+        fecharModalValidacao();
+
+        await carregarRestricoesCandidatas(viagemRestricaoAtualId);
+        carregarRestricoesGlobais();
+
+        alert('✅ Restrição adicionada à base global.');
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+async function rejeitarRestricao(id) {
+    const motivo =
+        prompt('Motivo da rejeição (opcional):', '') || '';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-candidatas/${id}/rejeitar`,
+            {
+                method:'PATCH',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ observacao:motivo })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao rejeitar');
+
+        await carregarRestricoesCandidatas(viagemRestricaoAtualId);
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+async function carregarRestricoesGlobais() {
+    const lista =
+        document.getElementById('lista-restricoes-globais');
+
+    const status =
+        document.getElementById('status-restricoes-globais');
+
+    if (!lista || !tokenJWT) return;
+
+    lista.innerHTML =
+        '<div style="color:#888;text-align:center;padding:20px;">🔄 Carregando base global...</div>';
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-validadas`,
+            {
+                headers:{ 'Authorization':tokenJWT }
+            }
+        );
+
+        const dados = await resp.json();
+
+        if (!resp.ok) throw new Error(dados.erro || 'Erro ao carregar');
+
+        const ativas = dados.filter(r => r.ativa);
+        const comAltura = ativas.filter(r => Number(r.limite_altura) > 0);
+        const comPeso = ativas.filter(r => Number(r.limite_peso) > 0);
+        const agora = Date.now();
+        const trintaDias = 30 * 86400000;
+        const vencendo = ativas.filter(r => {
+            if (!r.valida_ate) return false;
+            const d = new Date(r.valida_ate).getTime() - agora;
+            return d >= 0 && d <= trintaDias;
+        });
+
+        document.getElementById('kpi-rv-ativas').textContent = ativas.length;
+        document.getElementById('kpi-rv-altura').textContent = comAltura.length;
+        document.getElementById('kpi-rv-peso').textContent = comPeso.length;
+        document.getElementById('kpi-rv-vencendo').textContent = vencendo.length;
+
+        status.innerHTML =
+            `✅ ${dados.length} restrição(ões) na base global.`;
+        status.className = 'status-box sucesso';
+
+        if (!dados.length) {
+            lista.innerHTML =
+                '<div class="restricao-box">Nenhuma restrição global validada ainda.</div>';
+            return;
+        }
+
+        lista.innerHTML = dados.map(r => {
+            const limites = [
+                Number(r.limite_altura) > 0 ? `Altura ${Number(r.limite_altura).toFixed(2)} m` : '',
+                Number(r.limite_largura) > 0 ? `Largura ${Number(r.limite_largura).toFixed(2)} m` : '',
+                Number(r.limite_peso) > 0 ? `Peso ${Number(r.limite_peso).toFixed(2)} t` : '',
+                Number(r.limite_comprimento) > 0 ? `Comp. ${Number(r.limite_comprimento).toFixed(2)} m` : ''
+            ].filter(Boolean).join(' • ');
+
+            return `
+                <div class="restricao-box ${r.ativa ? 'aviso' : ''}">
+                    <div class="restricao-top">
+                        <div>
+                            <strong>🛡️ ${r.nome || textoTipoRestricao(r.tipo)}</strong>
+                            <div style="font-size:10px;color:#aaa;margin-top:4px;">
+                                ${r.rodovia || ''} ${r.km ? '• km ' + r.km : ''}
+                            </div>
+                        </div>
+                        <span class="restricao-badge ${r.ativa ? 'validada' : 'rejeitada'}">
+                            ${r.ativa ? 'ATIVA' : 'INATIVA'}
+                        </span>
+                    </div>
+
+                    <div style="font-size:10px;color:#c4c4cc;line-height:1.55;margin-top:8px;">
+                        📍 ${Number(r.lat).toFixed(6)}, ${Number(r.lng).toFixed(6)}<br>
+                        ${limites || 'Regra de acesso/proibição'}<br>
+                        📡 Raio: ${Number(r.raio_metros || 180)} m<br>
+                        🧠 Confiança: ${r.confianca || 100}%<br>
+                        📅 Válida até: ${r.valida_ate ? new Date(r.valida_ate).toLocaleDateString('pt-BR') : 'sem vencimento'}<br>
+                        👤 ${r.validado_por_nome || 'Gestor'}
+                    </div>
+
+                    ${r.evidencia_texto ? `<div style="font-size:10px;margin-top:7px;">🧾 ${r.evidencia_texto}</div>` : ''}
+                    ${r.evidencia_url ? `<div style="font-size:10px;margin-top:5px;"><a href="${r.evidencia_url}" target="_blank" style="color:#38bdf8;">🔗 Abrir evidência</a></div>` : ''}
+
+                    <div class="restricao-actions">
+                        <button class="mapa" onclick="focarRestricaoGlobal(${Number(r.lat)},${Number(r.lng)})">🗺️ Mapa</button>
+                        <button class="${r.ativa ? 'rejeitar' : 'validar'}"
+                            onclick="alternarRestricaoGlobal(${Number(r.id)},${r.ativa ? 'false' : 'true'})">
+                            ${r.ativa ? '⏸ Desativar' : '▶ Ativar'}
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+
+    } catch(erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+async function alternarRestricaoGlobal(id, ativa) {
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-validadas/${id}`,
+            {
+                method:'PATCH',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ ativa })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao atualizar');
+
+        carregarRestricoesGlobais();
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+function focarRestricaoGlobal(lat,lng) {
+    trocarAba('restricoes');
+
+    if (mapa) {
+        mapa.setView([lat,lng],18);
+
+        L.circleMarker(
+            [lat,lng],
+            {
+                radius:9,
+                color:'#22c55e',
+                weight:3,
+                fillColor:'#16a34a',
+                fillOpacity:.8
+            }
+        )
+        .addTo(mapa)
+        .bindPopup('🛡️ Restrição global validada')
+        .openPopup();
+    }
+}
+
+
+async function alterarStatusRestricao(id, statusNovo, idViagem) {
+    let msg = '';
+
+    if (statusNovo === 'validada') {
+        const ok = confirm(
+            'VALIDAR esta restrição para uso futuro no roteamento?\\n\\n' +
+            'Faça isso somente após conferir local, tipo e limite informado.\\n' +
+            'A validação não recalcula esta viagem automaticamente.'
+        );
+
+        if (!ok) return;
+
+        msg = prompt(
+            'Observação/evidência da validação (opcional):',
+            ''
+        ) || '';
+
+    } else if (statusNovo === 'rejeitada') {
+        const ok = confirm(
+            'Marcar este candidato como REJEITADO?'
+        );
+
+        if (!ok) return;
+    }
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/restricoes-candidatas/${id}/status`,
+            {
+                method:'PATCH',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({
+                    status:statusNovo,
+                    observacao:msg
+                })
+            }
+        );
+
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            throw new Error(data.erro || 'Erro ao atualizar restrição');
+        }
+
+        await carregarRestricoesCandidatas(idViagem);
+
+    } catch(erro) {
+        alert(erro.message);
+    }
+}
+
+function focarRestricao(lat, lng) {
+    ativarModoMapaRestricoes();
+}
+
+
+async function abrirHistoricoVeiculo(id) {
+    const box = document.getElementById('historico-veiculo');
+    box.style.display = 'block';
+    box.innerHTML = '🔄 Carregando histórico...';
+
+    try {
+        const resp = await fetch(`${API_BASE}/veiculos/${id}/historico?dias=30`, {
+            headers: { 'Authorization': tokenJWT }
+        });
+        const dados = await resp.json();
+        if (!resp.ok) throw new Error(dados.erro || 'Erro ao carregar histórico');
+
+        const v = dados.veiculo;
+        const viagensHtml = dados.viagens.length
+            ? dados.viagens.map(x => `
+                <div style="border-top:1px solid #2a2a3e;padding:7px 0;">
+                    <strong>${x.rota_nome || 'Viagem'}</strong> • ${x.status}<br>
+                    ${x.origem} → ${x.destino}<br>
+                    👤 ${x.motorista || '-'} • 📦 ${x.carga || '-'}<br>
+                    Saída: ${formatarDataHora(x.saida_real || x.saida_prevista)}<br>
+                    Chegada: ${formatarDataHora(x.chegada_real || x.chegada_prevista)}
+                </div>
+            `).join('')
+            : '<div style="color:#888;padding:6px 0;">Sem viagens nos últimos 30 dias.</div>';
+
+        box.innerHTML = `
+            <strong>📜 Histórico • ${v.placa}</strong><br>
+            <span style="color:#aaa;">Últimos 30 dias • ${dados.gps.length} pontos GPS • ${dados.reportes.length} reportes</span>
+            ${viagensHtml}
+            <button class="btn-primary btn-secondary" onclick="desenharHistoricoGps(${JSON.stringify(dados.gps).replace(/"/g, '&quot;')})">🗺️ Mostrar trajeto GPS no mapa</button>
+        `;
+
+        desenharHistoricoGps(dados.gps);
+
+    } catch(erro) {
+        box.innerHTML = `❌ ${erro.message}`;
+    }
+}
+
+function desenharHistoricoGps(pontos) {
+    if (!mapa || !Array.isArray(pontos) || !pontos.length) return;
+
+    if (camadaHistoricoGps) {
+        mapa.removeLayer(camadaHistoricoGps);
+        camadaHistoricoGps = null;
+    }
+
+    const latlngs = pontos
+        .filter(p => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lon)))
+        .map(p => [Number(p.lat), Number(p.lon)]);
+
+    if (!latlngs.length) return;
+
+    camadaHistoricoGps = L.polyline(latlngs, {
+        color: '#00b894',
+        weight: 5,
+        opacity: .8
+    }).addTo(mapa);
+
+    mapa.fitBounds(camadaHistoricoGps.getBounds(), { padding:[50,50] });
 }
 
 // ======================================================
@@ -329,7 +3601,9 @@ async function carregarLocalizacoes(centralizar = false) {
             });
             const marker = L.marker([lat, lon], { icon }).bindPopup(`
                 <div style="min-width:190px;">
-                    <strong style="font-size:15px;">🚛 ${motorista.nome}</strong><br><br>
+                    <strong style="font-size:15px;">🚛 ${motorista.placa || motorista.nome}</strong><br>
+                    ${motorista.frota ? `🔢 Frota ${motorista.frota}<br>` : ''}
+                    👤 ${motorista.nome}<br><br>
                     🟢 <strong>ONLINE</strong><br><br>
                     📍 ${lat.toFixed(6)}, ${lon.toFixed(6)}<br><br>
                     🕒 ${data ? data.toLocaleString('pt-BR') : ''}<br>
@@ -338,7 +3612,7 @@ async function carregarLocalizacoes(centralizar = false) {
             `);
             marker.addTo(marcadoresFrotaLayer);
             html += `<div class="frota-card" onclick="focarMotorista(${lat},${lon})">
-                <div class="frota-top"><span class="frota-nome">🚛 ${motorista.nome}</span><span class="frota-status online">ONLINE</span></div>
+                <div class="frota-top"><span class="frota-nome">🚛 ${motorista.placa || motorista.nome}</span><span class="frota-status online">ONLINE</span></div>
                 <div class="frota-detalhes">📍 ${lat.toFixed(5)}, ${lon.toFixed(5)}<br>📡 ${segundos}s atrás</div>
             </div>`;
             bounds.push([lat, lon]);
@@ -390,10 +3664,12 @@ async function carregarReportes(centralizar = false) {
     try {
         const resp = await fetch(`${API_BASE}/reportes`, { headers: { 'Authorization': tokenJWT } });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const reportes = await resp.json();
+        let reportes = await resp.json();
+        const filtroStatus = document.getElementById('filtro-status-reporte')?.value || 'todos';
+        if (filtroStatus !== 'todos') reportes = reportes.filter(r => (r.status_reporte || 'ativo') === filtroStatus);
         marcadoresReportesLayer.clearLayers();
         if (!reportes.length) {
-            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;padding:20px;color:#888;">Nenhum reporte encontrado.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;padding:20px;color:#888;">Nenhum reporte encontrado.</td></tr>`;
             status.innerHTML = '📭 Nenhum reporte.';
             return;
         }
@@ -419,17 +3695,24 @@ async function carregarReportes(centralizar = false) {
                 html: `<div style="background:${cor};width:34px;height:34px;border-radius:50%;border:3px solid white;box-shadow:0 3px 10px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font-size:17px;">${emoji}</div>`,
                 iconSize: [34,34], iconAnchor: [17,17]
             });
-            const marker = L.marker([lat, lng], { icon }).bindPopup(`
-                <strong>${emoji} ${tipo}</strong><br><br>
-                👤 ${r.motorista}<br>
-                🕒 ${dataTexto}<br>
-                📍 ${lat.toFixed(6)}, ${lng.toFixed(6)}
-            `);
-            marker.addTo(marcadoresReportesLayer);
-            html += `<tr style="cursor:pointer;" onclick="focarReporte(${lat},${lng})">
+            if ((r.status_reporte || 'ativo') === 'ativo') {
+                const marker = L.marker([lat, lng], { icon }).bindPopup(`
+                    <strong>${emoji} ${tipo}</strong><br><br>
+                    👤 ${r.motorista}<br>
+                    🕒 ${dataTexto}<br>
+                    📍 ${lat.toFixed(6)}, ${lng.toFixed(6)}
+                `);
+                marker.addTo(marcadoresReportesLayer);
+            }
+            const st = r.status_reporte || 'ativo';
+            html += `<tr>
                 <td>${r.motorista}</td>
                 <td><span class="badge-reporte badge-${r.tipo}">${emoji} ${tipo}</span></td>
-                <td>📍 ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><small style="color:#888;">${dataTexto}</small></td>
+                <td>
+                    <span class="report-status ${st}">${st.toUpperCase()}</span>
+                    ${st === 'ativo' ? `<br><button onclick="atualizarStatusReporte(${r.id},'resolvido')" style="margin-top:4px;background:#00b894;border:0;color:white;border-radius:6px;padding:4px 6px;cursor:pointer;font-size:9px;">Resolver</button>` : ''}
+                </td>
+                <td style="cursor:pointer;" onclick="focarReporte(${lat},${lng})">📍 ${lat.toFixed(4)}, ${lng.toFixed(4)}<br><small style="color:#888;">${dataTexto}</small></td>
             </tr>`;
             bounds.push([lat, lng]);
         }
@@ -464,75 +3747,342 @@ async function limparReportes() {
 }
 
 // ======================================================
-// ROTAS (CALCULAR / SALVAR)
+// 🔥 ROTAS (CORRIGIDO – COM FALLBACK E VALIDAÇÃO)
 // ======================================================
 async function geocodificar(endereco) {
-    const resp = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(endereco)}&limit=1`);
-    const dados = await resp.json();
-    if (!dados || !dados.length) return null;
-    return { lat: Number(dados[0].lat), lon: Number(dados[0].lon) };
+    if (!endereco || !endereco.trim()) return null;
+
+    const texto = endereco.trim();
+
+    // Permite informar coordenadas diretamente: "-19.394, -40.064"
+    const match = texto.match(/^([-+]?\d+(?:\.\d+)?)\s*[,;]\s*([-+]?\d+(?:\.\d+)?)$/);
+
+    if (match) {
+        const lat = parseFloat(match[1]);
+        const lon = parseFloat(match[2]);
+
+        if (
+            Number.isFinite(lat) &&
+            Number.isFinite(lon) &&
+            lat >= -90 &&
+            lat <= 90 &&
+            lon >= -180 &&
+            lon <= 180
+        ) {
+            console.log(`📍 Coordenada detectada: ${lat}, ${lon}`);
+            return {
+                lat,
+                lon,
+                nome: `${lat}, ${lon}`
+            };
+        }
+    }
+
+    try {
+        // Restringe a busca ao Brasil para evitar cidades homônimas em outros países.
+        const busca = texto.toLowerCase().includes('brasil')
+            ? texto
+            : `${texto}, Brasil`;
+
+        const url =
+            'https://nominatim.openstreetmap.org/search' +
+            `?format=json` +
+            `&q=${encodeURIComponent(busca)}` +
+            `&countrycodes=br` +
+            `&limit=5` +
+            `&addressdetails=1`;
+
+        const resp = await fetch(url, {
+            headers: {
+                'Accept-Language': 'pt-BR,pt;q=0.9'
+            }
+        });
+
+        if (!resp.ok) {
+            throw new Error(`Geocodificação HTTP ${resp.status}`);
+        }
+
+        const dados = await resp.json();
+
+        if (!dados || dados.length === 0) {
+            console.warn('❌ Local não encontrado:', texto);
+            return null;
+        }
+
+        // Como countrycodes=br já restringe ao Brasil, pega o primeiro resultado válido.
+        const resultado = dados.find(item =>
+            Number.isFinite(Number(item.lat)) &&
+            Number.isFinite(Number(item.lon))
+        );
+
+        if (!resultado) return null;
+
+        const lat = Number(resultado.lat);
+        const lon = Number(resultado.lon);
+
+        console.log(`📍 "${texto}" encontrado como: ${resultado.display_name}`);
+        console.log(`📌 Coordenadas: ${lat}, ${lon}`);
+
+        return {
+            lat,
+            lon,
+            nome: resultado.display_name
+        };
+
+    } catch (erro) {
+        console.warn('❌ Erro na geocodificação:', erro);
+        return null;
+    }
 }
+
+function calcularDistanciaKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(
+        Math.sqrt(a),
+        Math.sqrt(1 - a)
+    );
+
+    return R * c;
+}
+
 async function calcularRota() {
     const status = document.getElementById('status-dashboard');
+    const btn = document.getElementById('btn-calcular');
+
+    btn.disabled = true;
+    btn.innerHTML = '🔄 Calculando...';
+
     try {
-        status.innerHTML = '🔄 Geocodificando...';
-        const origem = await geocodificar(document.getElementById('origem').value);
-        const destino = await geocodificar(document.getElementById('destino').value);
-        if (!origem || !destino) throw new Error('Origem ou destino não encontrado');
-        const perfil = document.getElementById('tipo-veiculo').value;
+        const origemInput = document.getElementById('origem').value.trim();
+        const destinoInput = document.getElementById('destino').value.trim();
+
+        if (!origemInput || !destinoInput) {
+            throw new Error('Preencha origem e destino!');
+        }
+
+        status.innerHTML = '🔄 Geocodificando endereços...';
+        status.className = 'status-box carregando';
+
+        const origem = await geocodificar(origemInput);
+        const destino = await geocodificar(destinoInput);
+
+        if (!origem) {
+            throw new Error(`Origem "${origemInput}" não encontrada. Confira o endereço.`);
+        }
+
+        if (!destino) {
+            throw new Error(`Destino "${destinoInput}" não encontrado. Confira o endereço.`);
+        }
+
+        console.log('📍 ORIGEM:', origem);
+        console.log('🏁 DESTINO:', destino);
+
+        const distanciaDireta = calcularDistanciaKm(
+            origem.lat,
+            origem.lon,
+            destino.lat,
+            destino.lon
+        );
+
+        console.log(`📏 Distância direta: ${distanciaDireta.toFixed(1)} km`);
+
+        // O servidor público do ORS informa limite aproximado de 6.000 km por requisição.
+        // Se ultrapassar, quase sempre significa que o geocodificador encontrou
+        // uma cidade homônima ou que a viagem precisa ser dividida em etapas.
+        if (distanciaDireta > 5900) {
+            throw new Error(
+                `Origem e destino ficaram a ${distanciaDireta.toFixed(0)} km em linha reta. ` +
+                `Confira os endereços ou divida a viagem em etapas menores.`
+            );
+        }
+
+        const perfil = 'driving-hgv';
+        const altura = 4.2;
+        const peso = 15;
+        const comprimento = 12;
+        const largura = 2.6;
+        const preferencia = document.getElementById('preferencia-rota').value || 'fastest';
+
+        const origemApi = {
+            lat: Number(origem.lat),
+            lon: Number(origem.lon)
+        };
+
+        const destinoApi = {
+            lat: Number(destino.lat),
+            lon: Number(destino.lon)
+        };
+
+        console.log('📡 Enviando requisição para /api/calcular-rota:', {
+            origem: origemApi,
+            destino: destinoApi,
+            perfil,
+            altura,
+            peso,
+            comprimento,
+            largura,
+            preferencia,
+            distanciaDiretaKm: distanciaDireta.toFixed(1)
+        });
+
+        status.innerHTML = '🔄 Calculando rota no servidor...';
+        status.className = 'status-box carregando';
+
         const resp = await fetch(`${API_BASE}/api/calcular-rota`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': tokenJWT
+            },
             body: JSON.stringify({
-                origem, destino,
-                altura: Number(document.getElementById('altura').value),
-                peso: Number(document.getElementById('peso').value),
-                comprimento: Number(document.getElementById('comprimento').value),
+                origem: origemApi,
+                destino: destinoApi,
+                altura,
+                peso,
+                comprimento,
+                largura,
                 perfil,
-                preferencia: document.getElementById('preferencia-rota').value
+                preferencia
             })
         });
+
+        const contentType = resp.headers.get('content-type') || '';
+
+        if (!contentType.includes('application/json')) {
+            const text = await resp.text();
+            console.error('❌ Resposta não é JSON:', text.substring(0, 500));
+            throw new Error(
+                `Servidor retornou HTTP ${resp.status}: ${text.substring(0, 140)}`
+            );
+        }
+
         const rota = await resp.json();
-        if (!resp.ok) throw new Error(rota.erro || 'Erro');
+
+        if (!resp.ok) {
+            console.error('❌ Erro do servidor:', rota);
+
+            const detalhe =
+                rota?.detalhe?.error?.message ||
+                rota?.detalhe?.message ||
+                rota?.detalhe ||
+                rota?.erro ||
+                'Falha ao calcular rota';
+
+            throw new Error(
+                typeof detalhe === 'string'
+                    ? detalhe
+                    : JSON.stringify(detalhe)
+            );
+        }
+
+        if (
+            !rota.features ||
+            rota.features.length === 0 ||
+            !rota.features[0].geometry
+        ) {
+            console.error('❌ GeoJSON inválido:', rota);
+            throw new Error('Rota retornada sem dados de geometria');
+        }
+
+        console.log('✅ Rota calculada com sucesso!', rota);
+
         geoJsonCalculado = rota;
         desenharRota(rota);
+
         document.getElementById('btn-salvar').style.display = 'block';
-        atualizarStatus('✅ Rota calculada!', 'sucesso');
-    } catch(erro) {
+
+        const segmento = rota.features?.[0]?.properties?.segments?.[0];
+
+        if (segmento) {
+            const km = (segmento.distance / 1000).toFixed(1);
+            const duracao = Number(segmento.duration) || 0;
+            const horas = Math.floor(duracao / 3600);
+            const minutos = Math.floor((duracao % 3600) / 60);
+
+            atualizarStatus(
+                `✅ Rota calculada! ${km} km • ${horas}h ${minutos}min`,
+                'sucesso'
+            );
+        } else {
+            atualizarStatus('✅ Rota calculada!', 'sucesso');
+        }
+
+    } catch (erro) {
+        console.error('❌ Erro ao calcular rota:', erro);
         atualizarStatus(`❌ ${erro.message}`, 'erro');
+        document.getElementById('btn-salvar').style.display = 'none';
+
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🗺️ Criar Rota';
     }
 }
 function desenharRota(rotaData) {
     if (rotaAtual) mapa.removeLayer(rotaAtual);
+    if (marcadorOrigem) { mapa.removeLayer(marcadorOrigem); marcadorOrigem = null; }
+    if (marcadorDestino) { mapa.removeLayer(marcadorDestino); marcadorDestino = null; }
+
     const coords = rotaData.features?.[0]?.geometry?.coordinates;
     if (!coords || !coords.length) return;
-    rotaAtual = L.geoJSON(rotaData.features[0].geometry, { color: '#ff6600', weight: 6, opacity: .9 }).addTo(mapa);
+
+    rotaAtual = L.geoJSON(rotaData.features[0].geometry, {
+        color: '#ff6600',
+        weight: 6,
+        opacity: .9,
+        dashArray: '10, 10'
+    }).addTo(mapa);
+
+    // Marcadores de origem e destino
+    const inicio = coords[0];
+    const fim = coords[coords.length - 1];
+
+    marcadorOrigem = L.marker([inicio[1], inicio[0]], {
+        icon: L.divIcon({ html: '🚛', className: 'marker-icon', iconSize: [30, 30] })
+    }).addTo(mapa).bindPopup('📍 Origem');
+
+    marcadorDestino = L.marker([fim[1], fim[0]], {
+        icon: L.divIcon({ html: '🏁', className: 'marker-icon', iconSize: [30, 30] })
+    }).addTo(mapa).bindPopup('🏁 Destino');
+
     mapa.fitBounds(rotaAtual.getBounds(), { padding: [50,50] });
 }
+
 async function salvarRota() {
     if (!geoJsonCalculado) return;
-    const nomeMotorista = document.getElementById('nome-motorista').value.trim();
-    const motorista = motoristasList.find(m => m.nome.toLowerCase() === nomeMotorista.toLowerCase());
-    if (!motorista) { atualizarStatus('Motorista não encontrado', 'erro'); return; }
+
     try {
         const resp = await fetch(`${API_BASE}/rotas`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': tokenJWT },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': tokenJWT
+            },
             body: JSON.stringify({
                 nome: document.getElementById('nome-rota').value,
                 origem: document.getElementById('origem').value,
                 destino: document.getElementById('destino').value,
                 restricoes: {
-                    altura: Number(document.getElementById('altura').value),
-                    peso: Number(document.getElementById('peso').value),
-                    comprimento: Number(document.getElementById('comprimento').value)
+                    altura_referencia: 4.2
                 },
-                dados_geojson: geoJsonCalculado,
-                id_motorista: motorista.id
+                dados_geojson: geoJsonCalculado
             })
         });
-        if (!resp.ok) throw new Error('Erro ao salvar rota');
-        atualizarStatus(`✅ Rota salva para ${motorista.nome}!`, 'sucesso');
+
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao salvar rota');
+
+        atualizarStatus('✅ Rota salva na biblioteca!', 'sucesso');
+        await carregarRotasBiblioteca();
     } catch(erro) {
         atualizarStatus(`❌ ${erro.message}`, 'erro');
     }
@@ -571,8 +4121,7 @@ async function carregarTomTom() {
 // UTILS
 // ======================================================
 function toggleRestricoes() {
-    document.getElementById('container-restricoes').style.display =
-        document.getElementById('tipo-veiculo').value === 'driving-car' ? 'none' : 'block';
+    // Mantido por compatibilidade. O dashboard agora trabalha com caminhões cadastrados.
 }
 function atualizarStatus(mensagem, tipo) {
     const div = document.getElementById('status-dashboard');
