@@ -671,6 +671,234 @@ app.get('/', (req, res) => {
     });
 });
 
+
+// ======================================================
+// TOMTOM - LIMITES DE VELOCIDADE (CHAVE PROTEGIDA NO SERVIDOR)
+// ======================================================
+app.post('/tomtom/speed-limits', autenticar, async (req, res) => {
+    try {
+        const apiKey = String(process.env.TOMTOM_API_KEY || '').trim();
+
+        if (!apiKey) {
+            return res.status(503).json({
+                erro: 'TOMTOM_API_KEY não configurada no servidor'
+            });
+        }
+
+        const pathRecebido = req.body?.path;
+
+        if (!Array.isArray(pathRecebido) || pathRecebido.length < 2) {
+            return res.status(400).json({
+                erro: 'Path da rota é obrigatório'
+            });
+        }
+
+        // Proteção contra payload gigante.
+        if (pathRecebido.length > 1500) {
+            return res.status(400).json({
+                erro: 'Path possui pontos demais',
+                maximo: 1500
+            });
+        }
+
+        const path = [];
+
+        for (const ponto of pathRecebido) {
+            if (!Array.isArray(ponto) || ponto.length < 2) {
+                continue;
+            }
+
+            const lng = Number(ponto[0]);
+            const lat = Number(ponto[1]);
+
+            if (
+                Number.isFinite(lng) &&
+                Number.isFinite(lat) &&
+                lng >= -180 && lng <= 180 &&
+                lat >= -90 && lat <= 90
+            ) {
+                path.push([lng, lat]);
+            }
+        }
+
+        if (path.length < 2) {
+            return res.status(400).json({
+                erro: 'Path não possui coordenadas válidas suficientes'
+            });
+        }
+
+        const origem = path[0];
+        const destino = path[path.length - 1];
+
+        const body = {
+            routePlanningLocations: {
+                origin: {
+                    type: 'Point',
+                    coordinates: origem
+                },
+                destination: {
+                    type: 'Point',
+                    coordinates: destino
+                }
+            },
+            path: {
+                type: 'LineString',
+                coordinates: path
+            },
+            routeType: 'fast',
+            travelMode: 'car'
+        };
+
+        const peso = Number(
+            req.body?.vehicleWeightInKilograms
+        );
+
+        if (Number.isFinite(peso) && peso > 0) {
+            body.vehicleWeightInKilograms =
+                Math.round(peso);
+        }
+
+        const tomtomResp = await fetch(
+            'https://api.tomtom.com/maps/orbis/routing/routes/calculate?apiVersion=3',
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'TomTom-Api-Version': '3',
+                    'TomTom-Api-Key': apiKey,
+                    'Attributes': 'routes'
+                },
+                body: JSON.stringify(body)
+            }
+        );
+
+        const data = await tomtomResp
+            .json()
+            .catch(() => ({}));
+
+        if (!tomtomResp.ok) {
+            console.error(
+                '❌ TomTom:',
+                tomtomResp.status,
+                JSON.stringify(data)
+            );
+
+            return res.status(502).json({
+                erro: 'Falha ao consultar TomTom',
+                status_tomtom: tomtomResp.status,
+                detalhes:
+                    data?.detailedError?.message ||
+                    data?.message ||
+                    'Resposta inválida da TomTom'
+            });
+        }
+
+        const route = data?.routes?.[0];
+
+        if (!route) {
+            return res.status(502).json({
+                erro: 'TomTom não retornou rota'
+            });
+        }
+
+        const pathTomTom = [];
+
+        for (const leg of route.legs || []) {
+            const coords =
+                leg?.path?.coordinates || [];
+
+            for (let i = 0; i < coords.length; i++) {
+                const c = coords[i];
+
+                if (
+                    pathTomTom.length &&
+                    i === 0
+                ) {
+                    const ultimo =
+                        pathTomTom[pathTomTom.length - 1];
+
+                    if (
+                        Math.abs(ultimo[0] - c[0]) < 1e-8 &&
+                        Math.abs(ultimo[1] - c[1]) < 1e-8
+                    ) {
+                        continue;
+                    }
+                }
+
+                pathTomTom.push([
+                    Number(c[0]),
+                    Number(c[1])
+                ]);
+            }
+        }
+
+        const secoesRaw =
+            route?.sections?.speedLimit || [];
+
+        const sections = [];
+
+        for (const secao of secoesRaw) {
+            const restricoes =
+                secao?.speedRestrictions || [];
+
+            const maxima =
+                restricoes.find(item =>
+                    item?.type === 'maximum' &&
+                    Number.isFinite(
+                        Number(
+                            item?.inKilometersPerHour
+                        )
+                    )
+                );
+
+            if (!maxima) continue;
+
+            const inicio =
+                Number(secao.startPathIndex);
+
+            const fim =
+                Number(secao.endPathIndex);
+
+            const limite =
+                Number(
+                    maxima.inKilometersPerHour
+                );
+
+            if (
+                Number.isFinite(inicio) &&
+                Number.isFinite(fim) &&
+                Number.isFinite(limite)
+            ) {
+                sections.push({
+                    startPathIndex: inicio,
+                    endPathIndex: fim,
+                    limite
+                });
+            }
+        }
+
+        res.json({
+            path: pathTomTom,
+            sections,
+            consultado_em:
+                new Date().toISOString(),
+            fonte: 'TomTom Orbis v3 via servidor'
+        });
+
+    } catch (erro) {
+        console.error(
+            '❌ /tomtom/speed-limits:',
+            erro
+        );
+
+        res.status(500).json({
+            erro: 'Erro interno ao consultar limites TomTom',
+            detalhes: erro.message
+        });
+    }
+});
+
+
 app.get('/health', async (req, res) => {
     try {
         const resultado = await pool.query('SELECT NOW() AS agora');
@@ -1360,119 +1588,61 @@ app.get('/rotas', autenticar, async (req, res) => {
 });
 
 app.get('/rotas/minha-rota', autenticar, async (req, res) => {
-    if (req.usuario.tipo !== 'motorista') {
-        return res.status(403).json({ erro: 'Acesso negado' });
-    }
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
     try {
-        const usuario = await pool.query(`
-            SELECT id, id_veiculo
-            FROM usuarios
-            WHERE id = $1
-            LIMIT 1
-        `, [req.usuario.id]);
-
+        const usuario = await pool.query(`SELECT id,id_veiculo FROM usuarios WHERE id = $1 LIMIT 1`, [req.usuario.id]);
         const user = usuario.rows[0];
+        let resultado;
 
-        if (!user) {
-            return res.status(404).json({
-                erro: 'Usuário não encontrado'
-            });
+        if (user?.id_veiculo) {
+            resultado = await pool.query(`
+                SELECT
+                    r.id,
+                    r.nome,
+                    r.origem,
+                    r.destino,
+                    r.restricoes,
+                    COALESCE(re.dados_geojson, r.dados_geojson) AS dados_geojson,
+                    r.status,
+                    r.criada_em,
+                    vg.id AS viagem_id,
+                    vg.status AS viagem_status,
+                    vg.carga,
+                    vg.altura_total,
+                    vg.peso_total,
+                    vg.saida_prevista,
+                    vg.saida_real,
+                    vg.chegada_prevista,
+                    vg.chegada_real,
+                    vg.rota_reutilizada,
+                    vg.id_rota_especifica
+                FROM rotas r
+                LEFT JOIN viagens vg
+                    ON vg.id_rota = r.id
+                   AND vg.status IN ('planejada','em_andamento')
+                LEFT JOIN rotas_especificas re
+                    ON re.id = vg.id_rota_especifica
+                WHERE r.id_veiculo = $1
+                  AND r.status IN ('pendente','em_andamento')
+                ORDER BY r.criada_em DESC
+                LIMIT 1
+            `, [user.id_veiculo]);
+        } else {
+            resultado = await pool.query(`
+                SELECT r.*, NULL::INTEGER AS viagem_id
+                FROM rotas r
+                WHERE r.id_motorista = $1
+                  AND r.status IN ('pendente','em_andamento')
+                ORDER BY r.criada_em DESC
+                LIMIT 1
+            `, [req.usuario.id]);
         }
 
-        if (!user.id_veiculo) {
-            return res.status(404).json({
-                mensagem: 'Motorista sem veículo vinculado'
-            });
-        }
-
-        /*
-         * IMPORTANTE:
-         * A atribuição atual é feita pela VIAGEM, não mais diretamente pela rota.
-         *
-         * Antes o código procurava:
-         *     rotas.id_veiculo = veículo do motorista
-         *
-         * Isso falhava com a arquitetura nova, pois a rota é uma rota-base
-         * reutilizável e quem recebe o veículo é a tabela viagens.
-         *
-         * Agora procuramos:
-         *     viagens.id_veiculo = veículo do motorista
-         */
-        const resultado = await pool.query(`
-            SELECT
-                r.id,
-                r.nome,
-                r.origem,
-                r.destino,
-                r.restricoes,
-
-                COALESCE(
-                    re.dados_geojson,
-                    r.dados_geojson
-                ) AS dados_geojson,
-
-                r.criada_em,
-
-                vg.id AS viagem_id,
-                vg.status AS viagem_status,
-                vg.carga,
-                vg.altura_total,
-                vg.peso_total,
-                vg.saida_prevista,
-                vg.saida_real,
-                vg.chegada_prevista,
-                vg.chegada_real,
-                vg.rota_reutilizada,
-                vg.id_rota_especifica,
-
-                v.id AS veiculo_id,
-                v.placa,
-                v.frota,
-                v.modelo,
-                v.comprimento,
-                v.largura,
-                v.peso AS peso_veiculo
-
-            FROM viagens vg
-
-            JOIN rotas r
-                ON r.id = vg.id_rota
-
-            JOIN veiculos v
-                ON v.id = vg.id_veiculo
-
-            LEFT JOIN rotas_especificas re
-                ON re.id = vg.id_rota_especifica
-
-            WHERE vg.id_veiculo = $1
-              AND vg.status IN ('planejada', 'em_andamento')
-
-            ORDER BY
-                CASE
-                    WHEN vg.status = 'em_andamento' THEN 0
-                    ELSE 1
-                END,
-                vg.saida_prevista ASC NULLS LAST,
-                vg.id DESC
-
-            LIMIT 1
-        `, [user.id_veiculo]);
-
-        if (!resultado.rows.length) {
-            return res.status(404).json({
-                mensagem: 'Nenhuma viagem ativa para este veículo'
-            });
-        }
-
+        if (!resultado.rows.length) return res.status(404).json({ mensagem: 'Nenhuma rota ativa' });
         res.json(resultado.rows[0]);
-
     } catch (erro) {
-        console.error('❌ Minha rota:', erro);
-
-        res.status(500).json({
-            erro: erro.message
-        });
+        res.status(500).json({ erro: erro.message });
     }
 });
 
