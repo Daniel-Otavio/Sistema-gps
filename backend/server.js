@@ -30,6 +30,40 @@ const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
 const EMAIL_NOME = process.env.EMAIL_NOME || 'GPS Caminhão';
 
+// ======================================================
+// V21.8 - CONFIGURAÇÃO DE PRODUÇÃO
+// ======================================================
+// Raw GPS stays available for this many days before compaction.
+// Compaction preserves the full sampled path in compressed JSONB.
+// Set 0 to disable automatic compaction.
+const GPS_RAW_RETENTION_DAYS =
+    Math.max(
+        0,
+        Number(
+            process.env.GPS_RAW_RETENTION_DAYS ||
+            180
+        )
+    );
+
+const MANUTENCAO_INTERVALO_MS =
+    Math.max(
+        60 * 60 * 1000,
+        Number(
+            process.env.MANUTENCAO_INTERVALO_MS ||
+            6 * 60 * 60 * 1000
+        )
+    );
+
+const SLOW_REQUEST_MS =
+    Math.max(
+        1000,
+        Number(
+            process.env.SLOW_REQUEST_MS ||
+            8000
+        )
+    );
+
+
 if (!DATABASE_URL) console.error('❌ DATABASE_URL não configurada!');
 if (!JWT_SECRET) console.error('❌ JWT_SECRET não configurada!');
 if (!ORS_API_KEY) console.warn('⚠️ ORS_API_KEY não configurada!');
@@ -51,6 +85,87 @@ pool.on('error', err => {
     console.error('❌ Erro inesperado no PostgreSQL:', err);
 });
 
+
+// ======================================================
+// V21.8 - LOGS / OBSERVABILIDADE
+// ======================================================
+function gerarRequestId() {
+    return (
+        Date.now().toString(36) +
+        '-' +
+        Math.random()
+            .toString(36)
+            .slice(2, 10)
+    );
+}
+
+function serializarErro(erro) {
+    if (!erro) return {};
+
+    return {
+        name:
+            erro.name ||
+            null,
+        message:
+            erro.message ||
+            String(erro),
+        code:
+            erro.code ||
+            null,
+        stack:
+            process.env.NODE_ENV === 'production'
+                ? undefined
+                : erro.stack
+    };
+}
+
+async function registrarLogSistema({
+    nivel = 'error',
+    origem = 'app',
+    mensagem,
+    detalhes = {},
+    req = null,
+    statusHttp = null,
+    duracaoMs = null
+}) {
+    try {
+        await pool.query(`
+            INSERT INTO logs_sistema
+            (
+                nivel,
+                origem,
+                mensagem,
+                detalhes,
+                request_id,
+                metodo,
+                rota,
+                status_http,
+                duracao_ms,
+                id_usuario
+            )
+            VALUES
+            ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10)
+        `, [
+            nivel,
+            origem,
+            String(mensagem || '').slice(0,4000),
+            JSON.stringify(detalhes || {}),
+            req?.requestId || null,
+            req?.method || null,
+            req?.originalUrl || null,
+            statusHttp,
+            duracaoMs,
+            req?.usuario?.id || null
+        ]);
+    } catch (erroLog) {
+        // Nunca derruba a API por falha no mecanismo de log.
+        console.error(
+            '⚠️ Falha ao persistir log:',
+            erroLog.message
+        );
+    }
+}
+
 // ======================================================
 // MIDDLEWARES
 // ======================================================
@@ -62,6 +177,58 @@ app.use(cors({
         : '*'
 }));
 app.use(express.json({ limit: '2mb' }));
+
+// Correlation ID + diagnóstico de 5xx e requests lentas.
+app.use((req, res, next) => {
+    req.requestId =
+        req.headers['x-request-id'] ||
+        gerarRequestId();
+
+    res.setHeader(
+        'X-Request-Id',
+        req.requestId
+    );
+
+    const inicio =
+        Date.now();
+
+    res.on('finish', () => {
+        const duracao =
+            Date.now() -
+            inicio;
+
+        if (
+            res.statusCode >= 500 ||
+            duracao >= SLOW_REQUEST_MS
+        ) {
+            registrarLogSistema({
+                nivel:
+                    res.statusCode >= 500
+                        ? 'error'
+                        : 'warn',
+                origem:
+                    res.statusCode >= 500
+                        ? 'http_5xx'
+                        : 'http_lento',
+                mensagem:
+                    res.statusCode >= 500
+                        ? `HTTP ${res.statusCode}`
+                        : `Request lenta: ${duracao} ms`,
+                detalhes:{
+                    ip:req.ip || null
+                },
+                req,
+                statusHttp:
+                    res.statusCode,
+                duracaoMs:
+                    duracao
+            }).catch(() => {});
+        }
+    });
+
+    next();
+});
+
 
 // ======================================================
 // HELPERS
@@ -400,6 +567,76 @@ async function criarTabelas() {
             ultima_lon DOUBLE PRECISION,
             atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
         )
+    `);
+
+
+    // ==================================================
+    // V21.8 - observabilidade / retenção / integridade
+    // ==================================================
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS logs_sistema (
+            id BIGSERIAL PRIMARY KEY,
+            nivel VARCHAR(12) NOT NULL DEFAULT 'error',
+            origem VARCHAR(80),
+            mensagem TEXT NOT NULL,
+            detalhes JSONB DEFAULT '{}'::jsonb,
+            request_id VARCHAR(80),
+            metodo VARCHAR(12),
+            rota TEXT,
+            status_http INTEGER,
+            duracao_ms INTEGER,
+            id_usuario INTEGER,
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_logs_sistema_data
+        ON logs_sistema(criado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_logs_sistema_nivel_data
+        ON logs_sistema(nivel, criado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS trajetos_viagem_arquivados (
+            id_viagem INTEGER PRIMARY KEY,
+            id_veiculo INTEGER,
+            id_motorista INTEGER,
+            total_pontos INTEGER NOT NULL DEFAULT 0,
+            primeiro_ponto_em TIMESTAMPTZ,
+            ultimo_ponto_em TIMESTAMPTZ,
+            distancia_gps_bruta_km DOUBLE PRECISION,
+            pontos JSONB NOT NULL DEFAULT '[]'::jsonb,
+            arquivado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            formato_versao INTEGER DEFAULT 1
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_trajetos_arquivados_veiculo
+        ON trajetos_viagem_arquivados(id_veiculo, arquivado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS manutencao_sistema (
+            chave VARCHAR(80) PRIMARY KEY,
+            executado_em TIMESTAMPTZ,
+            status VARCHAR(20),
+            detalhes JSONB DEFAULT '{}'::jsonb
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_hist_localizacoes_data_global
+        ON historico_localizacoes(registrado_em DESC)
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_hist_localizacoes_viagem_data_desc
+        ON historico_localizacoes(id_viagem, registrado_em DESC)
     `);
 
 
@@ -1268,18 +1505,608 @@ app.post('/tomtom/speed-limits', autenticar, async (req, res) => {
 });
 
 
-app.get('/health', async (req, res) => {
+
+// ======================================================
+// V21.8 - RETENÇÃO / COMPACTAÇÃO GPS
+// ======================================================
+async function arquivarViagensGpsAntigas({
+    limite = 20
+} = {}) {
+    if (
+        !Number.isFinite(GPS_RAW_RETENTION_DAYS) ||
+        GPS_RAW_RETENTION_DAYS <= 0
+    ) {
+        return {
+            desativado:true,
+            arquivadas:0,
+            pontos_removidos:0
+        };
+    }
+
+    const client =
+        await pool.connect();
+
+    let arquivadas = 0;
+    let pontosRemovidos = 0;
+
     try {
-        const resultado = await pool.query('SELECT NOW() AS agora');
-        res.json({
-            status: 'ok',
-            banco: 'postgresql',
-            database: 'conectado',
-            brevo: BREVO_API_KEY ? 'configurado' : 'não configurado',
-            timestamp: resultado.rows[0].agora
-        });
+        await client.query('BEGIN');
+
+        const viagens = await client.query(`
+            SELECT
+                vg.id,
+                vg.id_veiculo,
+                vg.id_motorista
+            FROM viagens vg
+            WHERE vg.status = 'concluida'
+              AND COALESCE(
+                    vg.chegada_real,
+                    vg.criada_em
+                  ) <
+                  CURRENT_TIMESTAMP -
+                  ($1 || ' days')::interval
+              AND EXISTS (
+                    SELECT 1
+                    FROM historico_localizacoes h
+                    WHERE h.id_viagem = vg.id
+                  )
+            ORDER BY
+                COALESCE(
+                    vg.chegada_real,
+                    vg.criada_em
+                ) ASC
+            LIMIT $2
+            FOR UPDATE OF vg SKIP LOCKED
+        `, [
+            GPS_RAW_RETENTION_DAYS,
+            Math.max(
+                1,
+                Math.min(
+                    100,
+                    Number(limite) || 20
+                )
+            )
+        ]);
+
+        for (const viagem of viagens.rows) {
+            const resumo =
+                await client.query(`
+                    SELECT
+                        COUNT(*)::int AS total,
+                        MIN(registrado_em) AS primeiro,
+                        MAX(registrado_em) AS ultimo,
+                        COALESCE(
+                            (
+                                SELECT distancia_gps_bruta_km
+                                FROM resumo_coleta_viagem
+                                WHERE id_viagem = $1
+                            ),
+                            0
+                        ) AS distancia,
+                        jsonb_agg(
+                            jsonb_build_array(
+                                lon,
+                                lat,
+                                EXTRACT(
+                                    EPOCH FROM
+                                    COALESCE(
+                                        timestamp_dispositivo,
+                                        registrado_em
+                                    )
+                                )::bigint,
+                                velocidade_kmh,
+                                precisao_m,
+                                direcao_graus,
+                                altitude_m
+                            )
+                            ORDER BY registrado_em
+                        ) AS pontos
+                    FROM historico_localizacoes
+                    WHERE id_viagem = $1
+                `, [
+                    viagem.id
+                ]);
+
+            const row =
+                resumo.rows[0];
+
+            if (
+                !row ||
+                Number(row.total || 0) <= 0
+            ) {
+                continue;
+            }
+
+            await client.query(`
+                INSERT INTO trajetos_viagem_arquivados
+                (
+                    id_viagem,
+                    id_veiculo,
+                    id_motorista,
+                    total_pontos,
+                    primeiro_ponto_em,
+                    ultimo_ponto_em,
+                    distancia_gps_bruta_km,
+                    pontos,
+                    arquivado_em,
+                    formato_versao
+                )
+                VALUES
+                ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,CURRENT_TIMESTAMP,1)
+                ON CONFLICT (id_viagem)
+                DO UPDATE SET
+                    id_veiculo = EXCLUDED.id_veiculo,
+                    id_motorista = EXCLUDED.id_motorista,
+                    total_pontos = EXCLUDED.total_pontos,
+                    primeiro_ponto_em = EXCLUDED.primeiro_ponto_em,
+                    ultimo_ponto_em = EXCLUDED.ultimo_ponto_em,
+                    distancia_gps_bruta_km = EXCLUDED.distancia_gps_bruta_km,
+                    pontos = EXCLUDED.pontos,
+                    arquivado_em = CURRENT_TIMESTAMP
+            `, [
+                viagem.id,
+                viagem.id_veiculo,
+                viagem.id_motorista,
+                row.total,
+                row.primeiro,
+                row.ultimo,
+                row.distancia,
+                JSON.stringify(
+                    row.pontos || []
+                )
+            ]);
+
+            const removido =
+                await client.query(`
+                    DELETE FROM historico_localizacoes
+                    WHERE id_viagem = $1
+                `, [
+                    viagem.id
+                ]);
+
+            arquivadas += 1;
+            pontosRemovidos +=
+                Number(
+                    removido.rowCount || 0
+                );
+        }
+
+        await client.query(`
+            INSERT INTO manutencao_sistema
+            (
+                chave,
+                executado_em,
+                status,
+                detalhes
+            )
+            VALUES
+            (
+                'compactacao_gps',
+                CURRENT_TIMESTAMP,
+                'ok',
+                $1::jsonb
+            )
+            ON CONFLICT (chave)
+            DO UPDATE SET
+                executado_em =
+                    EXCLUDED.executado_em,
+                status =
+                    EXCLUDED.status,
+                detalhes =
+                    EXCLUDED.detalhes
+        `, [
+            JSON.stringify({
+                retencao_dias:
+                    GPS_RAW_RETENTION_DAYS,
+                viagens_arquivadas:
+                    arquivadas,
+                pontos_removidos:
+                    pontosRemovidos
+            })
+        ]);
+
+        await client.query('COMMIT');
+
+        return {
+            desativado:false,
+            retencao_dias:
+                GPS_RAW_RETENTION_DAYS,
+            arquivadas,
+            pontos_removidos:
+                pontosRemovidos
+        };
+
     } catch (erro) {
-        res.status(500).json({ status: 'erro', database: 'desconectado', erro: erro.message });
+        try {
+            await client.query('ROLLBACK');
+        } catch (_) {}
+
+        await registrarLogSistema({
+            nivel:'error',
+            origem:'compactacao_gps',
+            mensagem:
+                erro.message,
+            detalhes:
+                serializarErro(erro)
+        });
+
+        throw erro;
+
+    } finally {
+        client.release();
+    }
+}
+
+let manutencaoEmExecucao = false;
+
+async function executarManutencaoPeriodica() {
+    if (manutencaoEmExecucao) {
+        return;
+    }
+
+    manutencaoEmExecucao = true;
+
+    try {
+        const resultado =
+            await arquivarViagensGpsAntigas({
+                limite:20
+            });
+
+        console.log(
+            '🧹 Manutenção GPS:',
+            resultado
+        );
+
+    } catch (erro) {
+        console.error(
+            '❌ Manutenção periódica:',
+            erro
+        );
+
+    } finally {
+        manutencaoEmExecucao =
+            false;
+    }
+}
+
+app.get('/health', async (req, res) => {
+    const inicio = Date.now();
+
+    try {
+        const resultado =
+            await pool.query(`
+                SELECT
+                    NOW() AS agora,
+                    pg_database_size(
+                        current_database()
+                    ) AS database_bytes
+            `);
+
+        res.json({
+            status:'ok',
+            banco:'postgresql',
+            database:'conectado',
+            database_bytes:
+                Number(
+                    resultado.rows[0]
+                        .database_bytes || 0
+                ),
+            brevo:
+                BREVO_API_KEY
+                    ? 'configurado'
+                    : 'não configurado',
+            retencao_gps_dias:
+                GPS_RAW_RETENTION_DAYS,
+            tempo_resposta_ms:
+                Date.now() - inicio,
+            timestamp:
+                resultado.rows[0].agora
+        });
+
+    } catch (erro) {
+        await registrarLogSistema({
+            nivel:'error',
+            origem:'health',
+            mensagem:
+                erro.message,
+            detalhes:
+                serializarErro(erro),
+            req,
+            statusHttp:500,
+            duracaoMs:
+                Date.now() - inicio
+        });
+
+        res.status(500).json({
+            status:'erro',
+            database:'desconectado',
+            request_id:
+                req.requestId,
+            erro:
+                erro.message
+        });
+    }
+});
+
+app.get('/admin/saude-producao', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({
+            erro:'Acesso negado'
+        });
+    }
+
+    try {
+        const [
+            banco,
+            gps,
+            logs,
+            viagens,
+            manutencao,
+            arquivos
+        ] = await Promise.all([
+            pool.query(`
+                SELECT
+                    pg_database_size(
+                        current_database()
+                    ) AS bytes
+            `),
+
+            pool.query(`
+                SELECT
+                    COUNT(*)::bigint AS total,
+                    MIN(registrado_em) AS mais_antigo,
+                    MAX(registrado_em) AS mais_novo,
+                    pg_total_relation_size(
+                        'historico_localizacoes'
+                    ) AS bytes_tabela
+                FROM historico_localizacoes
+            `),
+
+            pool.query(`
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE nivel = 'error'
+                          AND criado_em >
+                              CURRENT_TIMESTAMP -
+                              INTERVAL '24 hours'
+                    )::int AS erros_24h,
+                    COUNT(*) FILTER (
+                        WHERE nivel = 'warn'
+                          AND criado_em >
+                              CURRENT_TIMESTAMP -
+                              INTERVAL '24 hours'
+                    )::int AS avisos_24h
+                FROM logs_sistema
+            `),
+
+            pool.query(`
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE status = 'em_andamento'
+                    )::int AS em_andamento,
+                    COUNT(*) FILTER (
+                        WHERE status = 'planejada'
+                    )::int AS planejadas,
+                    COUNT(*) FILTER (
+                        WHERE status_aprovacao =
+                            'revisao_obrigatoria'
+                    )::int AS revisao_obrigatoria
+                FROM viagens
+                WHERE status IN (
+                    'planejada',
+                    'em_andamento'
+                )
+            `),
+
+            pool.query(`
+                SELECT *
+                FROM manutencao_sistema
+                WHERE chave =
+                    'compactacao_gps'
+            `),
+
+            pool.query(`
+                SELECT
+                    COUNT(*)::int AS viagens_arquivadas,
+                    COALESCE(
+                        SUM(total_pontos),
+                        0
+                    )::bigint AS pontos_arquivados
+                FROM trajetos_viagem_arquivados
+            `)
+        ]);
+
+        const gpsRow = gps.rows[0];
+        const dbBytes =
+            Number(
+                banco.rows[0]?.bytes || 0
+            );
+
+        const gpsBytes =
+            Number(
+                gpsRow?.bytes_tabela || 0
+            );
+
+        res.json({
+            status:
+                Number(
+                    logs.rows[0]
+                        ?.erros_24h || 0
+                ) > 0
+                    ? 'atencao'
+                    : 'ok',
+
+            banco:{
+                bytes:dbBytes,
+                mb:
+                    Number(
+                        (
+                            dbBytes /
+                            1024 /
+                            1024
+                        ).toFixed(2)
+                    )
+            },
+
+            gps_raw:{
+                total_pontos:
+                    Number(
+                        gpsRow?.total || 0
+                    ),
+                mais_antigo:
+                    gpsRow?.mais_antigo || null,
+                mais_novo:
+                    gpsRow?.mais_novo || null,
+                bytes:gpsBytes,
+                mb:
+                    Number(
+                        (
+                            gpsBytes /
+                            1024 /
+                            1024
+                        ).toFixed(2)
+                    ),
+                retencao_dias:
+                    GPS_RAW_RETENTION_DAYS
+            },
+
+            gps_arquivado:{
+                viagens:
+                    Number(
+                        arquivos.rows[0]
+                            ?.viagens_arquivadas || 0
+                    ),
+                pontos:
+                    Number(
+                        arquivos.rows[0]
+                            ?.pontos_arquivados || 0
+                    )
+            },
+
+            logs:{
+                erros_24h:
+                    Number(
+                        logs.rows[0]
+                            ?.erros_24h || 0
+                    ),
+                avisos_24h:
+                    Number(
+                        logs.rows[0]
+                            ?.avisos_24h || 0
+                    )
+            },
+
+            viagens:
+                viagens.rows[0],
+
+            manutencao:
+                manutencao.rows[0] ||
+                {
+                    status:'ainda_nao_executada'
+                },
+
+            configuracao:{
+                slow_request_ms:
+                    SLOW_REQUEST_MS,
+                manutencao_intervalo_horas:
+                    Number(
+                        (
+                            MANUTENCAO_INTERVALO_MS /
+                            3600000
+                        ).toFixed(1)
+                    )
+            }
+        });
+
+    } catch (erro) {
+        await registrarLogSistema({
+            nivel:'error',
+            origem:'saude_producao',
+            mensagem:
+                erro.message,
+            detalhes:
+                serializarErro(erro),
+            req
+        });
+
+        res.status(500).json({
+            erro:
+                erro.message,
+            request_id:
+                req.requestId
+        });
+    }
+});
+
+app.get('/admin/logs-sistema', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({
+            erro:'Acesso negado'
+        });
+    }
+
+    const limite =
+        Math.max(
+            1,
+            Math.min(
+                500,
+                Number(
+                    req.query.limite ||
+                    100
+                )
+            )
+        );
+
+    try {
+        const r = await pool.query(`
+            SELECT *
+            FROM logs_sistema
+            ORDER BY criado_em DESC
+            LIMIT $1
+        `, [
+            limite
+        ]);
+
+        res.json(r.rows);
+
+    } catch (erro) {
+        res.status(500).json({
+            erro:
+                erro.message
+        });
+    }
+});
+
+app.post('/admin/manutencao/compactar-gps', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({
+            erro:'Acesso negado'
+        });
+    }
+
+    try {
+        const resultado =
+            await arquivarViagensGpsAntigas({
+                limite:
+                    Number(
+                        req.body?.limite ||
+                        20
+                    )
+            });
+
+        res.json({
+            mensagem:
+                'Manutenção executada.',
+            resultado
+        });
+
+    } catch (erro) {
+        res.status(500).json({
+            erro:
+                erro.message,
+            request_id:
+                req.requestId
+        });
     }
 });
 
@@ -7239,6 +8066,58 @@ app.get('/api/traffic', autenticar, validarQuery(schemas.traffic), async (req, r
 // ======================================================
 // INICIAR SERVIDOR
 // ======================================================
+
+// ======================================================
+// V21.8 - FALHAS DE PROCESSO
+// ======================================================
+process.on(
+    'unhandledRejection',
+    motivo => {
+        console.error(
+            '❌ unhandledRejection:',
+            motivo
+        );
+
+        registrarLogSistema({
+            nivel:'error',
+            origem:'unhandledRejection',
+            mensagem:
+                motivo?.message ||
+                String(motivo),
+            detalhes:
+                serializarErro(motivo)
+        }).catch(() => {});
+    }
+);
+
+process.on(
+    'uncaughtException',
+    erro => {
+        console.error(
+            '❌ uncaughtException:',
+            erro
+        );
+
+        registrarLogSistema({
+            nivel:'error',
+            origem:'uncaughtException',
+            mensagem:
+                erro?.message ||
+                String(erro),
+            detalhes:
+                serializarErro(erro)
+        })
+        .catch(() => {})
+        .finally(() => {
+            // Processo em estado desconhecido: Render deve reiniciar.
+            setTimeout(
+                () => process.exit(1),
+                300
+            );
+        });
+    }
+);
+
 async function iniciarServidor() {
     console.log('========================================');
     console.log('🚛 INICIANDO GPS CAMINHÃO');
@@ -7258,6 +8137,18 @@ async function iniciarServidor() {
     }
 
     app.listen(PORT, '0.0.0.0', () => {
+        // Primeira manutenção 2 min após boot,
+        // depois em intervalo configurável.
+        setTimeout(
+            executarManutencaoPeriodica,
+            2 * 60 * 1000
+        );
+
+        setInterval(
+            executarManutencaoPeriodica,
+            MANUTENCAO_INTERVALO_MS
+        );
+
         console.log('========================================');
         console.log(`🚀 Servidor: porta ${PORT}`);
         console.log('🐘 PostgreSQL: ATIVO');
@@ -7269,5 +8160,41 @@ async function iniciarServidor() {
         console.log('========================================');
     });
 }
+
+
+// Última barreira de erro do Express.
+app.use(async (erro, req, res, next) => {
+    console.error(
+        '❌ Erro não tratado na rota:',
+        req.method,
+        req.originalUrl,
+        erro
+    );
+
+    await registrarLogSistema({
+        nivel:'error',
+        origem:'express',
+        mensagem:
+            erro?.message ||
+            'Erro interno',
+        detalhes:
+            serializarErro(erro),
+        req,
+        statusHttp:
+            500
+    });
+
+    if (res.headersSent) {
+        return next(erro);
+    }
+
+    res.status(500).json({
+        erro:
+            'Erro interno do servidor',
+        request_id:
+            req.requestId
+    });
+});
+
 
 iniciarServidor();
