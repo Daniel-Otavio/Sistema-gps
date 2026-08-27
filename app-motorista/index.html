@@ -667,6 +667,17 @@ body.modo-navegacao #btn-tomtom-config {
 }
 
 </style>
+
+<style>
+/* ===== IDENTIFICAÇÃO DE BUILD V21.8 ===== */
+#build-demo-badge,
+body.modo-navegacao #build-demo-badge {
+    opacity:1 !important;
+    display:block !important;
+    visibility:visible !important;
+}
+</style>
+
 </head>
 <body>
 <div id="mapa"></div>
@@ -709,10 +720,13 @@ body.modo-navegacao #btn-tomtom-config {
     <span id="alerta-navegacao-texto">Curva à frente</span>
 </div>
 <div id="build-demo-badge" style="
-position:fixed;top:8px;right:8px;z-index:5000;
-background:#111827;color:#f97316;border:1px solid #f97316;
-border-radius:8px;padding:4px 7px;font:700 9px Segoe UI,sans-serif;
-">GPS V20 CONSUMO REAL</div>
+position:fixed;top:4px;left:50%;right:auto;transform:translateX(-50%);
+z-index:99999;background:#dc2626;color:#fff;border:2px solid #fff;
+border-radius:10px;padding:5px 12px;
+font:900 11px Segoe UI,sans-serif;
+box-shadow:0 4px 14px rgba(0,0,0,.45);
+letter-spacing:.3px;white-space:nowrap;
+">GPS V21.8 • PRÉ-PRODUÇÃO</div>
 <div id="status-bar">⏳ Carregando...</div>
 <div id="offline-indicator">📴 OFFLINE • <span id="offline-pendencias">0 pendências</span></div>
 <div id="pacote-offline-status" style="
@@ -794,6 +808,7 @@ font-size:10px;color:#d4d4d8;box-shadow:0 4px 14px rgba(0,0,0,.3);
 </div>
 </div>
 <script>
+console.log('%c GPS V21.8 • PRÉ-PRODUÇÃO ', 'background:#dc2626;color:white;font-weight:bold;padding:4px 8px');
 // ======================================================
 // API BASE – FIXO PARA RENDER
 // ======================================================
@@ -928,6 +943,7 @@ function irParaLoginAposCadastro() {
 // ======================================================
 let mapa = null, tokenJWT = null, marcadorMotorista = null, watchId = null;
 let ultimaPosicaoLngLat = null, ultimoBearing = 0, modoNavegacaoAtivo = false;
+let cameraFollowAtiva = true;
 let dadosGeoJsonAtual = null, temaAtual = 'light', intervalMonitoramento = null;
 let intervalReportes = null, pathCoordinates = [];
 let simulacaoAtiva = false, simulacaoPausada = false, intervalSimulacao = null;
@@ -969,6 +985,15 @@ const OFFLINE_DB_NAME = 'gps_caminhao_offline';
 const OFFLINE_DB_VERSION = 1;
 const STORE_CACHE = 'cache';
 const STORE_GPS = 'gps_fila';
+const GPS_OFFLINE_INTERVALO_MIN_MS = 10000;
+const GPS_OFFLINE_MOVIMENTO_MIN_KM = 0.025;
+const GPS_OFFLINE_MAX_PONTOS = 4000;
+const GPS_OFFLINE_ALVO_APOS_COMPACTAR = 3200;
+
+let ultimoGpsOfflineSalvoEm = 0;
+let ultimoGpsOfflineSalvoPosicao = null;
+let gpsSyncEmAndamento = false;
+
 const STORE_ACOES = 'acoes_fila';
 const STORE_REPORTES = 'reportes_fila';
 
@@ -1549,9 +1574,9 @@ function encontrarReentrada(idxIncidente, distanciaDesejadaKm = 1.5) {
     }
     return pathCoordinates.length - 1;
 }
-async function enviarLocalizacaoServidor(lat, lon) {
+async function enviarLocalizacaoServidor(lat, lon, telemetria = {}) {
     if (!tokenJWT) {
-        await enfileirarGPS(lat, lon);
+        await enfileirarGPS(lat, lon, telemetria);
         return;
     }
 
@@ -1565,19 +1590,19 @@ async function enviarLocalizacaoServidor(lat, lon) {
     // Offline: grava localmente imediatamente.
     if (!navigator.onLine) {
         ultimaLocalizacaoEnviada = agora;
-        await enfileirarGPS(lat, lon);
+        await enfileirarGPS(lat, lon, telemetria);
         return;
     }
 
     envioLocalizacaoEmAndamento = true;
 
     try {
-        await enviarGPSDireto({ lat, lon });
+        await enviarGPSDireto({ lat, lon, ...telemetria });
         ultimaLocalizacaoEnviada = agora;
     } catch (erro) {
         console.warn('GPS não enviado; armazenando offline:', erro);
         ultimaLocalizacaoEnviada = agora;
-        await enfileirarGPS(lat, lon);
+        await enfileirarGPS(lat, lon, telemetria);
     } finally {
         envioLocalizacaoEmAndamento = false;
     }
@@ -1745,20 +1770,168 @@ async function obterRotaOffline() {
     }
 }
 
-async function enfileirarGPS(lat, lon) {
-    try {
-        await dbAdicionar(STORE_GPS, {
-            lat: Number(lat),
-            lon: Number(lon),
-            viagem_id: viagemAtualId || null,
-            criado_em: new Date().toISOString()
-        });
 
-        await atualizarIndicadorOffline();
+async function compactarFilaGPSOfflineSeNecessario() {
+    try {
+        const itens =
+            await dbListar(
+                STORE_GPS
+            );
+
+        if (
+            itens.length <=
+            GPS_OFFLINE_MAX_PONTOS
+        ) {
+            return;
+        }
+
+        const ordenados =
+            [...itens].sort(
+                (a,b) =>
+                    Number(a.id || 0) -
+                    Number(b.id || 0)
+            );
+
+        const remover =
+            ordenados.length -
+            GPS_OFFLINE_ALVO_APOS_COMPACTAR;
+
+        let removidos = 0;
+
+        /*
+         * Remove pontos alternados da parte mais antiga.
+         * Preserva uma amostragem distribuída do trajeto em vez
+         * de simplesmente apagar o começo da viagem.
+         */
+        for (
+            let i = 1;
+            i < ordenados.length - 200 &&
+            removidos < remover;
+            i += 2
+        ) {
+            await dbExcluir(
+                STORE_GPS,
+                ordenados[i].id
+            );
+
+            removidos++;
+        }
+
+        console.warn(
+            `📦 Fila GPS offline compactada: ${removidos} ponto(s) removido(s) por amostragem.`
+        );
+
     } catch (erro) {
-        console.warn('Erro ao armazenar GPS offline:', erro);
+        console.warn(
+            'Falha ao compactar fila GPS offline:',
+            erro
+        );
     }
 }
+
+function deveSalvarGpsOffline(
+    lat,
+    lon
+) {
+    const agora =
+        Date.now();
+
+    if (
+        !ultimoGpsOfflineSalvoEm ||
+        !ultimoGpsOfflineSalvoPosicao
+    ) {
+        return true;
+    }
+
+    const tempo =
+        agora -
+        ultimoGpsOfflineSalvoEm;
+
+    let distancia = 0;
+
+    try {
+        distancia =
+            calcularDistancia(
+                Number(
+                    ultimoGpsOfflineSalvoPosicao[1]
+                ),
+                Number(
+                    ultimoGpsOfflineSalvoPosicao[0]
+                ),
+                Number(lat),
+                Number(lon)
+            );
+    } catch (_) {}
+
+    return (
+        tempo >=
+            GPS_OFFLINE_INTERVALO_MIN_MS ||
+        distancia >=
+            GPS_OFFLINE_MOVIMENTO_MIN_KM
+    );
+}
+
+async function enfileirarGPS(lat, lon, telemetria = {}) {
+    try {
+        if (
+            !deveSalvarGpsOffline(
+                lat,
+                lon
+            )
+        ) {
+            return;
+        }
+
+        await dbAdicionar(STORE_GPS, {
+            lat:
+                Number(lat),
+            lon:
+                Number(lon),
+            velocidade_kmh:
+                telemetria.velocidade_kmh ??
+                null,
+            precisao_m:
+                telemetria.precisao_m ??
+                null,
+            direcao_graus:
+                telemetria.direcao_graus ??
+                null,
+            altitude_m:
+                telemetria.altitude_m ??
+                null,
+            timestamp_dispositivo:
+                telemetria.timestamp_dispositivo ||
+                new Date().toISOString(),
+            origem_coleta:
+                telemetria.origem_coleta ||
+                'offline_sync',
+            viagem_id:
+                viagemAtualId ||
+                null,
+            criado_em:
+                new Date().toISOString()
+        });
+
+        ultimoGpsOfflineSalvoEm =
+            Date.now();
+
+        ultimoGpsOfflineSalvoPosicao = [
+            Number(lon),
+            Number(lat)
+        ];
+
+        await compactarFilaGPSOfflineSeNecessario();
+
+        await atualizarIndicadorOffline();
+
+    } catch (erro) {
+        console.warn(
+            'Erro ao armazenar GPS offline:',
+            erro
+        );
+    }
+}
+
 
 async function enfileirarAcaoViagem(tipo, viagemId, payload = null) {
     if (!viagemId) return;
@@ -1852,7 +2025,15 @@ async function enviarGPSDireto(item) {
         },
         body: JSON.stringify({
             lat: Number(item.lat),
-            lon: Number(item.lon)
+            lon: Number(item.lon),
+            velocidade_kmh: item.velocidade_kmh ?? null,
+            precisao_m: item.precisao_m ?? null,
+            direcao_graus: item.direcao_graus ?? null,
+            altitude_m: item.altitude_m ?? null,
+            timestamp_dispositivo: item.timestamp_dispositivo || null,
+            origem_coleta:
+                item.origem_coleta ||
+                (item.criado_em ? 'offline_sync' : 'gps_app')
         })
     });
 
@@ -1860,18 +2041,97 @@ async function enviarGPSDireto(item) {
 }
 
 async function sincronizarGPSOffline() {
-    const itens = await dbListar(STORE_GPS);
+    if (
+        gpsSyncEmAndamento ||
+        !navigator.onLine
+    ) {
+        return;
+    }
 
-    for (const item of itens) {
-        try {
-            await enviarGPSDireto(item);
-            await dbExcluir(STORE_GPS, item.id);
-        } catch (erro) {
-            console.warn('Sincronização GPS interrompida:', erro);
-            break;
+    gpsSyncEmAndamento = true;
+
+    try {
+        const itens =
+            (
+                await dbListar(
+                    STORE_GPS
+                )
+            )
+            .sort(
+                (a,b) =>
+                    Number(a.id || 0) -
+                    Number(b.id || 0)
+            );
+
+        const lote =
+            itens.slice(
+                0,
+                120
+            );
+
+        for (const item of lote) {
+            try {
+                await enviarGPSDireto(
+                    item
+                );
+
+                await dbExcluir(
+                    STORE_GPS,
+                    item.id
+                );
+
+            } catch (erro) {
+                const texto =
+                    String(
+                        erro?.message ||
+                        erro
+                    );
+
+                if (
+                    /HTTP 401|HTTP 403/.test(
+                        texto
+                    )
+                ) {
+                    await atualizarIndicadorOffline(
+                        '🔐 Faça login para sincronizar os dados salvos'
+                    );
+                }
+
+                console.warn(
+                    'Sincronização GPS interrompida:',
+                    erro
+                );
+
+                break;
+            }
+        }
+
+    } finally {
+        gpsSyncEmAndamento =
+            false;
+    }
+
+    /*
+     * Continua aos poucos sem travar a interface nem disparar
+     * milhares de requests de uma vez.
+     */
+    if (navigator.onLine) {
+        const restantes =
+            await dbListar(
+                STORE_GPS
+            );
+
+        if (restantes.length > 0) {
+            setTimeout(
+                sincronizarGPSOffline,
+                700
+            );
         }
     }
+
+    await atualizarIndicadorOffline();
 }
+
 
 async function sincronizarAcoesOffline() {
     const itens = await dbListar(STORE_ACOES);
@@ -2408,9 +2668,58 @@ function initMapa() {
     document.getElementById('btn-reportar')
         .addEventListener('click', toggleMenuReporte);
 
+
+    mapa.on('dragstart', () => {
+        if (modoNavegacaoAtivo) {
+            cameraFollowAtiva = false;
+        }
+    });
+
+    mapa.on('rotatestart', () => {
+        if (modoNavegacaoAtivo) {
+            cameraFollowAtiva = false;
+        }
+    });
+
     mapa.on('style.load', () => {
         if (dadosGeoJsonAtual) {
-            desenharRota(dadosGeoJsonAtual, false);
+            try {
+                /*
+                 * Não substitui cegamente o source por toda a rota.
+                 * Preserva a parte restante quando a viagem já começou.
+                 */
+                const rotaVisivel =
+                    obterGeoJsonRotaVisivelAtual() ||
+                    dadosGeoJsonAtual;
+
+                desenharRota(
+                    dadosGeoJsonAtual,
+                    false
+                );
+
+                const source =
+                    mapa.getSource(
+                        'rota-src'
+                    );
+
+                if (
+                    source &&
+                    rotaVisivel
+                ) {
+                    source.setData(
+                        rotaVisivel
+                    );
+                }
+
+                if (modoNavegacaoAtivo) {
+                    aplicarEstiloMapaNavegacao();
+                }
+            } catch (erro) {
+                console.warn(
+                    'Restauração da rota no style.load:',
+                    erro
+                );
+            }
         }
     });
 }
@@ -2436,64 +2745,256 @@ async function fazerLoginMotorista() {
     } catch (erro) { status.innerHTML = '❌ ' + erro.message; }
 }
 
-async function carregarRotaDoMotorista() {
-    const statusBar = document.getElementById('status-bar');
 
+async function invalidarRotaLocalPorEstadoServidor({
+    apagarCache = true
+} = {}) {
+    /*
+     * Quando o servidor diz que a viagem está bloqueada,
+     * em revisão ou não aprovada, NÃO podemos mostrar uma
+     * cópia offline antiga como se ainda estivesse autorizada.
+     */
+    dadosGeoJsonAtual = null;
+    dadosRotaOriginal = {};
+    pathCoordinates = [];
+    viagemAtualId = null;
+    maiorIndiceRotaPercorrido = 0;
+    ultimoIndiceRotaRenderizado = -1;
+
+    if (mapa) {
+        try {
+            const layers = [
+                'rota-layer-highlight',
+                'rota-layer',
+                'rota-layer-casing',
+                'rota-layer-glow'
+            ];
+
+            for (const id of layers) {
+                if (mapa.getLayer(id)) {
+                    mapa.removeLayer(id);
+                }
+            }
+
+            if (mapa.getSource('rota-src')) {
+                mapa.removeSource('rota-src');
+            }
+        } catch (erro) {
+            console.warn(
+                'Não foi possível limpar a rota visual:',
+                erro
+            );
+        }
+    }
+
+    if (apagarCache) {
+        try {
+            await dbExcluir(
+                STORE_CACHE,
+                CACHE_ROTA_ATUAL
+            );
+
+            console.log(
+                '🧹 Cache da rota anterior invalidado pelo estado do servidor.'
+            );
+        } catch (erro) {
+            console.warn(
+                'Não foi possível invalidar cache de rota:',
+                erro
+            );
+        }
+    }
+}
+
+function mensagemEstadoRotaServidor(dados) {
+    const codigo =
+        dados?.codigo ||
+        'ROTA_INDISPONIVEL';
+
+    const mensagens = {
+        SEM_VEICULO:
+            '🚛 Este motorista ainda não possui veículo vinculado.',
+
+        SEM_VIAGEM:
+            '📭 Nenhuma viagem ativa para este veículo.',
+
+        AGUARDANDO_APROVACAO:
+            '🕒 Viagem encontrada, aguardando aprovação do gestor.',
+
+        VIAGEM_BLOQUEADA:
+            '🚫 Viagem bloqueada. Procure o gestor antes de iniciar.',
+
+        REVISAO_OBRIGATORIA:
+            '🔄 A rota precisa de nova revisão e aprovação do gestor.',
+
+        ROTA_INDISPONIVEL:
+            '⚠️ A viagem existe, mas a rota ainda não está liberada.'
+    };
+
+    let texto =
+        mensagens[codigo] ||
+        dados?.mensagem ||
+        '⚠️ Rota indisponível.';
+
+    if (dados?.detalhe) {
+        texto += `<br><small>${dados.detalhe}</small>`;
+    }
+
+    return texto;
+}
+
+async function carregarRotaDoMotorista() {
+    const statusBar =
+        document.getElementById('status-bar');
+
+    /*
+     * OFFLINE REAL:
+     * sem internet, usa a última rota autorizada que já estava salva.
+     */
     if (!navigator.onLine) {
-        const carregou = await carregarRotaOfflineSeExistir();
+        const carregou =
+            await carregarRotaOfflineSeExistir();
 
         if (!carregou) {
-            statusBar.innerHTML = '📴 Sem internet e sem rota offline salva.';
-            statusBar.className = 'erro';
+            statusBar.innerHTML =
+                '📴 Sem internet e sem rota offline autorizada salva.';
+            statusBar.className =
+                'erro';
         }
+
         return;
     }
 
     try {
-        statusBar.innerHTML = '🔄 Buscando rota...';
-        statusBar.className = 'carregando';
+        statusBar.innerHTML =
+            '🔄 Buscando rota...';
 
-        const resp = await fetch(`${API_BASE}/rotas/minha-rota`, {
-            headers: { 'Authorization': tokenJWT }
-        });
+        statusBar.className =
+            'carregando';
 
-        if (resp.status === 404) {
-            const cache = await obterRotaOffline();
-
-            if (cache?.dados_geojson) {
-                aplicarRotaNoApp(cache, true);
-                return;
+        const resp = await fetch(
+            `${API_BASE}/rotas/minha-rota`,
+            {
+                headers:{
+                    'Authorization':
+                        tokenJWT
+                }
             }
+        );
 
-            statusBar.innerHTML = '📭 Nenhuma viagem ativa para este veículo.';
-            statusBar.className = 'erro';
-            return;
+        let dados = null;
+
+        try {
+            dados =
+                await resp.json();
+        } catch (_) {
+            dados = null;
         }
 
         if (!resp.ok) {
-            throw new Error(`Erro ao buscar rota (HTTP ${resp.status})`);
+            throw new Error(
+                dados?.erro ||
+                dados?.mensagem ||
+                `Erro ao buscar rota (HTTP ${resp.status})`
+            );
         }
 
-        const dados = await resp.json();
+        /*
+         * Resposta do servidor é autoritativa.
+         * Se ele diz que a viagem não está liberada, NÃO usamos
+         * uma rota offline antiga para contornar essa decisão.
+         */
+        if (
+            dados?.disponivel === false
+        ) {
+            const deveInvalidarCache =
+                [
+                    'SEM_VIAGEM',
+                    'SEM_VEICULO',
+                    'VIAGEM_BLOQUEADA',
+                    'REVISAO_OBRIGATORIA',
+                    'AGUARDANDO_APROVACAO',
+                    'ROTA_INDISPONIVEL'
+                ].includes(
+                    dados.codigo
+                );
 
-        await salvarRotaOffline(dados);
-        aplicarRotaNoApp(dados, false);
+            await invalidarRotaLocalPorEstadoServidor({
+                apagarCache:
+                    deveInvalidarCache
+            });
+
+            statusBar.innerHTML =
+                mensagemEstadoRotaServidor(
+                    dados
+                );
+
+            statusBar.className =
+                dados.codigo ===
+                    'AGUARDANDO_APROVACAO'
+                    ? 'carregando'
+                    : 'erro';
+
+            console.info(
+                'ℹ️ Estado da viagem:',
+                dados.codigo,
+                dados.mensagem
+            );
+
+            return;
+        }
+
+        if (!dados?.dados_geojson) {
+            throw new Error(
+                'Servidor liberou a viagem, mas não retornou a geometria da rota.'
+            );
+        }
+
+        await salvarRotaOffline(
+            dados
+        );
+
+        aplicarRotaNoApp(
+            dados,
+            false
+        );
 
     } catch(erro) {
-        console.error('Erro buscando rota online:', erro);
+        console.error(
+            'Erro buscando rota online:',
+            erro
+        );
 
-        const cache = await obterRotaOffline();
+        /*
+         * Cache offline só é usado quando há falha de comunicação,
+         * não quando o servidor informou bloqueio/revisão.
+         */
+        const cache =
+            await obterRotaOffline();
 
         if (cache?.dados_geojson) {
-            aplicarRotaNoApp(cache, true);
+            aplicarRotaNoApp(
+                cache,
+                true
+            );
+
+            statusBar.innerHTML =
+                '📴 Servidor indisponível. Usando a última rota autorizada salva offline.';
+
+            statusBar.className =
+                'carregando';
+
             return;
         }
 
         statusBar.innerHTML =
-            `❌ Não foi possível obter a rota e não há cópia offline.`;
-        statusBar.className = 'erro';
+            `❌ ${erro.message || 'Não foi possível obter a rota e não há cópia offline.'}`;
+
+        statusBar.className =
+            'erro';
     }
 }
+
 
 async function carregarRotaTeste() {
     const resp = await fetch(`${API_BASE}/teste-rota`);
@@ -2681,11 +3182,19 @@ function desenharRota(geoJson, reposicionarMotorista = true) {
             type: 'geojson',
             data: geoJson
         });
+    }
 
+    /*
+     * IMPORTANTE:
+     * setStyle() remove as camadas customizadas do MapLibre.
+     * A source e as layers agora são verificadas separadamente.
+     * Assim a rota volta mesmo se a source existir e alguma layer
+     * tiver sido removida durante a troca de tema.
+     */
+
+    if (!mapa.getLayer('rota-layer-glow')) {
         /*
          * CAMADA 1 — SOMBRA / HALO
-         * Ajuda a rota a continuar visível sobre ruas, prédios
-         * e fundos claros.
          */
         mapa.addLayer({
             id: 'rota-layer-glow',
@@ -2719,7 +3228,9 @@ function desenharRota(geoJson, reposicionarMotorista = true) {
                 ]
             }
         });
+    }
 
+    if (!mapa.getLayer('rota-layer-casing')) {
         /*
          * CAMADA 2 — CONTORNO EXTERNO
          * Funciona como a borda da faixa azul do GPS.
@@ -2748,7 +3259,9 @@ function desenharRota(geoJson, reposicionarMotorista = true) {
                 'line-opacity': 0.98
             }
         });
+    }
 
+    if (!mapa.getLayer('rota-layer')) {
         /*
          * CAMADA 3 — ROTA PRINCIPAL
          * Mais larga em zoom de navegação para lembrar uma
@@ -2778,7 +3291,9 @@ function desenharRota(geoJson, reposicionarMotorista = true) {
                 'line-opacity': 1
             }
         });
+    }
 
+    if (!mapa.getLayer('rota-layer-highlight')) {
         /*
          * CAMADA 4 — REALCE CENTRAL MUITO SUAVE
          * Dá profundidade sem parecer uma linha de pista.
@@ -2862,59 +3377,1067 @@ function mostrarInformacoesRota(geoJson, dadosRota) {
         <div id="progresso-viagem"><div class="barra"></div></div>`;
     div.style.display = 'block';
 }
-function alternarTemaMapa() {
-    if (mapaOfflineAtivo && !navigator.onLine) {
-        mapa.setStyle(criarEstiloMapaOffline());
-        return;
+
+
+function criarLayersRotaParaStyle(sourceId = 'rota-src') {
+    return [
+        {
+            id: 'rota-layer-glow',
+            type: 'line',
+            source: sourceId,
+            layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+            },
+            paint: {
+                'line-color': '#1e3a8a',
+                'line-width': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    10, 10,
+                    12, 14,
+                    14, 20,
+                    16, 30,
+                    18, 42,
+                    20, 52
+                ],
+                'line-opacity': 0.18,
+                'line-blur': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    10, 5,
+                    16, 9,
+                    20, 13
+                ]
+            }
+        },
+        {
+            id: 'rota-layer-casing',
+            type: 'line',
+            source: sourceId,
+            layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+            },
+            paint: {
+                'line-color': '#174ea6',
+                'line-width': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    10, 8,
+                    12, 12,
+                    14, 17,
+                    16, 25,
+                    18, 35,
+                    20, 44
+                ],
+                'line-opacity': 0.98
+            }
+        },
+        {
+            id: 'rota-layer',
+            type: 'line',
+            source: sourceId,
+            layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+            },
+            paint: {
+                'line-color': '#1769ff',
+                'line-width': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    10, 6,
+                    12, 9,
+                    14, 14,
+                    16, 21,
+                    18, 30,
+                    20, 38
+                ],
+                'line-opacity': 1
+            }
+        },
+        {
+            id: 'rota-layer-highlight',
+            type: 'line',
+            source: sourceId,
+            layout: {
+                'line-join': 'round',
+                'line-cap': 'round'
+            },
+            paint: {
+                'line-color': '#60a5fa',
+                'line-width': [
+                    'interpolate',
+                    ['linear'],
+                    ['zoom'],
+                    14, 2,
+                    16, 3,
+                    18, 4,
+                    20, 5
+                ],
+                'line-opacity': 0.28
+            }
+        }
+    ];
+}
+
+function injetarRotaNoStyle(styleJson, geoJsonRota) {
+    if (
+        !styleJson ||
+        !geoJsonRota
+    ) {
+        return styleJson;
     }
 
-    temaAtual = temaAtual === 'light' ? 'dark' : 'light';
-    mapa.setStyle(temaAtual === 'light' ? estiloLight : estiloDark);
+    const novoStyle =
+        JSON.parse(
+            JSON.stringify(styleJson)
+        );
+
+    novoStyle.sources =
+        novoStyle.sources || {};
+
+    novoStyle.layers =
+        Array.isArray(novoStyle.layers)
+            ? novoStyle.layers
+            : [];
+
+    // Remove qualquer versão anterior para evitar IDs duplicados.
+    novoStyle.layers =
+        novoStyle.layers.filter(
+            layer =>
+                ![
+                    'rota-layer-glow',
+                    'rota-layer-casing',
+                    'rota-layer',
+                    'rota-layer-highlight'
+                ].includes(layer.id)
+        );
+
+    novoStyle.sources['rota-src'] = {
+        type:'geojson',
+        data:geoJsonRota
+    };
+
+    /*
+     * As camadas são adicionadas no final.
+     * Assim ficam acima do mapa-base e continuam bem visíveis.
+     */
+    novoStyle.layers.push(
+        ...criarLayersRotaParaStyle(
+            'rota-src'
+        )
+    );
+
+    return novoStyle;
+}
+
+async function carregarStyleComRota(
+    styleUrl,
+    geoJsonRota
+) {
+    const resposta =
+        await fetch(
+            styleUrl,
+            {
+                cache:'no-store'
+            }
+        );
+
+    if (!resposta.ok) {
+        throw new Error(
+            `Falha ao carregar tema do mapa (${resposta.status}).`
+        );
+    }
+
+    const styleJson =
+        await resposta.json();
+
+    return injetarRotaNoStyle(
+        styleJson,
+        geoJsonRota
+    );
+}
+
+
+function obterGeoJsonRotaVisivelAtual() {
+    if (
+        !dadosGeoJsonAtual ||
+        !Array.isArray(pathCoordinates) ||
+        pathCoordinates.length < 2
+    ) {
+        return dadosGeoJsonAtual;
+    }
+
+    const feature =
+        dadosGeoJsonAtual.features?.[0];
+
+    if (!feature) {
+        return dadosGeoJsonAtual;
+    }
+
+    let idx = Math.max(
+        0,
+        Math.min(
+            Number(maiorIndiceRotaPercorrido) || 0,
+            pathCoordinates.length - 1
+        )
+    );
+
+    const restante = [];
+
+    if (marcadorMotorista) {
+        try {
+            const pos = marcadorMotorista.getLngLat();
+
+            if (
+                Number.isFinite(pos.lng) &&
+                Number.isFinite(pos.lat)
+            ) {
+                restante.push([
+                    Number(pos.lng),
+                    Number(pos.lat)
+                ]);
+            }
+        } catch (_) {}
+    }
+
+    if (!restante.length) {
+        restante.push(
+            pathCoordinates[idx]
+        );
+    }
+
+    for (
+        let i = Math.min(idx + 1, pathCoordinates.length - 1);
+        i < pathCoordinates.length;
+        i++
+    ) {
+        restante.push(
+            pathCoordinates[i]
+        );
+    }
+
+    if (restante.length === 1) {
+        restante.push(restante[0]);
+    }
+
+    return {
+        ...dadosGeoJsonAtual,
+        features:[
+            {
+                ...feature,
+                geometry:{
+                    ...feature.geometry,
+                    coordinates:restante
+                }
+            }
+        ]
+    };
+}
+
+function restaurarRotaDepoisDoTema(
+    geoJsonVisivel
+) {
+    if (
+        !mapa ||
+        !dadosGeoJsonAtual
+    ) return;
+
+    const restaurar = () => {
+        try {
+            // Recria source + TODAS as layers customizadas.
+            desenharRota(
+                dadosGeoJsonAtual,
+                false
+            );
+
+            const source =
+                mapa.getSource(
+                    'rota-src'
+                );
+
+            // Mantém escondido o trecho já percorrido.
+            if (
+                source &&
+                geoJsonVisivel
+            ) {
+                source.setData(
+                    geoJsonVisivel
+                );
+            }
+
+            if (modoNavegacaoAtivo) {
+                aplicarEstiloMapaNavegacao();
+            }
+        } catch (erro) {
+            console.warn(
+                'Tentativa de restaurar rota após troca de tema:',
+                erro
+            );
+        }
+    };
+
+    // O style.load normalmente basta. As tentativas extras
+    // cobrem estilos externos que terminam de montar as layers
+    // alguns milissegundos depois.
+    setTimeout(restaurar, 0);
+    setTimeout(restaurar, 120);
+    setTimeout(restaurar, 450);
+}
+
+async function alternarTemaMapa() {
+    if (!mapa) return;
+
+    const botaoTema =
+        document.getElementById(
+            'btn-tema-mapa'
+        );
+
+    if (botaoTema) {
+        botaoTema.disabled = true;
+        botaoTema.style.opacity = '.55';
+    }
+
+    const rotaVisivel =
+        obterGeoJsonRotaVisivelAtual() ||
+        dadosGeoJsonAtual;
+
+    const camera = {
+        center: mapa.getCenter(),
+        zoom: mapa.getZoom(),
+        pitch: mapa.getPitch(),
+        bearing: mapa.getBearing()
+    };
+
+    try {
+        /*
+         * OFFLINE:
+         * o style local continua sendo usado, mas recebe a rota
+         * ANTES do setStyle.
+         */
+        if (
+            mapaOfflineAtivo &&
+            !navigator.onLine
+        ) {
+            const styleOffline =
+                criarEstiloMapaOffline();
+
+            const styleComRota =
+                injetarRotaNoStyle(
+                    styleOffline,
+                    rotaVisivel
+                );
+
+            mapa.setStyle(
+                styleComRota
+            );
+
+        } else {
+            const proximoTema =
+                temaAtual === 'light'
+                    ? 'dark'
+                    : 'light';
+
+            const url =
+                proximoTema === 'light'
+                    ? estiloLight
+                    : estiloDark;
+
+            /*
+             * PONTO PRINCIPAL DA CORREÇÃO:
+             * baixa o JSON do style, injeta source/layers da rota
+             * e SÓ DEPOIS entrega o style completo ao MapLibre.
+             */
+            const styleComRota =
+                await carregarStyleComRota(
+                    url,
+                    rotaVisivel
+                );
+
+            temaAtual =
+                proximoTema;
+
+            mapa.setStyle(
+                styleComRota
+            );
+        }
+
+        mapa.once(
+            'idle',
+            () => {
+                try {
+                    mapa.jumpTo(
+                        camera
+                    );
+
+                    /*
+                     * Defesa extra:
+                     * se algum style externo removeu algo,
+                     * desenharRota recria somente o que faltar.
+                     */
+                    if (
+                        dadosGeoJsonAtual
+                    ) {
+                        desenharRota(
+                            dadosGeoJsonAtual,
+                            false
+                        );
+
+                        const source =
+                            mapa.getSource(
+                                'rota-src'
+                            );
+
+                        if (
+                            source &&
+                            rotaVisivel
+                        ) {
+                            source.setData(
+                                rotaVisivel
+                            );
+                        }
+                    }
+
+                    if (
+                        modoNavegacaoAtivo
+                    ) {
+                        aplicarEstiloMapaNavegacao();
+                    }
+
+                    console.log(
+                        `🎨 Tema ${temaAtual} aplicado; rota preservada.`
+                    );
+                } catch (erro) {
+                    console.warn(
+                        'Pós-processamento do tema:',
+                        erro
+                    );
+                }
+            }
+        );
+
+    } catch (erro) {
+        console.error(
+            'Erro ao trocar tema:',
+            erro
+        );
+
+        /*
+         * Se o style novo falhar, não destrói o mapa atual.
+         * A rota permanece no tema anterior.
+         */
+        const status =
+            document.getElementById(
+                'status-bar'
+            );
+
+        if (status) {
+            status.innerHTML =
+                '⚠️ Não foi possível trocar o tema agora. A rota atual foi mantida.';
+            status.className =
+                'carregando';
+        }
+
+    } finally {
+        if (botaoTema) {
+            setTimeout(() => {
+                botaoTema.disabled = false;
+                botaoTema.style.opacity = '';
+            }, 400);
+        }
+    }
 }
 function centralizarNoCarro() {
-    if (!marcadorMotorista) return;
-    const pos = marcadorMotorista.getLngLat();
-    mapa.jumpTo({ center: pos, zoom: modoNavegacaoAtivo ? 19 : 15, pitch: modoNavegacaoAtivo ? 65 : 0, bearing: modoNavegacaoAtivo ? ultimoBearing : 0 });
+    if (!marcadorMotorista || !mapa) return;
+
+    cameraFollowAtiva = true;
+
+    const pos =
+        marcadorMotorista.getLngLat();
+
+    const idx =
+        encontrarIndiceMaisProximo(
+            pos.lat,
+            pos.lng
+        );
+
+    const velocidade =
+        Number(
+            document.getElementById(
+                'velocidade-valor'
+            )?.textContent ||
+            0
+        );
+
+    const focoCamera =
+        obterCentroCameraNavegacao(
+            pos.lat,
+            pos.lng,
+            idx,
+            velocidade
+        );
+
+    const bearing =
+        calcularBearingFollow(
+            pos.lat,
+            pos.lng,
+            idx,
+            ultimoBearing,
+            velocidade
+        );
+
+    mapa.easeTo({
+        center:
+            focoCamera.center,
+        zoom:
+            modoNavegacaoAtivo
+                ? 18.4
+                : 15,
+        pitch:
+            modoNavegacaoAtivo
+                ? 66
+                : 0,
+        bearing:
+            modoNavegacaoAtivo
+                ? bearing
+                : 0,
+        duration:
+            650
+    });
 }
+
+
+function obterPosicaoGpsAtualUmaVez() {
+    return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+            reject(
+                new Error(
+                    'GPS não disponível neste aparelho.'
+                )
+            );
+            return;
+        }
+
+        navigator.geolocation.getCurrentPosition(
+            position => {
+                resolve({
+                    lat:
+                        Number(
+                            position.coords.latitude
+                        ),
+                    lng:
+                        Number(
+                            position.coords.longitude
+                        ),
+                    accuracy:
+                        Number.isFinite(
+                            position.coords.accuracy
+                        )
+                            ? Number(
+                                position.coords.accuracy
+                            )
+                            : null,
+                    heading:
+                        position.coords.heading !== null &&
+                        Number.isFinite(
+                            position.coords.heading
+                        )
+                            ? Number(
+                                position.coords.heading
+                            )
+                            : null,
+                    speedKmh:
+                        position.coords.speed !== null &&
+                        Number.isFinite(
+                            position.coords.speed
+                        )
+                            ? Number(
+                                position.coords.speed
+                            ) * 3.6
+                            : null,
+                    altitude:
+                        position.coords.altitude !== null &&
+                        Number.isFinite(
+                            position.coords.altitude
+                        )
+                            ? Number(
+                                position.coords.altitude
+                            )
+                            : null,
+                    timestamp:
+                        new Date(
+                            position.timestamp
+                        ).toISOString()
+                });
+            },
+            error => {
+                reject(
+                    new Error(
+                        error?.message ||
+                        'Não foi possível obter a posição GPS atual.'
+                    )
+                );
+            },
+            {
+                enableHighAccuracy:true,
+                maximumAge:0,
+                timeout:15000
+            }
+        );
+    });
+}
+
+function recortarRotaApartirDoGps(
+    geojson,
+    lng,
+    lat
+) {
+    const coords =
+        geojson
+            ?.features?.[0]
+            ?.geometry?.coordinates;
+
+    if (
+        !Array.isArray(coords) ||
+        coords.length < 2
+    ) {
+        return {
+            geojson,
+            indice:0,
+            distanciaRotaKm:null
+        };
+    }
+
+    let melhorIndice = 0;
+    let menorDistanciaKm = Infinity;
+
+    for (
+        let i = 0;
+        i < coords.length;
+        i++
+    ) {
+        const c = coords[i];
+
+        if (
+            !Array.isArray(c) ||
+            c.length < 2
+        ) continue;
+
+        const d =
+            calcularDistancia(
+                Number(lat),
+                Number(lng),
+                Number(c[1]),
+                Number(c[0])
+            );
+
+        if (d < menorDistanciaKm) {
+            menorDistanciaKm = d;
+            melhorIndice = i;
+        }
+    }
+
+    const restante = [
+        [
+            Number(lng),
+            Number(lat)
+        ]
+    ];
+
+    /*
+     * Mantemos o ponto da rota mais próximo e todo o restante.
+     * O primeiro segmento visual liga o GPS atual ao corredor
+     * aprovado, sem mostrar o trecho planejado que ficou para trás.
+     */
+    for (
+        let i = melhorIndice;
+        i < coords.length;
+        i++
+    ) {
+        const c = coords[i];
+
+        if (
+            !Array.isArray(c) ||
+            c.length < 2
+        ) continue;
+
+        const ultimo =
+            restante[
+                restante.length - 1
+            ];
+
+        const repetido =
+            Math.abs(
+                Number(c[0]) -
+                Number(ultimo[0])
+            ) < 0.000001 &&
+            Math.abs(
+                Number(c[1]) -
+                Number(ultimo[1])
+            ) < 0.000001;
+
+        if (!repetido) {
+            restante.push([
+                Number(c[0]),
+                Number(c[1])
+            ]);
+        }
+    }
+
+    if (restante.length < 2) {
+        return {
+            geojson,
+            indice:melhorIndice,
+            distanciaRotaKm:
+                menorDistanciaKm
+        };
+    }
+
+    const feature =
+        geojson.features[0];
+
+    return {
+        indice:
+            melhorIndice,
+
+        distanciaRotaKm:
+            menorDistanciaKm,
+
+        geojson:{
+            ...geojson,
+            features:[
+                {
+                    ...feature,
+                    geometry:{
+                        ...feature.geometry,
+                        coordinates:
+                            restante
+                    }
+                }
+            ]
+        }
+    };
+}
+
+async function prepararInicioRealPeloGps() {
+    const statusBar =
+        document.getElementById(
+            'status-bar'
+        );
+
+    try {
+        if (statusBar) {
+            statusBar.innerHTML =
+                '📍 Confirmando posição GPS para iniciar a viagem...';
+            statusBar.className =
+                'carregando';
+        }
+
+        const gps =
+            await obterPosicaoGpsAtualUmaVez();
+
+        const novaPosicao = [
+            gps.lng,
+            gps.lat
+        ];
+
+        if (marcadorMotorista) {
+            marcadorMotorista.setLngLat(
+                novaPosicao
+            );
+        }
+
+        ultimaPosicaoLngLat =
+            novaPosicao;
+
+        /*
+         * Envia a posição real imediatamente para o servidor.
+         * Assim o início da coleta também corresponde ao ponto
+         * onde o motorista realmente começou.
+         */
+        enviarLocalizacaoServidor(
+            gps.lat,
+            gps.lng,
+            {
+                velocidade_kmh:
+                    gps.speedKmh,
+                precisao_m:
+                    gps.accuracy,
+                direcao_graus:
+                    gps.heading,
+                altitude_m:
+                    gps.altitude,
+                timestamp_dispositivo:
+                    gps.timestamp,
+                origem_coleta:
+                    'gps_app'
+            }
+        ).catch(() => {});
+
+        if (
+            dadosGeoJsonAtual &&
+            dadosGeoJsonAtual
+                ?.features?.[0]
+                ?.geometry?.coordinates
+        ) {
+            const ajuste =
+                recortarRotaApartirDoGps(
+                    dadosGeoJsonAtual,
+                    gps.lng,
+                    gps.lat
+                );
+
+            dadosGeoJsonAtual =
+                ajuste.geojson;
+
+            pathCoordinates =
+                ajuste.geojson
+                    ?.features?.[0]
+                    ?.geometry?.coordinates ||
+                pathCoordinates;
+
+            /*
+             * Como a rota operacional começa no GPS,
+             * o progresso visual também começa do zero.
+             */
+            maiorIndiceRotaPercorrido = 0;
+            ultimoIndiceRotaRenderizado = -1;
+
+            desenharRota(
+                dadosGeoJsonAtual,
+                false
+            );
+
+            const source =
+                mapa?.getSource(
+                    'rota-src'
+                );
+
+            if (source) {
+                source.setData(
+                    dadosGeoJsonAtual
+                );
+            }
+
+            /*
+             * Salva a versão operacional recortada para continuar
+             * corretamente se a internet cair depois do início.
+             */
+            try {
+                if (
+                    dadosRotaOriginal &&
+                    typeof dadosRotaOriginal ===
+                        'object'
+                ) {
+                    await salvarRotaOffline({
+                        ...dadosRotaOriginal,
+                        dados_geojson:
+                            dadosGeoJsonAtual
+                    });
+                }
+            } catch (erroCache) {
+                console.warn(
+                    'Não foi possível atualizar a rota offline pelo GPS:',
+                    erroCache
+                );
+            }
+
+            console.log(
+                '📍 Rota operacional iniciada no GPS real.',
+                {
+                    indice_original:
+                        ajuste.indice,
+                    distancia_corredor_km:
+                        ajuste.distanciaRotaKm
+                }
+            );
+        }
+
+        return gps;
+
+    } catch (erro) {
+        console.warn(
+            'GPS inicial não confirmado:',
+            erro
+        );
+
+        /*
+         * Se não conseguir uma leitura nova, usa a posição
+         * já mostrada pelo marcador, mas não bloqueia a viagem.
+         */
+        if (
+            marcadorMotorista
+        ) {
+            const pos =
+                marcadorMotorista.getLngLat();
+
+            if (
+                Number.isFinite(pos.lng) &&
+                Number.isFinite(pos.lat) &&
+                dadosGeoJsonAtual
+            ) {
+                const ajuste =
+                    recortarRotaApartirDoGps(
+                        dadosGeoJsonAtual,
+                        pos.lng,
+                        pos.lat
+                    );
+
+                dadosGeoJsonAtual =
+                    ajuste.geojson;
+
+                pathCoordinates =
+                    ajuste.geojson
+                        ?.features?.[0]
+                        ?.geometry?.coordinates ||
+                    pathCoordinates;
+
+                maiorIndiceRotaPercorrido = 0;
+                ultimoIndiceRotaRenderizado = -1;
+
+                desenharRota(
+                    dadosGeoJsonAtual,
+                    false
+                );
+            }
+        }
+
+        return null;
+    }
+}
+
+
 async function iniciarNavegacao3D() {
-    resetarProgressoVisualRota();
     if (!marcadorMotorista) return;
+
+    const btnIniciar =
+        document.getElementById(
+            'btn-iniciar-3d'
+        );
+
+    if (btnIniciar) {
+        btnIniciar.disabled = true;
+        btnIniciar.style.opacity = '.65';
+    }
+
+    /*
+     * Primeiro define a origem operacional pelo GPS REAL.
+     * Só depois registra o início da viagem no servidor.
+     */
+    await prepararInicioRealPeloGps();
+
+    resetarProgressoVisualRota();
 
     if (viagemAtualId) {
         if (!navigator.onLine) {
-            await enfileirarAcaoViagem('iniciar', viagemAtualId);
-            console.log('📴 Início da viagem salvo para sincronização.');
+            await enfileirarAcaoViagem(
+                'iniciar',
+                viagemAtualId
+            );
+
+            console.log(
+                '📴 Início da viagem salvo para sincronização.'
+            );
+
         } else {
             try {
-                const resp = await fetch(`${API_BASE}/viagens/${viagemAtualId}/iniciar`, {
-                    method: 'POST',
-                    headers: { 'Authorization': tokenJWT }
-                });
+                const resp = await fetch(
+                    `${API_BASE}/viagens/${viagemAtualId}/iniciar`,
+                    {
+                        method:'POST',
+                        headers:{
+                            'Authorization':
+                                tokenJWT
+                        }
+                    }
+                );
 
                 if (!resp.ok) {
-                    const data = await resp.json().catch(() => ({}));
-                    console.warn('Não foi possível iniciar viagem:', data.erro || resp.status);
+                    const data =
+                        await resp.json()
+                            .catch(
+                                () => ({})
+                            );
 
-                    // Se for uma falha temporária, guarda a ação.
-                    if (resp.status >= 500) {
-                        await enfileirarAcaoViagem('iniciar', viagemAtualId);
+                    console.warn(
+                        'Não foi possível iniciar viagem:',
+                        data.erro ||
+                        resp.status
+                    );
+
+                    if (
+                        resp.status >= 500
+                    ) {
+                        await enfileirarAcaoViagem(
+                            'iniciar',
+                            viagemAtualId
+                        );
                     }
                 }
+
             } catch(e) {
-                console.warn('Erro iniciando viagem; ação armazenada:', e);
-                await enfileirarAcaoViagem('iniciar', viagemAtualId);
+                console.warn(
+                    'Erro iniciando viagem; ação armazenada:',
+                    e
+                );
+
+                await enfileirarAcaoViagem(
+                    'iniciar',
+                    viagemAtualId
+                );
             }
         }
     }
 
     modoNavegacaoAtivo = true;
-    document.getElementById('btn-iniciar-3d').style.display = 'none';
-    document.getElementById('velocimetro').style.display = 'flex';
-    const pos = marcadorMotorista.getLngLat();
-    mapa.flyTo({ center: pos, zoom: 19, pitch: 65, bearing: 0, duration: 1500 });
+    cameraFollowAtiva = true;
+    bearingCameraSuavizado = ultimoBearing;
+
+    if (btnIniciar) {
+        btnIniciar.style.display =
+            'none';
+        btnIniciar.disabled = false;
+        btnIniciar.style.opacity = '';
+    }
+
+    document.getElementById(
+        'velocimetro'
+    ).style.display = 'flex';
+
+    const pos =
+        marcadorMotorista.getLngLat();
+
+    mapa.flyTo({
+        center:pos,
+        zoom:18.4,
+        pitch:66,
+        bearing:ultimoBearing || 0,
+        duration:1200
+    });
+
     iniciarGPSReal();
     iniciarMonitoramentoRota();
+
+    const statusBar =
+        document.getElementById(
+            'status-bar'
+        );
+
+    if (statusBar) {
+        statusBar.innerHTML =
+            '✅ Viagem iniciada a partir da posição GPS atual.';
+        statusBar.className =
+            'sucesso';
+    }
 }
+
+
 function iniciarGPSReal() {
     if (gpsInicializado) return;
     if (!navigator.geolocation) { alert('Seu navegador não suporta GPS.'); return; }
@@ -2923,7 +4446,31 @@ function iniciarGPSReal() {
         (position) => {
             const lat = position.coords.latitude, lng = position.coords.longitude;
             const novaPosicao = [lng, lat];
-            enviarLocalizacaoServidor(lat, lng);
+
+            enviarLocalizacaoServidor(lat, lng, {
+                velocidade_kmh:
+                    position.coords.speed !== null &&
+                    Number.isFinite(position.coords.speed)
+                        ? position.coords.speed * 3.6
+                        : null,
+                precisao_m:
+                    Number.isFinite(position.coords.accuracy)
+                        ? position.coords.accuracy
+                        : null,
+                direcao_graus:
+                    position.coords.heading !== null &&
+                    Number.isFinite(position.coords.heading)
+                        ? position.coords.heading
+                        : null,
+                altitude_m:
+                    position.coords.altitude !== null &&
+                    Number.isFinite(position.coords.altitude)
+                        ? position.coords.altitude
+                        : null,
+                timestamp_dispositivo:
+                    new Date(position.timestamp).toISOString(),
+                origem_coleta:'gps_app'
+            });
             if (position.coords.speed !== null && Number.isFinite(position.coords.speed)) {
                 document.getElementById('velocidade-valor').textContent = Math.round(position.coords.speed * 3.6);
             }
@@ -2997,26 +4544,71 @@ function iniciarGPSReal() {
                     velocidadeKmh
                 );
 
-                const pontoFrente =
-                    idxAtual >= 0
-                        ? obterPontoAdianteNaRota(
-                            idxAtual,
-                            distanciaCameraAdiantePorVelocidade(
-                                velocidadeKmh
-                            )
-                        )
-                        : null;
+                const focoCamera =
+                    obterCentroCameraNavegacao(
+                        lat,
+                        lng,
+                        idxAtual,
+                        velocidadeKmh
+                    );
 
-                mapa.easeTo({
-                    center: pontoFrente
-                        ? [pontoFrente.lng, pontoFrente.lat]
-                        : novaPosicao,
-                    bearing: ultimoBearing,
-                    pitch: pitchGPS,
-                    zoom: zoomGPS,
-                    duration: 650,
-                    easing: t => t
-                });
+                const bearingFollow =
+                    calcularBearingFollow(
+                        lat,
+                        lng,
+                        idxAtual,
+                        ultimoBearing,
+                        velocidadeKmh
+                    );
+
+                /*
+                 * Em curva forte abre um pouco o mapa.
+                 * O ponto central passa a ser a própria curva,
+                 * não simplesmente um ponto fixo à frente.
+                 */
+                if (focoCamera.curva >= 28) {
+                    zoomGPS = Math.min(
+                        zoomGPS,
+                        17.20
+                    );
+                    pitchGPS = Math.min(
+                        pitchGPS,
+                        50
+                    );
+                } else if (focoCamera.curva >= 14) {
+                    zoomGPS = Math.min(
+                        zoomGPS,
+                        17.45
+                    );
+                    pitchGPS = Math.min(
+                        pitchGPS,
+                        53
+                    );
+                }
+
+                if (cameraFollowAtiva) {
+                    mapa.easeTo({
+                        center:
+                            focoCamera.center,
+                        bearing:
+                            bearingFollow,
+                        pitch:
+                            pitchGPS,
+                        zoom:
+                            zoomGPS,
+                        duration:
+                            focoCamera.curva >= 14
+                                ? 520
+                                : 700,
+                        easing:
+                            t =>
+                                1 -
+                                Math.pow(
+                                    1 - t,
+                                    3
+                                )
+                    });
+                }
             }
 
             ultimaPosicaoLngLat = novaPosicao;
@@ -3618,6 +5210,337 @@ function obterPontoAdianteNaRota(indexAtual, distanciaKm) {
     };
 }
 
+
+
+function analisarCurvaAdiante(indexAtual, velocidadeKmh = 0) {
+    if (
+        !Array.isArray(pathCoordinates) ||
+        pathCoordinates.length < 4 ||
+        indexAtual < 0
+    ) {
+        return {
+            intensidade: 0,
+            centro: null,
+            bearing: null
+        };
+    }
+
+    const alcanceKm =
+        velocidadeKmh >= 70
+            ? 0.34
+            : velocidadeKmh >= 45
+                ? 0.25
+                : 0.18;
+
+    const amostras = [];
+    const passos = 8;
+
+    for (let n = 0; n <= passos; n++) {
+        const distancia =
+            Math.max(
+                0.025,
+                alcanceKm * n / passos
+            );
+
+        const p =
+            obterPontoAdianteNaRota(
+                indexAtual,
+                distancia
+            );
+
+        if (p) {
+            amostras.push({
+                ...p,
+                distancia
+            });
+        }
+    }
+
+    if (amostras.length < 3) {
+        return {
+            intensidade: 0,
+            centro: null,
+            bearing: null
+        };
+    }
+
+    let maiorMudanca = 0;
+    let melhor = null;
+    let melhorBearing = null;
+
+    for (let i = 1; i < amostras.length - 1; i++) {
+        const a = amostras[i - 1];
+        const b = amostras[i];
+        const c = amostras[i + 1];
+
+        const b1 =
+            calcularBearing(
+                a.lat,
+                a.lng,
+                b.lat,
+                b.lng
+            );
+
+        const b2 =
+            calcularBearing(
+                b.lat,
+                b.lng,
+                c.lat,
+                c.lng
+            );
+
+        const mudanca =
+            Math.abs(
+                diferencaAngularFollow(
+                    b1,
+                    b2
+                )
+            );
+
+        if (mudanca > maiorMudanca) {
+            maiorMudanca = mudanca;
+            melhor = b;
+            melhorBearing = b2;
+        }
+    }
+
+    /*
+     * Curva distribuída em vários segmentos:
+     * também compara direção perto x direção mais à frente.
+     */
+    const primeiro = amostras[0];
+    const meio =
+        amostras[
+            Math.floor(
+                amostras.length / 2
+            )
+        ];
+    const ultimo =
+        amostras[
+            amostras.length - 1
+        ];
+
+    const bearingInicial =
+        calcularBearing(
+            primeiro.lat,
+            primeiro.lng,
+            meio.lat,
+            meio.lng
+        );
+
+    const bearingFinal =
+        calcularBearing(
+            meio.lat,
+            meio.lng,
+            ultimo.lat,
+            ultimo.lng
+        );
+
+    const curvaGlobal =
+        Math.abs(
+            diferencaAngularFollow(
+                bearingInicial,
+                bearingFinal
+            )
+        );
+
+    const intensidade =
+        Math.max(
+            maiorMudanca,
+            curvaGlobal
+        );
+
+    if (intensidade < 8) {
+        return {
+            intensidade,
+            centro: null,
+            bearing: null
+        };
+    }
+
+    /*
+     * O centro visual fica na região da curva.
+     * Isso é o que faz a curva aparecer no MEIO da tela,
+     * em vez de ficar escapando para a lateral/superior.
+     */
+    const centro =
+        melhor ||
+        meio;
+
+    return {
+        intensidade,
+        centro,
+        bearing:
+            melhorBearing ??
+            bearingFinal
+    };
+}
+
+function obterCentroCameraNavegacao(
+    lat,
+    lng,
+    idxAtual,
+    velocidadeKmh
+) {
+    if (idxAtual < 0) {
+        return {
+            center: [lng, lat],
+            curva: 0
+        };
+    }
+
+    const curva =
+        analisarCurvaAdiante(
+            idxAtual,
+            velocidadeKmh
+        );
+
+    if (
+        curva.centro &&
+        curva.intensidade >= 12
+    ) {
+        /*
+         * Quanto mais forte a curva, mais a câmera prioriza
+         * o centro geométrico da curva.
+         */
+        return {
+            center: [
+                curva.centro.lng,
+                curva.centro.lat
+            ],
+            curva:
+                curva.intensidade
+        };
+    }
+
+    const pontoFrente =
+        obterPontoAdianteNaRota(
+            idxAtual,
+            distanciaCameraAdiantePorVelocidade(
+                velocidadeKmh
+            )
+        );
+
+    return {
+        center:
+            pontoFrente
+                ? [
+                    pontoFrente.lng,
+                    pontoFrente.lat
+                ]
+                : [
+                    lng,
+                    lat
+                ],
+        curva:
+            curva.intensidade || 0
+    };
+}
+
+
+function diferencaAngularFollow(atual, alvo) {
+    let delta =
+        ((Number(alvo) - Number(atual) + 540) % 360) - 180;
+
+    return delta;
+}
+
+function bearingRotaAdiante(
+    lat,
+    lng,
+    idxAtual,
+    velocidadeKmh
+) {
+    if (idxAtual < 0) return null;
+
+    const distanciaFrenteKm =
+        velocidadeKmh >= 80
+            ? 0.18
+            : velocidadeKmh >= 50
+                ? 0.13
+                : 0.085;
+
+    const pontoFrente =
+        obterPontoAdianteNaRota(
+            idxAtual,
+            distanciaFrenteKm
+        );
+
+    if (!pontoFrente) {
+        return null;
+    }
+
+    return calcularBearing(
+        lat,
+        lng,
+        pontoFrente.lat,
+        pontoFrente.lng
+    );
+}
+
+function calcularBearingFollow(
+    lat,
+    lng,
+    idxAtual,
+    bearingMovimento,
+    velocidadeKmh
+) {
+    let alvo =
+        Number.isFinite(Number(bearingMovimento))
+            ? Number(bearingMovimento)
+            : (mapa?.getBearing() || 0);
+
+    const bearingRota =
+        bearingRotaAdiante(
+            lat,
+            lng,
+            idxAtual,
+            velocidadeKmh
+        );
+
+    if (
+        bearingRota !== null &&
+        Number.isFinite(Number(bearingRota))
+    ) {
+        const diff =
+            Math.abs(
+                diferencaAngularFollow(
+                    alvo,
+                    bearingRota
+                )
+            );
+
+        // Em curva, dá mais peso à direção da pista à frente.
+        const pesoRota =
+            diff >= 28
+                ? 0.72
+                : diff >= 14
+                    ? 0.55
+                    : 0.38;
+
+        alvo =
+            (
+                alvo +
+                diferencaAngularFollow(
+                    alvo,
+                    bearingRota
+                ) *
+                pesoRota +
+                360
+            ) % 360;
+    }
+
+    bearingCameraSuavizado =
+        suavizarAnguloCamera(
+            bearingCameraSuavizado,
+            alvo,
+            .22
+        );
+
+    return bearingCameraSuavizado;
+}
+
+
 function distanciaCameraAdiantePorVelocidade(velocidade) {
     if (velocidade >= 90) return 0.28; // 280 m
     if (velocidade >= 70) return 0.22; // 220 m
@@ -3716,26 +5639,28 @@ function atualizarCameraDemo(posicao) {
     pitchCameraAtual +=
         (perfil.pitch - pitchCameraAtual) * .13;
 
-    const distanciaAdiante =
-        distanciaCameraAdiantePorVelocidade(
+    const focoCamera =
+        obterCentroCameraNavegacao(
+            posicao.lat,
+            posicao.lng,
+            posicao.index,
             velocidadeDemoAtual
         );
 
-    const pontoFrente =
-        obterPontoAdianteNaRota(
-            posicao.index,
-            distanciaAdiante
-        );
-
     /*
-     * A grande diferença desta câmera:
-     * o centro do mapa fica alguns metros à frente do veículo.
-     * Isso empurra a seta/caminhão para a parte inferior e deixa
-     * muito mais estrada útil visível na direção da viagem.
+     * Na reta o foco continua adiante do veículo.
+     * Na curva, o centro da tela migra para o miolo da curva.
      */
-    const centroCamera = pontoFrente
-        ? [pontoFrente.lng, pontoFrente.lat]
-        : [posicao.lng, posicao.lat];
+    const centroCamera =
+        focoCamera.center;
+
+    if (focoCamera.curva >= 28) {
+        zoomCameraAtual +=
+            (17.15 - zoomCameraAtual) * .28;
+
+        pitchCameraAtual +=
+            (49 - pitchCameraAtual) * .28;
+    }
 
     mapa.easeTo({
         center: centroCamera,
