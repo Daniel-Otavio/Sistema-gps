@@ -995,6 +995,11 @@ async function criarTabelas() {
     await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_informado_em TIMESTAMPTZ`);
     await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS consumo_informado_por INTEGER`);
 
+    // V22 - qualidade da telemetria + resumo operacional oficial
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS qualidade_gps VARCHAR(20)`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS qualidade_gps_score INTEGER`);
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS resumo_operacional JSONB DEFAULT '{}'::jsonb`);
+
     await pool.query(`
         CREATE TABLE IF NOT EXISTS historico_consumo_viagens (
             id BIGSERIAL PRIMARY KEY,
@@ -5485,6 +5490,47 @@ app.post('/viagens/:id/consumo-real', autenticar, async (req, res) => {
     }
 });
 
+
+function avaliarQualidadeGpsViagem(pontos = []) {
+    if (!Array.isArray(pontos) || pontos.length < 2) {
+        return { status:'ruim', score:20, total_pontos:pontos?.length || 0, precisao_media_m:null, maior_gap_seg:null, gaps_relevantes:0, saltos_anormais:0 };
+    }
+    let somaPrecisao=0, nPrecisao=0, maiorGap=0, gaps=0, saltos=0, distancia=0;
+    for (let i=0;i<pontos.length;i++) {
+        const p=pontos[i];
+        const pr=Number(p.precisao_m);
+        if (Number.isFinite(pr) && pr >= 0) { somaPrecisao += pr; nPrecisao++; }
+        if (i===0) continue;
+        const ant=pontos[i-1];
+        const dt=Math.max(0,(new Date(p.registrado_em)-new Date(ant.registrado_em))/1000);
+        if (dt>maiorGap) maiorGap=dt;
+        if (dt>90) gaps++;
+        const d=distanciaKmEntrePontos(Number(ant.lat),Number(ant.lon),Number(p.lat),Number(p.lon));
+        if (Number.isFinite(d) && d>=0 && d<20) distancia += d;
+        const velCalc=dt>0 ? d/(dt/3600) : 0;
+        if ((Number.isFinite(d) && d>2 && dt<60) || velCalc>180) saltos++;
+    }
+    const precisaoMedia=nPrecisao ? somaPrecisao/nPrecisao : null;
+    let score=100;
+    if (pontos.length < 10) score -= 20;
+    if (precisaoMedia !== null) {
+        if (precisaoMedia > 100) score -= 35;
+        else if (precisaoMedia > 50) score -= 20;
+        else if (precisaoMedia > 25) score -= 8;
+    } else score -= 10;
+    score -= Math.min(35, gaps*8);
+    if (maiorGap>300) score -= 15;
+    score -= Math.min(30, saltos*15);
+    score=Math.max(0,Math.min(100,Math.round(score)));
+    return {
+        status: score>=80 ? 'boa' : score>=55 ? 'instavel' : 'ruim',
+        score, total_pontos:pontos.length,
+        precisao_media_m: precisaoMedia===null ? null : Number(precisaoMedia.toFixed(1)),
+        maior_gap_seg:Math.round(maiorGap), gaps_relevantes:gaps, saltos_anormais:saltos,
+        distancia_gps_km:Number(distancia.toFixed(2))
+    };
+}
+
 app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'motorista') {
         return res.status(403).json({ erro: 'Acesso negado' });
@@ -5527,7 +5573,7 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
         const viagem = viagemResult.rows[0];
 
         const historico = await client.query(`
-            SELECT lat, lon, registrado_em
+            SELECT lat, lon, registrado_em, precisao_m, velocidade_kmh
             FROM historico_localizacoes
             WHERE id_viagem = $1
             ORDER BY registrado_em ASC
@@ -5555,6 +5601,8 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             Boolean(viagem.id_rota_especifica) &&
             !validacao.desvioLongo;
 
+        const qualidadeGps = avaliarQualidadeGpsViagem(historico.rows);
+
         await client.query(`
             UPDATE viagens
             SET
@@ -5562,12 +5610,16 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
                 chegada_real = CURRENT_TIMESTAMP,
                 max_desvio_km = $1,
                 desvio_longo = $2,
-                rota_validada = $3
-            WHERE id = $4
+                rota_validada = $3,
+                qualidade_gps = $4,
+                qualidade_gps_score = $5
+            WHERE id = $6
         `, [
             validacao.maxDesvioKm,
             validacao.desvioLongo,
             rotaPodeSerValidada,
+            qualidadeGps.status,
+            qualidadeGps.score,
             viagem.id
         ]);
 
@@ -5650,6 +5702,38 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             client
         });
 
+        const ocorrenciasResult = await client.query(`
+            SELECT COUNT(*)::int AS total
+            FROM reportes
+            WHERE id_viagem = $1
+        `, [viagem.id]);
+
+        const inicioReal = viagem.saida_real ? new Date(viagem.saida_real) : null;
+        const fimReal = new Date();
+        const duracaoRealMin = inicioReal ? Math.max(0, Math.round((fimReal - inicioReal)/60000)) : null;
+        const resumoOperacional = {
+            versao: 1,
+            gerado_em: fimReal.toISOString(),
+            distancia_planejada_km: viagem.distancia_estimada_km !== null ? Number(viagem.distancia_estimada_km) : null,
+            distancia_gps_km: qualidadeGps.distancia_gps_km,
+            duracao_prevista_min: viagem.duracao_estimada_min !== null ? Number(viagem.duracao_estimada_min) : null,
+            duracao_real_min: duracaoRealMin,
+            consumo_previsto_km_l: viagem.consumo_medio_km_l !== null ? Number(viagem.consumo_medio_km_l) : null,
+            consumo_real_km_l: consumoRealResultado?.consumo_real_km_l ?? null,
+            combustivel_previsto_l: viagem.combustivel_estimado_l !== null ? Number(viagem.combustivel_estimado_l) : null,
+            combustivel_real_l: consumoRealResultado?.combustivel_real_l ?? null,
+            desvio_longo: Boolean(validacao.desvioLongo),
+            max_desvio_km: Number(validacao.maxDesvioKm || 0),
+            ocorrencias: Number(ocorrenciasResult.rows[0]?.total || 0),
+            qualidade_gps: qualidadeGps
+        };
+
+        await client.query(`
+            UPDATE viagens
+            SET resumo_operacional = $1::jsonb
+            WHERE id = $2
+        `, [JSON.stringify(resumoOperacional), viagem.id]);
+
         await registrarAuditoriaViagem({
             client,
             idViagem: viagem.id,
@@ -5678,7 +5762,9 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
                 regra:
                     'Desvio maior que 1 km por 5 minutos ou mais impede a validação.'
             },
-            consumo_real: consumoRealResultado
+            consumo_real: consumoRealResultado,
+            qualidade_gps: qualidadeGps,
+            resumo_operacional: resumoOperacional
         });
 
     } catch (erro) {
@@ -6209,7 +6295,8 @@ app.get('/monitoramento/resumo', autenticar, async (req, res) => {
 
     try {
         const resultado = await pool.query(`
-            SELECT vg.*, r.dados_geojson, l.lat, l.lon, l.ultima_atualizacao
+            SELECT vg.*, r.dados_geojson, l.lat, l.lon, l.ultima_atualizacao,
+                   rc.total_pontos, rc.pontos_com_precisao, rc.soma_precisao_m
             FROM viagens vg
             JOIN rotas r ON r.id = vg.id_rota
             LEFT JOIN usuarios u ON u.id = vg.id_motorista
@@ -6262,6 +6349,7 @@ app.get('/alertas', autenticar, async (req, res) => {
             JOIN rotas r ON r.id = vg.id_rota
             LEFT JOIN usuarios u ON u.id = vg.id_motorista
             LEFT JOIN localizacoes l ON l.id_motorista = u.id
+            LEFT JOIN resumo_coleta_viagem rc ON rc.id_viagem = vg.id
             WHERE vg.status = 'em_andamento'
         `);
 
@@ -6294,6 +6382,15 @@ app.get('/alertas', autenticar, async (req, res) => {
                         mensagem: `Veículo está ${analise.distanciaRotaKm.toFixed(2)} km fora da rota`
                     });
                 }
+            }
+
+            const nPrec = Number(row.pontos_com_precisao || 0);
+            const precMedia = nPrec > 0 ? Number(row.soma_precisao_m || 0) / nPrec : null;
+            if (Number(row.total_pontos || 0) >= 5 && precMedia !== null && precMedia > 80) {
+                alertas.push({
+                    tipo:'telemetria_ruim', severidade:'media', placa:row.placa, frota:row.frota,
+                    viagem_id:row.id, mensagem:`GPS com baixa precisão média (${precMedia.toFixed(0)} m)`
+                });
             }
 
             if (row.chegada_prevista) {
@@ -7416,6 +7513,8 @@ app.get('/historico/viagens', autenticar, async (req, res) => {
             SELECT
                 vg.id, vg.status, vg.carga, vg.altura_total, vg.peso_total,
                 vg.saida_prevista, vg.saida_real, vg.chegada_prevista, vg.chegada_real,
+                vg.qualidade_gps, vg.qualidade_gps_score, vg.resumo_operacional,
+                vg.consumo_real_km_l, vg.variacao_consumo_percentual, vg.consumo_anormal,
                 v.id AS id_veiculo, v.placa, v.frota, v.modelo,
                 u.nome AS motorista,
                 r.nome AS rota_nome, r.origem, r.destino
@@ -7430,6 +7529,26 @@ app.get('/historico/viagens', autenticar, async (req, res) => {
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
     }
+});
+
+app.get('/viagens/:id/resumo-operacional', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    try {
+        const r = await pool.query(`
+            SELECT vg.id, vg.status, vg.resumo_operacional, vg.qualidade_gps,
+                   vg.qualidade_gps_score, vg.consumo_real_km_l,
+                   v.placa, v.frota, r.nome AS rota_nome, r.origem, r.destino,
+                   u.nome AS motorista
+            FROM viagens vg
+            JOIN veiculos v ON v.id=vg.id_veiculo
+            JOIN rotas r ON r.id=vg.id_rota
+            LEFT JOIN usuarios u ON u.id=vg.id_motorista
+            WHERE vg.id=$1
+            LIMIT 1
+        `,[req.params.id]);
+        if (!r.rows.length) return res.status(404).json({erro:'Viagem não encontrada'});
+        res.json(r.rows[0]);
+    } catch (erro) { res.status(500).json({erro:erro.message}); }
 });
 
 app.get('/veiculos/:id/historico', autenticar, async (req, res) => {
