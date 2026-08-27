@@ -421,13 +421,14 @@ body.verificacao-mapa #verificacao-lista-wrap {
     color:#93c5fd;
 }
 </style>
+<!-- V21: coleta de produção em background; sem uso inteligente nesta versão. -->
 </head>
 <body>
 
 <!-- LOGIN -->
 <div id="login-overlay">
 <div class="login-card">
-<h2>🚛 <span>GPS</span> Gestão</h2>
+<h2>🚛 <span>GPS</span> Gestão <small style="font-size:9px;color:#22c55e;vertical-align:middle;">V22.0 • CANDIDATA À PRODUÇÃO</small></h2>
 <p>Painel de controle da frota</p>
 <div class="grupo"><label>👤 Login</label><input type="text" id="login-user" value="admin"></div>
 <div class="grupo"><label>🔒 Senha</label><input type="password" id="login-pass" value="admin123"></div>
@@ -1804,6 +1805,9 @@ function renderizarHistoricoGeral() {
                 👤 ${v.motorista || '-'}<br>📦 ${v.carga || '-'}<br>
                 Saída: ${formatarDataHora(v.saida_real || v.saida_prevista)}<br>
                 Chegada: ${formatarDataHora(v.chegada_real || v.chegada_prevista)}
+                ${v.status === 'concluida' ? `<br><br>📡 Qualidade GPS: <strong>${String(v.qualidade_gps || 'não avaliada').toUpperCase()}</strong>${v.qualidade_gps_score !== null && v.qualidade_gps_score !== undefined ? ` (${v.qualidade_gps_score}/100)` : ''}
+                ${v.resumo_operacional ? `<br>📏 Real GPS: <strong>${v.resumo_operacional.distancia_gps_km ?? '-'} km</strong> • ⏱️ ${v.resumo_operacional.duracao_real_min ?? '-'} min
+                <br>⚠️ Ocorrências: <strong>${v.resumo_operacional.ocorrencias ?? 0}</strong>${v.consumo_real_km_l ? ` • ⛽ ${Number(v.consumo_real_km_l).toFixed(2)} km/L` : ''}` : ''}` : ''}
             </div>
         </div>`).join('') : '<div style="color:#888;text-align:center;padding:20px;">Nenhuma viagem encontrada.</div>';
 }
