@@ -5379,6 +5379,126 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
     }
 });
 
+
+// ======================================================
+// ADMIN - RETIRAR ROTA/VIAGEM ATUAL DE UM VEÍCULO
+// Mantém o registro no histórico e remove a viagem da lista ativa.
+// ======================================================
+app.post('/viagens/:id/retirar-veiculo', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro: 'Acesso negado' });
+    }
+
+    const idViagem = Number(req.params.id);
+    if (!Number.isInteger(idViagem) || idViagem <= 0) {
+        return res.status(400).json({ erro: 'ID da viagem inválido' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const atual = await client.query(`
+            SELECT
+                vg.id,
+                vg.id_rota,
+                vg.id_veiculo,
+                vg.id_motorista,
+                vg.status,
+                v.placa,
+                v.frota
+            FROM viagens vg
+            JOIN veiculos v ON v.id = vg.id_veiculo
+            WHERE vg.id = $1
+            FOR UPDATE OF vg
+        `, [idViagem]);
+
+        if (!atual.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro: 'Viagem não encontrada' });
+        }
+
+        const viagem = atual.rows[0];
+
+        if (!['planejada', 'em_andamento'].includes(viagem.status)) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                erro: 'Esta viagem não está ativa',
+                status: viagem.status
+            });
+        }
+
+        // "Retirar a rota" significa cancelar a viagem operacional.
+        // Não apagamos a viagem nem o histórico/GPS.
+        const atualizado = await client.query(`
+            UPDATE viagens
+            SET
+                status = 'cancelada',
+                chegada_real = CASE
+                    WHEN status = 'em_andamento'
+                        THEN COALESCE(chegada_real, CURRENT_TIMESTAMP)
+                    ELSE chegada_real
+                END,
+                estado_monitoramento = 'normal'
+            WHERE id = $1
+            RETURNING *
+        `, [idViagem]);
+
+        await registrarAuditoriaViagem({
+            client,
+            idViagem,
+            usuario: req.usuario,
+            acao: 'ROTA_RETIRADA_DO_VEICULO',
+            statusAnterior: viagem.status,
+            statusNovo: 'cancelada',
+            detalhes: {
+                id_veiculo: viagem.id_veiculo,
+                id_motorista: viagem.id_motorista,
+                placa: viagem.placa,
+                frota: viagem.frota,
+                motivo: 'Rota retirada manualmente pelo gestor'
+            },
+            req
+        });
+
+        // Só volta a rota base para pendente se não existir outra viagem
+        // ativa usando a mesma rota.
+        await client.query(`
+            UPDATE rotas r
+            SET status = 'pendente'
+            WHERE r.id = $1
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM viagens vg
+                    WHERE vg.id_rota = r.id
+                      AND vg.id <> $2
+                      AND vg.status IN ('planejada', 'em_andamento')
+              )
+        `, [viagem.id_rota, idViagem]);
+
+        await client.query('COMMIT');
+
+        return res.json({
+            sucesso: true,
+            mensagem: `Rota retirada do veículo ${viagem.placa}`,
+            viagem: atualizado.rows[0]
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+
+        console.error('❌ Retirar rota do veículo:', erro);
+
+        return res.status(500).json({
+            erro: 'Erro ao retirar rota do veículo',
+            detalhes: erro.message
+        });
+    } finally {
+        client.release();
+    }
+});
+
 app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
