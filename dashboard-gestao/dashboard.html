@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard Gestão - GPS Caminhão</title>
+<title>Dashboard Gestão - GPS Caminhão V22</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
@@ -42,6 +42,8 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .btn-success:hover { background:#00a381; }
 .btn-secondary { background:#6c757d; }
 .btn-danger { background:#d63031; }
+.btn-retirar-rota { background:#b91c1c !important; color:#fff !important; }
+.btn-retirar-rota:hover { background:#991b1b !important; }
 .btn-tomtom { background:#33ccff; color:#000; }
 .status-box { margin-top:16px; padding:10px; background:#0a0a12; border-radius:8px; font-size:13px; text-align:center; border-left:3px solid #ff6600; min-height:40px; }
 .status-box.sucesso { border-left-color:#00b894; color:#00b894; }
@@ -468,6 +470,14 @@ body.verificacao-mapa #verificacao-lista-wrap {
 
 <!-- ABA ROTAS -->
 <div id="tab-rotas" class="tab-content active">
+<div class="grupo">
+<label>🚘 Tipo de Veículo</label>
+<select id="tipo-veiculo-rota" onchange="atualizarTipoVeiculoRota()">
+<option value="carro">🚗 Carro</option>
+<option value="caminhao" selected>🚛 Caminhão</option>
+</select>
+<div id="info-tipo-veiculo-rota" style="font-size:10px;color:#888;margin-top:5px;">Caminhão: considera perfil pesado e restrições dimensionais.</div>
+</div>
 <div class="grupo"><label>⚙️ Preferência</label><select id="preferencia-rota"><option value="fastest">Mais Rápida</option><option value="shortest">Mais Curta</option></select></div>
 <hr style="border-color:#2a2a3e;margin:16px 0;">
 <div class="grupo"><label>📌 Nome da Rota</label><input type="text" id="nome-rota" value="Rota Teste 01"></div>
@@ -712,6 +722,15 @@ Selecione o caminhão para carregar suas medidas e peso cadastrados.
     </div>
 
     <div id="lista-auditoria" style="margin-top:12px;"></div>
+
+    <hr style="border-color:#2a2a3e;margin:18px 0;">
+    <h2 style="font-size:18px;margin-bottom:5px;">🛡️ Passaporte Digital de Rotas</h2>
+    <p style="color:#aaa;font-size:11px;margin-bottom:10px;">
+        Memória operacional criada automaticamente pelas viagens concluídas da frota.
+    </p>
+    <button class="btn-primary" onclick="carregarPassaportesDigitais()">🛡️ Carregar passaportes</button>
+    <div id="status-passaportes" class="status-box">Aguardando consulta.</div>
+    <div id="lista-passaportes" style="margin-top:12px;"></div>
 </div>
 
 <!-- ABA REPORTES -->
@@ -1845,6 +1864,64 @@ function formatarDataHora(valor) {
     return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
 }
 
+async function retirarRotaDoVeiculo(idViagem, placa) {
+    if (!tokenJWT) return;
+
+    const confirmar = confirm(
+        `Retirar a rota atual do veículo ${placa || ''}?\n\n` +
+        `A viagem ${idViagem} será retirada da lista ativa, mas continuará no histórico.`
+    );
+
+    if (!confirmar) return;
+
+    const status = document.getElementById('status-monitoramento');
+
+    if (status) {
+        status.className = 'status-box carregando';
+        status.innerHTML = '🔄 Retirando rota do veículo...';
+    }
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${idViagem}/retirar-veiculo`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': tokenJWT,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        let data = {};
+        try { data = await resp.json(); } catch (_) {}
+
+        if (!resp.ok) {
+            throw new Error(
+                data.erro ||
+                data.message ||
+                'Não foi possível retirar a rota do veículo.'
+            );
+        }
+
+        if (status) {
+            status.className = 'status-box sucesso';
+            status.innerHTML = `✅ Rota retirada do veículo ${placa || ''}.`;
+        }
+
+        await carregarMonitoramento(false);
+        await carregarLocalizacoes(false);
+
+    } catch (erro) {
+        console.error('Erro ao retirar rota do veículo:', erro);
+
+        if (status) {
+            status.className = 'status-box erro';
+            status.innerHTML = `❌ ${erro.message}`;
+        }
+    }
+}
+
 async function carregarMonitoramento(centralizar = false) {
     if (!tokenJWT) return;
 
@@ -2106,6 +2183,11 @@ async function carregarMonitoramento(centralizar = false) {
                         <button class="btn-auditoria-viagem"
                             onclick="event.stopPropagation();abrirAuditoriaViagem(${Number(v.id)},'${String(v.placa || '').replace(/'/g,'')}')">
                             📋 Auditoria
+                        </button>
+
+                        <button class="btn-retirar-rota"
+                            onclick="event.stopPropagation();retirarRotaDoVeiculo(${Number(v.id)},'${String(v.placa || '').replace(/'/g,'')}')">
+                            🗑️ Retirar rota
                         </button>
 
                         <button
@@ -3859,6 +3941,16 @@ function calcularDistanciaKm(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+function atualizarTipoVeiculoRota() {
+    const tipo = document.getElementById('tipo-veiculo-rota')?.value || 'caminhao';
+    const info = document.getElementById('info-tipo-veiculo-rota');
+    if (!info) return;
+
+    info.textContent = tipo === 'carro'
+        ? 'Carro: usa rota normal, sem altura, largura, peso e comprimento de caminhão.'
+        : 'Caminhão: considera perfil pesado e restrições dimensionais.';
+}
+
 async function calcularRota() {
     const status = document.getElementById('status-dashboard');
     const btn = document.getElementById('btn-calcular');
@@ -3910,11 +4002,13 @@ async function calcularRota() {
             );
         }
 
-        const perfil = 'driving-hgv';
-        const altura = 4.2;
-        const peso = 15;
-        const comprimento = 12;
-        const largura = 2.6;
+        const tipoVeiculo = document.getElementById('tipo-veiculo-rota')?.value || 'caminhao';
+        const ehCaminhao = tipoVeiculo === 'caminhao';
+        const perfil = ehCaminhao ? 'driving-hgv' : 'driving-car';
+        const altura = ehCaminhao ? 4.2 : null;
+        const peso = ehCaminhao ? 15 : null;
+        const comprimento = ehCaminhao ? 12 : null;
+        const largura = ehCaminhao ? 2.6 : null;
         const preferencia = document.getElementById('preferencia-rota').value || 'fastest';
 
         const origemApi = {
@@ -3928,13 +4022,11 @@ async function calcularRota() {
         };
 
         console.log('📡 Enviando requisição para /api/calcular-rota:', {
+            tipoVeiculo,
             origem: origemApi,
             destino: destinoApi,
             perfil,
-            altura,
-            peso,
-            comprimento,
-            largura,
+            ...(ehCaminhao ? { altura, peso, comprimento, largura } : {}),
             preferencia,
             distanciaDiretaKm: distanciaDireta.toFixed(1)
         });
@@ -3948,13 +4040,18 @@ async function calcularRota() {
                 'Content-Type': 'application/json',
                 'Authorization': tokenJWT
             },
-            body: JSON.stringify({
+            body: JSON.stringify(ehCaminhao ? {
                 origem: origemApi,
                 destino: destinoApi,
                 altura,
                 peso,
                 comprimento,
                 largura,
+                perfil,
+                preferencia
+            } : {
+                origem: origemApi,
+                destino: destinoApi,
                 perfil,
                 preferencia
             })
@@ -4076,7 +4173,10 @@ async function salvarRota() {
                 origem: document.getElementById('origem').value,
                 destino: document.getElementById('destino').value,
                 restricoes: {
-                    altura_referencia: 4.2
+                    altura_referencia:
+                        (document.getElementById('tipo-veiculo-rota')?.value || 'caminhao') === 'caminhao'
+                            ? 4.2
+                            : null
                 },
                 dados_geojson: geoJsonCalculado
             })
@@ -4137,6 +4237,72 @@ document.addEventListener('keydown', e => {
         fazerLogin();
     }
 });
+
+
+// ======================================================
+// V22 - PASSAPORTE DIGITAL + CAIXA-PRETA
+// ======================================================
+async function carregarPassaportesDigitais() {
+    const status = document.getElementById('status-passaportes');
+    const lista = document.getElementById('lista-passaportes');
+    if (!tokenJWT || !status || !lista) return;
+    status.innerHTML = '🔄 Carregando memória operacional...';
+    status.className = 'status-box carregando';
+    try {
+        const resp = await fetch(`${API_BASE}/passaportes`, { headers:{ 'Authorization':tokenJWT } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar passaportes.');
+        status.innerHTML = `✅ ${data.length} passaporte(s) encontrado(s)`;
+        status.className = 'status-box sucesso';
+        lista.innerHTML = data.length ? data.map(p => {
+            const score = Number(p.score_confianca || 0);
+            const cor = score >= 75 ? '#22c55e' : score >= 55 ? '#f59e0b' : '#ef4444';
+            return `<div class="rota-card" style="border-left:4px solid ${cor}">
+                <strong>🛡️ ${p.rota_nome || `Rota ${p.id_rota}`}</strong>
+                <small>${p.origem || '-'} → ${p.destino || '-'}</small>
+                <div style="margin-top:7px;font-size:11px;line-height:1.65;color:#d4d4d8;">
+                    Confiança: <strong style="color:${cor}">${score}/100 • ${p.nivel_confianca || 'sem_dados'}</strong><br>
+                    ✅ ${p.viagens_validadas || 0}/${p.total_viagens || 0} viagens validadas
+                    • ⚠️ ${p.viagens_com_ocorrencia || 0} com ocorrência<br>
+                    📏 Máx. confirmado: altura ${p.maior_altura_m ?? '-'} m
+                    • peso ${p.maior_peso_t ?? '-'} t
+                    • comp. ${p.maior_comprimento_m ?? '-'} m
+                    • largura ${p.maior_largura_m ?? '-'} m
+                </div>
+                <button class="btn-primary" style="margin-top:8px;padding:8px;" onclick="abrirPassaporteDigital(${p.id})">🔎 Ver viagens do passaporte</button>
+            </div>`;
+        }).join('') : '<div class="rota-card">Nenhum passaporte ainda. Ele será criado automaticamente quando uma viagem for concluída.</div>';
+    } catch (erro) {
+        status.innerHTML = `❌ ${erro.message}`;
+        status.className = 'status-box erro';
+    }
+}
+
+async function abrirPassaporteDigital(id) {
+    try {
+        const resp = await fetch(`${API_BASE}/passaportes/${id}`, { headers:{ 'Authorization':tokenJWT } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao abrir passaporte.');
+        const p = data.passaporte;
+        const linhas = (data.viagens || []).slice(0,20).map(v =>
+            `#${v.id_viagem} • ${v.placa || '-'} • ${v.rota_validada ? 'VALIDADA' : 'REVISÃO'} • GPS ${v.qualidade_gps || '-'} • ${v.ocorrencias || 0} ocorrência(s)`
+        ).join('\n');
+        alert(`PASSAPORTE DIGITAL\n\n${p.rota_nome || ''}\n${p.origem || ''} → ${p.destino || ''}\n\nConfiança: ${p.score_confianca}/100 (${p.nivel_confianca})\nViagens: ${p.total_viagens}\nValidadas: ${p.viagens_validadas}\n\nÚLTIMAS VIAGENS\n${linhas || 'Nenhuma viagem.'}`);
+    } catch (erro) { alert(`❌ ${erro.message}`); }
+}
+
+async function abrirCaixaPretaViagem(idViagem) {
+    try {
+        const resp = await fetch(`${API_BASE}/viagens/${idViagem}/caixa-preta`, { headers:{ 'Authorization':tokenJWT } });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar caixa-preta.');
+        const linhas = data.slice(-40).map(e => {
+            const hora = new Date(e.criado_em).toLocaleString('pt-BR');
+            return `${hora} • ${e.severidade?.toUpperCase() || 'INFO'} • ${e.tipo}`;
+        }).join('\n');
+        alert(`CAIXA-PRETA • VIAGEM #${idViagem}\n\n${linhas || 'Nenhum evento registrado.'}`);
+    } catch (erro) { alert(`❌ ${erro.message}`); }
+}
 </script>
 </body>
 </html>
