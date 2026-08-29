@@ -6039,6 +6039,28 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             origem: viagem.origem_dados === 'demo' ? 'demo' : 'backend'
         });
 
+        // V24 - conclusão libera automaticamente o veículo para uma nova viagem.
+        // A viagem concluída NÃO é apagada: histórico GPS, auditoria, caixa-preta,
+        // passaporte e demais dados permanecem vinculados ao registro concluído.
+        //
+        // O "vínculo ativo" do veículo é determinado pelas viagens ainda
+        // planejadas/em andamento. Ao concluir, esta viagem deixa de ocupar o
+        // veículo sem precisar usar o botão "Retirar rota".
+        await registrarEventoCaixaPreta({
+            client,
+            idViagem: viagem.id,
+            idVeiculo: viagem.id_veiculo,
+            idMotorista: req.usuario.id,
+            tipo:'VEICULO_LIBERADO',
+            severidade:'info',
+            dados:{
+                motivo:'viagem_concluida',
+                liberado_para_nova_viagem:true,
+                origem_dados: viagem.origem_dados || 'real'
+            },
+            origem: viagem.origem_dados === 'demo' ? 'demo' : 'backend'
+        });
+
         await client.query('COMMIT');
 
         res.json({
