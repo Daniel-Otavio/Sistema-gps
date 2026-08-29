@@ -288,6 +288,44 @@ async function enviarEmailCodigo({ nome, email, codigo, placa }) {
     );
 }
 
+
+async function enviarEmailRecuperacaoSenha({ nome, email, codigo }) {
+    if (!BREVO_API_KEY || !EMAIL_REMETENTE) {
+        throw new Error('Serviço de e-mail não configurado');
+    }
+
+    const htmlContent = `
+        <!DOCTYPE html>
+        <html lang="pt-BR">
+        <body style="margin:0;padding:0;background:#f4f4f5;font-family:Arial,sans-serif;">
+            <div style="max-width:520px;margin:30px auto;background:#fff;border-radius:14px;padding:30px;box-shadow:0 5px 20px rgba(0,0,0,.08);">
+                <h2 style="color:#1e293b;margin:0 0 12px;">🚛 GPS Caminhão</h2>
+                <p style="color:#334155;">Olá, <strong>${nome}</strong>.</p>
+                <p style="color:#334155;">Foi solicitada a recuperação da senha da sua conta.</p>
+                <p style="color:#334155;">Use este código de confirmação:</p>
+                <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#7c3aed;text-align:center;padding:20px;background:#f5f3ff;border-radius:12px;margin:18px 0;">${codigo}</div>
+                <p style="color:#64748b;font-size:13px;">O código expira em <strong>10 minutos</strong> e pode ser usado uma única vez.</p>
+                <p style="color:#64748b;font-size:13px;">Se você não solicitou a troca de senha, ignore esta mensagem. Sua senha atual continuará válida.</p>
+            </div>
+        </body>
+        </html>
+    `;
+
+    await axios.post('https://api.brevo.com/v3/smtp/email', {
+        sender:{ name:EMAIL_NOME, email:EMAIL_REMETENTE },
+        to:[{ email, name:nome }],
+        subject:'Recuperação de senha - GPS Caminhão',
+        htmlContent
+    }, {
+        headers:{
+            'api-key':BREVO_API_KEY,
+            'Content-Type':'application/json',
+            Accept:'application/json'
+        },
+        timeout:15000
+    });
+}
+
 // ======================================================
 // BANCO / MIGRAÇÕES
 // ======================================================
@@ -357,6 +395,26 @@ async function criarTabelas() {
                 ON DELETE SET NULL;
             END IF;
         END $$;
+    `);
+
+    // Recuperação de senha por e-mail
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS recuperacoes_senha (
+            id SERIAL PRIMARY KEY,
+            id_usuario INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+            email VARCHAR(255) NOT NULL,
+            codigo_hash TEXT NOT NULL,
+            codigo_expira_em TIMESTAMPTZ NOT NULL,
+            tentativas INTEGER NOT NULL DEFAULT 0,
+            verificado BOOLEAN NOT NULL DEFAULT FALSE,
+            verificado_em TIMESTAMPTZ,
+            usado BOOLEAN NOT NULL DEFAULT FALSE,
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_recuperacoes_senha_usuario
+        ON recuperacoes_senha(id_usuario, criado_em DESC)
     `);
 
     // Cadastros pendentes de confirmação
@@ -1210,6 +1268,21 @@ const schemas = {
     login: Joi.object({
         login: Joi.string().required(),
         senha: Joi.string().required()
+    }),
+
+    recuperarSenhaIniciar: Joi.object({
+        email: Joi.string().email().required()
+    }),
+
+    recuperarSenhaVerificar: Joi.object({
+        email: Joi.string().email().required(),
+        codigo: Joi.string().pattern(/^\d{6}$/).required()
+    }),
+
+    recuperarSenhaRedefinir: Joi.object({
+        email: Joi.string().email().required(),
+        codigo: Joi.string().pattern(/^\d{6}$/).required(),
+        senha: Joi.string().min(6).max(100).required()
     }),
 
     iniciarCadastro: Joi.object({
@@ -2297,6 +2370,96 @@ app.post('/login', validar(schemas.login), async (req, res) => {
         console.error('❌ Erro login:', erro);
         res.status(500).json({ erro: 'Erro interno no login' });
     }
+});
+
+
+// ======================================================
+// RECUPERAÇÃO DE SENHA DO MOTORISTA
+// ======================================================
+app.post('/senha/recuperar/iniciar', cadastroLimiter, validar(schemas.recuperarSenhaIniciar), async (req,res) => {
+    try {
+        const email=normalizarEmail(req.body.email);
+        const r=await pool.query(`
+            SELECT id,nome,email,tipo
+            FROM usuarios
+            WHERE LOWER(COALESCE(email,''))=LOWER($1)
+              AND tipo='motorista'
+            LIMIT 1
+        `,[email]);
+
+        // Resposta genérica reduz descoberta de contas.
+        if (!r.rows.length) {
+            return res.json({ mensagem:'Se o e-mail estiver cadastrado, um código será enviado.', expira_em_minutos:10 });
+        }
+
+        const user=r.rows[0];
+        const codigo=gerarCodigo();
+        const codigoHash=bcrypt.hashSync(codigo,10);
+        const exp=new Date(Date.now()+10*60*1000);
+
+        await pool.query(`UPDATE recuperacoes_senha SET usado=TRUE WHERE id_usuario=$1 AND usado=FALSE`,[user.id]);
+        await pool.query(`
+            INSERT INTO recuperacoes_senha(id_usuario,email,codigo_hash,codigo_expira_em,tentativas,verificado,usado,criado_em)
+            VALUES($1,$2,$3,$4,0,FALSE,FALSE,CURRENT_TIMESTAMP)
+        `,[user.id,email,codigoHash,exp]);
+
+        await enviarEmailRecuperacaoSenha({nome:user.nome,email,codigo});
+        res.json({ mensagem:'Se o e-mail estiver cadastrado, um código será enviado.', expira_em_minutos:10 });
+    } catch(erro) {
+        console.error('❌ Recuperação senha iniciar:',erro.response?.data||erro);
+        res.status(500).json({erro:'Não foi possível iniciar a recuperação de senha.'});
+    }
+});
+
+app.post('/senha/recuperar/verificar', cadastroLimiter, validar(schemas.recuperarSenhaVerificar), async (req,res) => {
+    try {
+        const email=normalizarEmail(req.body.email), codigo=req.body.codigo;
+        const r=await pool.query(`
+            SELECT rs.*
+            FROM recuperacoes_senha rs
+            WHERE LOWER(rs.email)=LOWER($1) AND rs.usado=FALSE
+            ORDER BY rs.criado_em DESC LIMIT 1
+        `,[email]);
+        const rec=r.rows[0];
+        if(!rec) return res.status(400).json({erro:'Código inválido ou expirado.'});
+        if(rec.tentativas>=5) return res.status(429).json({erro:'Muitas tentativas. Solicite um novo código.'});
+        if(new Date()>new Date(rec.codigo_expira_em)) return res.status(410).json({erro:'Código expirado. Solicite um novo código.'});
+        if(!bcrypt.compareSync(codigo,rec.codigo_hash)){
+            await pool.query(`UPDATE recuperacoes_senha SET tentativas=tentativas+1 WHERE id=$1`,[rec.id]);
+            return res.status(400).json({erro:'Código incorreto.'});
+        }
+        await pool.query(`UPDATE recuperacoes_senha SET verificado=TRUE,verificado_em=CURRENT_TIMESTAMP,tentativas=0 WHERE id=$1`,[rec.id]);
+        res.json({mensagem:'Código confirmado.'});
+    } catch(erro){ console.error('❌ Recuperação verificar:',erro); res.status(500).json({erro:'Erro ao confirmar código.'}); }
+});
+
+app.post('/senha/recuperar/redefinir', cadastroLimiter, validar(schemas.recuperarSenhaRedefinir), async (req,res) => {
+    const client=await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const email=normalizarEmail(req.body.email), codigo=req.body.codigo;
+        const r=await client.query(`
+            SELECT rs.*
+            FROM recuperacoes_senha rs
+            WHERE LOWER(rs.email)=LOWER($1) AND rs.usado=FALSE AND rs.verificado=TRUE
+            ORDER BY rs.criado_em DESC LIMIT 1
+            FOR UPDATE
+        `,[email]);
+        const rec=r.rows[0];
+        if(!rec || new Date()>new Date(rec.codigo_expira_em) || !bcrypt.compareSync(codigo,rec.codigo_hash)){
+            await client.query('ROLLBACK');
+            return res.status(400).json({erro:'Confirmação inválida ou expirada.'});
+        }
+        const hash=bcrypt.hashSync(req.body.senha,10);
+        await client.query(`UPDATE usuarios SET senha=$1 WHERE id=$2`,[hash,rec.id_usuario]);
+        await client.query(`UPDATE recuperacoes_senha SET usado=TRUE WHERE id_usuario=$1 AND usado=FALSE`,[rec.id_usuario]);
+        await client.query('COMMIT');
+        res.json({mensagem:'Senha alterada com sucesso.'});
+    } catch(erro){
+        try{await client.query('ROLLBACK')}catch(_){}
+        console.error('❌ Redefinir senha:',erro);
+        res.status(500).json({erro:'Não foi possível alterar a senha.'});
+    } finally { client.release(); }
 });
 
 // ======================================================
@@ -8387,6 +8550,114 @@ app.post('/viagens/:id/demo/pontos', autenticar, async (req, res) => {
     } catch (erro) {
         try { await client.query('ROLLBACK'); } catch (_) {}
         console.error('❌ DEMO GPS:', erro);
+        res.status(500).json({ erro:erro.message });
+    } finally {
+        client.release();
+    }
+});
+
+
+// ======================================================
+// V25 - LIBERAÇÃO MANUAL DO VEÍCULO PELO PORTAL
+// ======================================================
+app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') {
+        return res.status(403).json({ erro:'Acesso negado' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const veiculo = await client.query(`
+            SELECT id, placa, frota, ativo
+            FROM veiculos
+            WHERE id = $1
+            LIMIT 1
+            FOR UPDATE
+        `, [req.params.id]);
+
+        if (!veiculo.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro:'Veículo não encontrado.' });
+        }
+
+        // Identifica viagens que ainda poderiam manter o veículo "ocupado" no portal.
+        const viagensAtivas = await client.query(`
+            SELECT id, status, origem_dados, criado_em
+            FROM viagens
+            WHERE id_veiculo = $1
+              AND status IN ('planejada','aprovada','em_andamento')
+            ORDER BY criado_em DESC
+        `, [req.params.id]);
+
+        // O comando de liberação é administrativo:
+        // - em andamento -> cancela, porque não deve continuar ocupando o veículo;
+        // - planejada/aprovada -> desassocia o veículo, preservando a viagem;
+        // viagens concluídas permanecem intactas.
+        for (const vg of viagensAtivas.rows) {
+            if (vg.status === 'em_andamento') {
+                await client.query(`
+                    UPDATE viagens
+                    SET status = 'cancelada',
+                        atualizado_em = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                `, [vg.id]);
+
+                await registrarEventoCaixaPreta({
+                    client,
+                    idViagem: vg.id,
+                    idVeiculo: Number(req.params.id),
+                    idMotorista: null,
+                    tipo:'VEICULO_LIBERADO_MANUALMENTE',
+                    severidade:'atencao',
+                    dados:{
+                        motivo:req.body?.motivo || 'liberacao_manual_portal',
+                        status_anterior:vg.status,
+                        acao:'viagem_cancelada',
+                        origem_dados:vg.origem_dados || 'real'
+                    },
+                    origem:'portal_gestor'
+                });
+            } else {
+                await client.query(`
+                    UPDATE viagens
+                    SET id_veiculo = NULL,
+                        atualizado_em = CURRENT_TIMESTAMP
+                    WHERE id = $1
+                `, [vg.id]);
+
+                await registrarEventoCaixaPreta({
+                    client,
+                    idViagem: vg.id,
+                    idVeiculo: Number(req.params.id),
+                    idMotorista: null,
+                    tipo:'VEICULO_LIBERADO_MANUALMENTE',
+                    severidade:'info',
+                    dados:{
+                        motivo:req.body?.motivo || 'liberacao_manual_portal',
+                        status_anterior:vg.status,
+                        acao:'veiculo_desassociado_da_viagem',
+                        origem_dados:vg.origem_dados || 'real'
+                    },
+                    origem:'portal_gestor'
+                });
+            }
+        }
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:'Veículo liberado com sucesso.',
+            veiculo:veiculo.rows[0],
+            viagens_afetadas:viagensAtivas.rows.length,
+            liberado:true
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        console.error('❌ LIBERAR VEÍCULO:', erro);
         res.status(500).json({ erro:erro.message });
     } finally {
         client.release();
