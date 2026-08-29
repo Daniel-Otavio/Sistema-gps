@@ -8570,17 +8570,39 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        const veiculo = await client.query(`
+        let idVeiculo = Number(req.params.id);
+
+        let veiculo = await client.query(`
             SELECT id, placa, frota, ativo
             FROM veiculos
             WHERE id = $1
             LIMIT 1
             FOR UPDATE
-        `, [req.params.id]);
+        `, [idVeiculo]);
+
+        // Compatibilidade com o dashboard antigo:
+        // versões anteriores enviavam vg.id (ID da viagem) em vez de vg.id_veiculo.
+        if (!veiculo.rows.length) {
+            const porViagem = await client.query(`
+                SELECT v.id, v.placa, v.frota, v.ativo
+                FROM viagens vg
+                JOIN veiculos v ON v.id = vg.id_veiculo
+                WHERE vg.id = $1
+                LIMIT 1
+            `, [idVeiculo]);
+
+            if (porViagem.rows.length) {
+                idVeiculo = Number(porViagem.rows[0].id);
+                veiculo = porViagem;
+            }
+        }
 
         if (!veiculo.rows.length) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ erro:'Veículo não encontrado.' });
+            return res.status(404).json({
+                erro:'Veículo não encontrado.',
+                detalhe:'O identificador recebido não corresponde a um veículo nem a uma viagem vinculada.'
+            });
         }
 
         // Identifica viagens que ainda poderiam manter o veículo "ocupado" no portal.
@@ -8590,7 +8612,7 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
             WHERE id_veiculo = $1
               AND status IN ('planejada','aprovada','em_andamento')
             ORDER BY criado_em DESC
-        `, [req.params.id]);
+        `, [idVeiculo]);
 
         // O comando de liberação é administrativo:
         // - em andamento -> cancela, porque não deve continuar ocupando o veículo;
@@ -8608,7 +8630,7 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
                 await registrarEventoCaixaPreta({
                     client,
                     idViagem: vg.id,
-                    idVeiculo: Number(req.params.id),
+                    idVeiculo: idVeiculo,
                     idMotorista: null,
                     tipo:'VEICULO_LIBERADO_MANUALMENTE',
                     severidade:'atencao',
@@ -8631,7 +8653,7 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
                 await registrarEventoCaixaPreta({
                     client,
                     idViagem: vg.id,
-                    idVeiculo: Number(req.params.id),
+                    idVeiculo: idVeiculo,
                     idMotorista: null,
                     tipo:'VEICULO_LIBERADO_MANUALMENTE',
                     severidade:'info',
