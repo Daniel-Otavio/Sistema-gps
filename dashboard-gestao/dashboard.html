@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard Gestão - GPS Caminhão V22</title>
+<title>Dashboard Gestão - GPS Caminhão • V25 V22</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
@@ -422,6 +422,9 @@ body.verificacao-mapa #verificacao-lista-wrap {
     background:rgba(59,130,246,.15);
     color:#93c5fd;
 }
+
+.btn-liberar-veiculo{background:#7c3aed;border:1px solid #8b5cf6;color:#fff;font-weight:900;}
+.btn-liberar-veiculo:hover{filter:brightness(1.08);}
 </style>
 <!-- V21: coleta de produção em background; sem uso inteligente nesta versão. -->
 </head>
@@ -2189,6 +2192,7 @@ async function carregarMonitoramento(centralizar = false) {
                             onclick="event.stopPropagation();retirarRotaDoVeiculo(${Number(v.id)},'${String(v.placa || '').replace(/'/g,'')}')">
                             🗑️ Retirar rota
                         </button>
+<button class="btn-primary btn-liberar-veiculo" onclick="liberarVeiculoPortal(${v.id})">🔓 Liberar veículo</button>
 
                         <button
                             onclick="event.stopPropagation();selecionarViagemScanner(${Number(v.id)});"
@@ -4304,6 +4308,69 @@ async function abrirCaixaPretaViagem(idViagem) {
         alert(`CAIXA-PRETA • VIAGEM #${idViagem}\n\n${linhas || 'Nenhum evento registrado.'}`);
     } catch (erro) { alert(`❌ ${erro.message}`); }
 }
+
+async function liberarVeiculoPortal(idVeiculo) {
+    if (!idVeiculo || !tokenJWT) {
+        alert('Veículo inválido ou sessão expirada.');
+        return;
+    }
+
+    const confirmar = confirm(
+        'Liberar este veículo para receber outra viagem?\n\n' +
+        'A viagem concluída e todo o histórico serão preservados. ' +
+        'Se houver viagem em andamento, ela será cancelada. ' +
+        'Se houver viagem planejada/aprovada, o veículo será desassociado.'
+    );
+
+    if (!confirmar) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/veiculos/${idVeiculo}/liberar`, {
+            method:'POST',
+            headers:{
+                'Content-Type':'application/json',
+                'Authorization':tokenJWT
+            },
+            body:JSON.stringify({
+                motivo:'liberacao_manual_portal'
+            })
+        });
+
+        const data = await resp.json().catch(() => ({}));
+
+        if (!resp.ok) {
+            throw new Error(
+                data.erro ||
+                data.detalhe ||
+                `Erro HTTP ${resp.status}`
+            );
+        }
+
+        alert(
+            `✅ Veículo liberado.\n` +
+            `Viagens afetadas: ${data.viagens_afetadas || 0}`
+        );
+
+        // Recarrega os pontos/cards do monitoramento.
+        if (typeof carregarFrota === 'function') {
+            await carregarFrota();
+        }
+        if (typeof carregarMonitoramento === 'function') {
+            await carregarMonitoramento();
+        }
+        if (typeof carregarViagens === 'function') {
+            await carregarViagens();
+        }
+        if (typeof carregarResumoMonitoramento === 'function') {
+            await carregarResumoMonitoramento();
+        }
+
+    } catch (erro) {
+        console.error('❌ Liberar veículo:', erro);
+        alert(`❌ Não foi possível liberar o veículo: ${erro.message}`);
+    }
+}
+
 </script>
 </body>
 </html>
