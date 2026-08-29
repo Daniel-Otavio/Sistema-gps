@@ -4263,7 +4263,8 @@ async function carregarPassaportesDigitais() {
                 <div style="margin-top:7px;font-size:11px;line-height:1.65;color:#d4d4d8;">
                     Confiança: <strong style="color:${cor}">${score}/100 • ${p.nivel_confianca || 'sem_dados'}</strong><br>
                     ✅ ${p.viagens_validadas || 0}/${p.total_viagens || 0} viagens validadas
-                    • ⚠️ ${p.viagens_com_ocorrencia || 0} com ocorrência<br>
+                    • ⚠️ ${p.viagens_com_ocorrencia || 0} com ocorrência
+                    • 🧪 ${p.resumo?.viagens_demo || 0} DEMO<br>
                     📏 Máx. confirmado: altura ${p.maior_altura_m ?? '-'} m
                     • peso ${p.maior_peso_t ?? '-'} t
                     • comp. ${p.maior_comprimento_m ?? '-'} m
@@ -4285,7 +4286,7 @@ async function abrirPassaporteDigital(id) {
         if (!resp.ok) throw new Error(data.erro || 'Erro ao abrir passaporte.');
         const p = data.passaporte;
         const linhas = (data.viagens || []).slice(0,20).map(v =>
-            `#${v.id_viagem} • ${v.placa || '-'} • ${v.rota_validada ? 'VALIDADA' : 'REVISÃO'} • GPS ${v.qualidade_gps || '-'} • ${v.ocorrencias || 0} ocorrência(s)`
+            `#${v.id_viagem} • ${v.placa || '-'} • ${v.origem_dados === 'demo' ? '🧪 DEMO' : '🚛 REAL'} • ${v.rota_validada ? 'VALIDADA' : 'REVISÃO'} • GPS ${v.qualidade_gps || '-'} • ${v.ocorrencias || 0} ocorrência(s)`
         ).join('\n');
         alert(`PASSAPORTE DIGITAL\n\n${p.rota_nome || ''}\n${p.origem || ''} → ${p.destino || ''}\n\nConfiança: ${p.score_confianca}/100 (${p.nivel_confianca})\nViagens: ${p.total_viagens}\nValidadas: ${p.viagens_validadas}\n\nÚLTIMAS VIAGENS\n${linhas || 'Nenhuma viagem.'}`);
     } catch (erro) { alert(`❌ ${erro.message}`); }
