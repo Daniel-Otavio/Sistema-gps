@@ -252,6 +252,31 @@ body.modo-navegacao #btn-tema-mapa { display:none !important; }
 #velocimetro { position:fixed; bottom:130px; left:20px; z-index:2000; width:70px; height:70px; background:rgba(13,13,18,0.85); backdrop-filter:blur(5px); border-radius:50%; border:3px solid #3b82f6; color:#fff; display:none; flex-direction:column; align-items:center; justify-content:center; }
 #velocidade-valor { font-size:24px; font-weight:700; }
 #velocidade-unidade { font-size:9px; color:#a1a1aa; font-weight:600; }
+#btn-demo-dados {
+    position:fixed;
+    bottom:64px;
+    left:50%;
+    transform:translateX(-50%);
+    z-index:2500;
+    display:none;
+    min-width:210px;
+    justify-content:center;
+    align-items:center;
+    background:#7c3aed;
+    color:#fff;
+    border:none;
+    padding:11px 20px;
+    border-radius:22px;
+    font-size:12px;
+    font-weight:800;
+    cursor:pointer;
+    box-shadow:0 5px 18px rgba(0,0,0,.35);
+}
+#btn-demo-dados:disabled {
+    opacity:.55;
+    cursor:not-allowed;
+}
+
 #btn-iniciar-3d {
     position:fixed;
     bottom:118px;
@@ -748,7 +773,7 @@ border-radius:10px;padding:5px 12px;
 font:900 11px Segoe UI,sans-serif;
 box-shadow:0 4px 14px rgba(0,0,0,.45);
 letter-spacing:.3px;white-space:nowrap;
-">GPS V26 • PASSAPORTE + CAIXA-PRETA</div>
+">GPS V30 • RECUPERAÇÃO DE SENHA • DEMO COM DADOS</div>
 <div id="status-bar">⏳ Carregando...</div>
 <div id="offline-indicator">📴 OFFLINE • <span id="offline-pendencias">0 pendências</span></div>
 <div id="pacote-offline-status" style="
@@ -767,6 +792,7 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <span id="gps-partida-status">Aguardando localização...</span>
 </div>
 <button id="btn-iniciar-3d" onclick="iniciarNavegacao3D()">📍 INICIAR VIAGEM GPS</button>
+<button id="btn-demo-dados" onclick="iniciarDemonstracao()">🧪 INICIAR DEMO COM DADOS</button>
 <button id="btn-tema-mapa" title="Tema">◐</button>
 <button id="btn-centralizar" title="Centralizar">◎</button>
 <button id="btn-reportar" title="Reportar">⚑</button>
@@ -799,8 +825,33 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <div class="grupo"><label>E-mail ou login</label><input type="text" id="login-user" autocomplete="username" placeholder="seuemail@exemplo.com"></div>
 <div class="grupo"><label>Senha</label><input type="password" id="login-pass" autocomplete="current-password" placeholder="Sua senha"></div>
 <button class="btn-primary" onclick="fazerLoginMotorista()">Entrar</button>
+<button class="auth-link" onclick="mostrarEtapaAuth('recuperar')">Esqueci minha senha</button>
 <button class="auth-link" onclick="mostrarEtapaAuth('cadastro')">Primeiro acesso? Criar conta</button>
 <div id="login-status" class="status-box">Entre com seu e-mail e senha</div>
+</div>
+<div id="auth-recuperar" class="auth-step">
+<h3>Recuperar senha</h3>
+<div class="step-subtitle">Informe o e-mail cadastrado. Enviaremos um código de 6 dígitos.</div>
+<div class="grupo"><label>E-mail cadastrado</label><input type="email" id="recuperar-email" autocomplete="email" placeholder="seuemail@exemplo.com"></div>
+<button class="btn-primary" id="btn-recuperar-enviar" onclick="iniciarRecuperacaoSenha()">Enviar código</button>
+<button class="auth-back" onclick="mostrarEtapaAuth('login')">← Voltar para login</button>
+<div id="recuperar-status" class="status-box">O código expira em 10 minutos.</div>
+</div>
+<div id="auth-recuperar-codigo" class="auth-step">
+<h3>Confirmar código</h3>
+<div class="step-subtitle">Digite o código enviado para seu e-mail.</div>
+<div class="grupo"><label>Código</label><input type="text" inputmode="numeric" maxlength="6" id="recuperar-codigo" placeholder="000000"></div>
+<button class="btn-primary" onclick="verificarCodigoRecuperacao()">Confirmar código</button>
+<button class="auth-back" onclick="iniciarRecuperacaoSenha(true)">Reenviar código</button>
+<div id="recuperar-codigo-status" class="status-box">Aguardando código.</div>
+</div>
+<div id="auth-recuperar-nova" class="auth-step">
+<h3>Nova senha</h3>
+<div class="step-subtitle">Crie uma nova senha para sua conta.</div>
+<div class="grupo"><label>Nova senha</label><input type="password" id="recuperar-nova-senha" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></div>
+<div class="grupo"><label>Confirmar senha</label><input type="password" id="recuperar-confirmar-senha" autocomplete="new-password" placeholder="Repita a senha"></div>
+<button class="btn-primary" onclick="redefinirSenhaRecuperacao()">Alterar senha</button>
+<div id="recuperar-nova-status" class="status-box">A nova senha substituirá a anterior.</div>
 </div>
 <div id="auth-cadastro" class="auth-step">
 <h3>Primeiro acesso</h3>
@@ -872,6 +923,68 @@ function configurarChaveTomTom() {
 // CADASTRO / PRIMEIRO ACESSO
 // ======================================================
 let cadastroAtual = { nome: '', email: '', placa: '' };
+
+let recuperacaoSenhaAtual = { email:'', codigo:'' };
+
+async function iniciarRecuperacaoSenha(reenvio=false) {
+    const email=(reenvio ? recuperacaoSenhaAtual.email : document.getElementById('recuperar-email').value.trim().toLowerCase());
+    const status=document.getElementById(reenvio ? 'recuperar-codigo-status' : 'recuperar-status');
+    if(!email || !email.includes('@')) { status.innerHTML='❌ Informe um e-mail válido.'; return; }
+    recuperacaoSenhaAtual={email,codigo:''};
+    status.innerHTML='🔄 Enviando código...';
+    try{
+        const resp=await fetch(`${API_BASE}/senha/recuperar/iniciar`,{
+            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})
+        });
+        const data=await lerRespostaJson(resp);
+        if(!resp.ok) throw new Error(data.erro||'Não foi possível enviar o código.');
+        document.getElementById('recuperar-codigo').value='';
+        document.getElementById('recuperar-codigo-status').innerHTML='📧 Se o e-mail estiver cadastrado, o código foi enviado. Expira em 10 minutos.';
+        mostrarEtapaAuth('recuperar-codigo');
+    }catch(e){status.innerHTML='❌ '+e.message;}
+}
+
+async function verificarCodigoRecuperacao(){
+    const codigo=document.getElementById('recuperar-codigo').value.trim();
+    const status=document.getElementById('recuperar-codigo-status');
+    if(!/^\d{6}$/.test(codigo)){status.innerHTML='❌ Digite os 6 números.';return;}
+    status.innerHTML='🔄 Confirmando...';
+    try{
+        const resp=await fetch(`${API_BASE}/senha/recuperar/verificar`,{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email:recuperacaoSenhaAtual.email,codigo})
+        });
+        const data=await lerRespostaJson(resp);
+        if(!resp.ok) throw new Error(data.erro||'Código inválido.');
+        recuperacaoSenhaAtual.codigo=codigo;
+        document.getElementById('recuperar-nova-senha').value='';
+        document.getElementById('recuperar-confirmar-senha').value='';
+        mostrarEtapaAuth('recuperar-nova');
+    }catch(e){status.innerHTML='❌ '+e.message;}
+}
+
+async function redefinirSenhaRecuperacao(){
+    const senha=document.getElementById('recuperar-nova-senha').value;
+    const confirmar=document.getElementById('recuperar-confirmar-senha').value;
+    const status=document.getElementById('recuperar-nova-status');
+    if(senha.length<6){status.innerHTML='❌ A senha precisa ter pelo menos 6 caracteres.';return;}
+    if(senha!==confirmar){status.innerHTML='❌ As senhas não são iguais.';return;}
+    status.innerHTML='🔄 Alterando senha...';
+    try{
+        const resp=await fetch(`${API_BASE}/senha/recuperar/redefinir`,{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email:recuperacaoSenhaAtual.email,codigo:recuperacaoSenhaAtual.codigo,senha})
+        });
+        const data=await lerRespostaJson(resp);
+        if(!resp.ok) throw new Error(data.erro||'Não foi possível alterar a senha.');
+        document.getElementById('login-user').value=recuperacaoSenhaAtual.email;
+        document.getElementById('login-pass').value='';
+        document.getElementById('login-status').innerHTML='✅ Senha alterada. Entre com a nova senha.';
+        mostrarEtapaAuth('login');
+    }catch(e){status.innerHTML='❌ '+e.message;}
+}
+
+
 
 function mostrarEtapaAuth(etapa) {
     document.querySelectorAll('.auth-step').forEach(el => el.classList.remove('active'));
@@ -3081,8 +3194,17 @@ function ativarInterface() {
         btn.style.display = 'flex';
         btn.disabled = false;
         btn.style.opacity = '';
-        btn.innerHTML = '📍 INICIAR VIAGEM GPS';
+        btn.innerHTML = '📍 INICIAR VIAGEM GPS REAL';
         btn.onclick = iniciarNavegacao3D;
+    }
+
+    const btnDemo = document.getElementById('btn-demo-dados');
+    if (btnDemo) {
+        btnDemo.style.display = 'flex';
+        btnDemo.disabled = false;
+        btnDemo.style.opacity = '';
+        btnDemo.innerHTML = '🧪 INICIAR DEMO COM DADOS';
+        btnDemo.onclick = iniciarDemonstracao;
     }
 
     document.getElementById('btn-tema-mapa').style.display = 'flex';
@@ -4472,7 +4594,7 @@ async function iniciarNavegacao3D() {
         if (btnIniciar) {
             btnIniciar.disabled = false;
             btnIniciar.style.opacity = '';
-            btnIniciar.innerHTML = '📍 TENTAR INICIAR NOVAMENTE';
+            btnIniciar.innerHTML = '📍 TENTAR GPS REAL NOVAMENTE';
         }
 
         return;
@@ -4482,7 +4604,7 @@ async function iniciarNavegacao3D() {
         if (btnIniciar) {
             btnIniciar.disabled = false;
             btnIniciar.style.opacity = '';
-            btnIniciar.innerHTML = '📍 TENTAR INICIAR NOVAMENTE';
+            btnIniciar.innerHTML = '📍 TENTAR GPS REAL NOVAMENTE';
         }
         return;
     }
@@ -7446,8 +7568,16 @@ async function finalizarDemoDadosNoServidor() {
         demoDadosAtivo = false;
         demoInicioRegistrado = false;
 
+        // V28 - a conclusão libera o veículo no backend.
+        // Limpamos a referência local para não continuar tratando a viagem
+        // concluída como viagem ativa no app.
+        const viagemConcluidaId = viagemAtualId;
+        viagemAtualId = null;
+
         return {
             ok:true,
+            viagem_concluida_id:viagemConcluidaId,
+            veiculo_liberado:concluirData.veiculo_liberado === true,
             mensagem:'DEMO concluída e gravada.',
             pontos:gpsData.pontos || pontos.length,
             distancia_gps_km:gpsData.distancia_gps_km ?? null,
@@ -7514,6 +7644,19 @@ async function finalizarDemoMotorista() {
 
     const resultadoDemo = await finalizarDemoDadosNoServidor();
 
+    const btnDemoFinal = document.getElementById('btn-demo-dados');
+    const btnRealFinal = document.getElementById('btn-iniciar-3d');
+
+    if (btnDemoFinal) {
+        btnDemoFinal.disabled = false;
+        btnDemoFinal.style.opacity = '';
+        btnDemoFinal.innerHTML = '🧪 INICIAR DEMO COM DADOS';
+    }
+    if (btnRealFinal) {
+        btnRealFinal.disabled = false;
+        btnRealFinal.style.opacity = '';
+    }
+
     if (resultadoDemo.ok) {
         const gpsTxt = resultadoDemo.qualidade_gps
             ? `${resultadoDemo.qualidade_gps.status || '-'} ${resultadoDemo.qualidade_gps.score ?? '-'}`
@@ -7539,6 +7682,9 @@ async function finalizarDemoMotorista() {
 }
 
 async function iniciarDemonstracao() {
+    // V29 - DEMO é 100% independente do GPS real.
+    // Não chama prepararInicioRealPeloGps(), não verifica accuracy e não envia
+    // a posição física do computador/celular como ponto inicial do teste.
     if (!pathCoordinates || pathCoordinates.length < 2) {
         const statusBar =
             document.getElementById('status-bar');
@@ -7552,6 +7698,29 @@ async function iniciarDemonstracao() {
 
     if (!marcadorMotorista || !mapa) return;
 
+    const btnDemo = document.getElementById('btn-demo-dados');
+    const btnReal = document.getElementById('btn-iniciar-3d');
+
+    if (btnDemo) {
+        btnDemo.disabled = true;
+        btnDemo.style.opacity = '.6';
+        btnDemo.innerHTML = '🧪 PREPARANDO DEMO...';
+    }
+    if (btnReal) {
+        btnReal.disabled = true;
+        btnReal.style.opacity = '.45';
+    }
+
+    const partidaCard = document.getElementById('gps-partida-card');
+    if (partidaCard) partidaCard.style.display = 'none';
+
+    // Começa visualmente exatamente no primeiro ponto da rota planejada.
+    const origemDemo = pathCoordinates[0];
+    if (origemDemo && marcadorMotorista) {
+        marcadorMotorista.setLngLat([Number(origemDemo[0]), Number(origemDemo[1])]);
+        ultimaPosicaoLngLat = [Number(origemDemo[0]), Number(origemDemo[1])];
+    }
+
     const statusBarDemo = document.getElementById('status-bar');
     if (statusBarDemo) {
         statusBarDemo.innerHTML = '🧪 Preparando DEMO COM DADOS...';
@@ -7560,9 +7729,22 @@ async function iniciarDemonstracao() {
 
     const inicioDemoServidor = await iniciarDemoDadosNoServidor();
 
-    if (statusBarDemo && !inicioDemoServidor.ok) {
-        statusBarDemo.innerHTML = `⚠️ ${inicioDemoServidor.mensagem}`;
-        statusBarDemo.className = 'erro';
+    if (!inicioDemoServidor.ok) {
+        if (statusBarDemo) {
+            statusBarDemo.innerHTML = `❌ DEMO COM DADOS não iniciou: ${inicioDemoServidor.mensagem}`;
+            statusBarDemo.className = 'erro';
+        }
+
+        if (btnDemo) {
+            btnDemo.disabled = false;
+            btnDemo.style.opacity = '';
+            btnDemo.innerHTML = '🧪 TENTAR DEMO COM DADOS';
+        }
+        if (btnReal) {
+            btnReal.disabled = false;
+            btnReal.style.opacity = '';
+        }
+        return;
     }
 
     // Para GPS real para o teste não misturar posição real e posição simulada.
@@ -7600,6 +7782,7 @@ async function iniciarDemonstracao() {
     if (infoRotaDemo) infoRotaDemo.style.opacity = '0.22';
 
     modoNavegacaoAtivo = true;
+    document.body.classList.add('modo-navegacao');
     distanciaDemoPercorridaKm = 0;
     indexSimulacao = 0;
     velocidadeDemoAtual = 55;
