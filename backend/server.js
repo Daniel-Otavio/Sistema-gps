@@ -8572,6 +8572,11 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
 
         let idVeiculo = Number(req.params.id);
 
+        if (!Number.isFinite(idVeiculo)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro:'Identificador inválido.' });
+        }
+
         let veiculo = await client.query(`
             SELECT id, placa, frota, ativo
             FROM veiculos
@@ -8580,8 +8585,7 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
             FOR UPDATE
         `, [idVeiculo]);
 
-        // Compatibilidade com o dashboard antigo:
-        // versões anteriores enviavam vg.id (ID da viagem) em vez de vg.id_veiculo.
+        // Compatibilidade com dashboards antigos que enviavam o ID da viagem.
         if (!veiculo.rows.length) {
             const porViagem = await client.query(`
                 SELECT v.id, v.placa, v.frota, v.ativo
@@ -8599,79 +8603,68 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
 
         if (!veiculo.rows.length) {
             await client.query('ROLLBACK');
-            return res.status(404).json({
-                erro:'Veículo não encontrado.',
-                detalhe:'O identificador recebido não corresponde a um veículo nem a uma viagem vinculada.'
-            });
+            return res.status(404).json({ erro:'Veículo não encontrado.' });
         }
 
-        // Identifica viagens que ainda poderiam manter o veículo "ocupado" no portal.
+        /*
+         * IMPORTANTE:
+         * A tabela viagens desta base usa:
+         *   criada_em
+         * e não "criado_em".
+         *
+         * Também não existe status "aprovada" no CHECK da coluna status.
+         * A aprovação administrativa fica em status_aprovacao, enquanto
+         * status continua "planejada" até a viagem ser iniciada.
+         */
         const viagensAtivas = await client.query(`
-            SELECT id, status, origem_dados, criado_em
+            SELECT
+                id,
+                status,
+                origem_dados,
+                criada_em
             FROM viagens
             WHERE id_veiculo = $1
-              AND status IN ('planejada','aprovada','em_andamento')
-            ORDER BY criado_em DESC
+              AND status IN ('planejada','em_andamento')
+            ORDER BY criada_em DESC
+            FOR UPDATE
         `, [idVeiculo]);
 
-        // O comando de liberação é administrativo:
-        // - em andamento -> cancela, porque não deve continuar ocupando o veículo;
-        // - planejada/aprovada -> desassocia o veículo, preservando a viagem;
-        // viagens concluídas permanecem intactas.
+        /*
+         * id_veiculo é NOT NULL nesta base, então NÃO tentamos colocar NULL.
+         * Para liberar o carro, qualquer viagem ainda ativa é cancelada.
+         * Viagens já concluídas permanecem exatamente como estão.
+         */
         for (const vg of viagensAtivas.rows) {
-            if (vg.status === 'em_andamento') {
-                await client.query(`
-                    UPDATE viagens
-                    SET status = 'cancelada',
-                        atualizado_em = CURRENT_TIMESTAMP
-                    WHERE id = $1
-                `, [vg.id]);
+            await client.query(`
+                UPDATE viagens
+                SET status = 'cancelada'
+                WHERE id = $1
+            `, [vg.id]);
 
-                await registrarEventoCaixaPreta({
-                    client,
-                    idViagem: vg.id,
-                    idVeiculo: idVeiculo,
-                    idMotorista: null,
-                    tipo:'VEICULO_LIBERADO_MANUALMENTE',
-                    severidade:'atencao',
-                    dados:{
-                        motivo:req.body?.motivo || 'liberacao_manual_portal',
-                        status_anterior:vg.status,
-                        acao:'viagem_cancelada',
-                        origem_dados:vg.origem_dados || 'real'
-                    },
-                    origem:'portal_gestor'
-                });
-            } else {
-                await client.query(`
-                    UPDATE viagens
-                    SET id_veiculo = NULL,
-                        atualizado_em = CURRENT_TIMESTAMP
-                    WHERE id = $1
-                `, [vg.id]);
-
-                await registrarEventoCaixaPreta({
-                    client,
-                    idViagem: vg.id,
-                    idVeiculo: idVeiculo,
-                    idMotorista: null,
-                    tipo:'VEICULO_LIBERADO_MANUALMENTE',
-                    severidade:'info',
-                    dados:{
-                        motivo:req.body?.motivo || 'liberacao_manual_portal',
-                        status_anterior:vg.status,
-                        acao:'veiculo_desassociado_da_viagem',
-                        origem_dados:vg.origem_dados || 'real'
-                    },
-                    origem:'portal_gestor'
-                });
-            }
+            await registrarEventoCaixaPreta({
+                client,
+                idViagem: vg.id,
+                idVeiculo,
+                idMotorista: null,
+                tipo:'VEICULO_LIBERADO_MANUALMENTE',
+                severidade: vg.status === 'em_andamento' ? 'atencao' : 'info',
+                dados:{
+                    motivo:req.body?.motivo || 'liberacao_manual_portal',
+                    status_anterior:vg.status,
+                    acao:'viagem_cancelada_para_liberar_veiculo',
+                    origem_dados:vg.origem_dados || 'real'
+                },
+                origem:'portal_gestor'
+            });
         }
 
         await client.query('COMMIT');
 
         res.json({
-            mensagem:'Veículo liberado com sucesso.',
+            mensagem:
+                viagensAtivas.rows.length
+                    ? 'Veículo liberado. Viagem(ns) ativa(s) cancelada(s) e histórico preservado.'
+                    : 'Veículo já estava livre. Nenhuma viagem ativa encontrada.',
             veiculo:veiculo.rows[0],
             viagens_afetadas:viagensAtivas.rows.length,
             liberado:true
@@ -8680,7 +8673,10 @@ app.post('/veiculos/:id/liberar', autenticar, async (req, res) => {
     } catch (erro) {
         try { await client.query('ROLLBACK'); } catch (_) {}
         console.error('❌ LIBERAR VEÍCULO:', erro);
-        res.status(500).json({ erro:erro.message });
+        res.status(500).json({
+            erro:erro.message,
+            codigo:'ERRO_LIBERAR_VEICULO'
+        });
     } finally {
         client.release();
     }
