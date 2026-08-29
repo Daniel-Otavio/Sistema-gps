@@ -1007,6 +1007,11 @@ let dadosRotaOriginal = null;
 let maiorIndiceRotaPercorrido = 0;
 let ultimoIndiceRotaRenderizado = -1;
 let viagemAtualId = null;
+
+// V27 - DEMO COM DADOS: o teste visual pode alimentar backend, Caixa-preta e Passaporte.
+let demoDadosAtivo = false;
+let demoInicioRegistrado = false;
+let demoFinalizando = false;
 let viagemConcluidaAutomaticamente = false;
 
 // ======================================================
@@ -7271,7 +7276,195 @@ function atualizarHUDDemo() {
     }
 }
 
-function finalizarDemoMotorista() {
+
+function construirPontosDemoParaBackend() {
+    if (!Array.isArray(pathCoordinates) || pathCoordinates.length < 2) return [];
+
+    const alvo = Math.min(180, Math.max(30, Math.ceil(distanciaTotalRotaKm * 2.5)));
+    const passo = Math.max(1, Math.floor((pathCoordinates.length - 1) / Math.max(1, alvo - 1)));
+    const pontos = [];
+
+    for (let i = 0; i < pathCoordinates.length; i += passo) {
+        const atual = pathCoordinates[i];
+        const prox = pathCoordinates[Math.min(pathCoordinates.length - 1, i + passo)];
+
+        pontos.push({
+            lat:Number(atual[1]),
+            lon:Number(atual[0]),
+            velocidade_kmh:55,
+            precisao_m:6,
+            direcao_graus:
+                prox && (prox[0] !== atual[0] || prox[1] !== atual[1])
+                    ? calcularBearing(atual[1], atual[0], prox[1], prox[0])
+                    : ultimoBearing
+        });
+    }
+
+    const ultimo = pathCoordinates[pathCoordinates.length - 1];
+    const ultimoGerado = pontos[pontos.length - 1];
+
+    if (
+        !ultimoGerado ||
+        Math.abs(ultimoGerado.lat - Number(ultimo[1])) > 0.000001 ||
+        Math.abs(ultimoGerado.lon - Number(ultimo[0])) > 0.000001
+    ) {
+        pontos.push({
+            lat:Number(ultimo[1]),
+            lon:Number(ultimo[0]),
+            velocidade_kmh:30,
+            precisao_m:6,
+            direcao_graus:ultimoBearing
+        });
+    }
+
+    return pontos.slice(0, 220);
+}
+
+async function iniciarDemoDadosNoServidor() {
+    demoDadosAtivo = false;
+    demoInicioRegistrado = false;
+
+    if (!viagemAtualId || !tokenJWT || !navigator.onLine) {
+        return {
+            ok:false,
+            mensagem:'DEMO visual iniciado, mas sem dados: é necessário estar online e com uma viagem carregada.'
+        };
+    }
+
+    try {
+        const resp = await fetch(
+            `${API_BASE}/viagens/${viagemAtualId}/iniciar`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({ origem_dados:'demo' })
+            }
+        );
+
+        const data = await resp.json().catch(() => ({}));
+
+        if (!resp.ok) {
+            return {
+                ok:false,
+                mensagem:data.erro || `Falha ao iniciar DEMO no servidor (HTTP ${resp.status}).`
+            };
+        }
+
+        demoDadosAtivo = true;
+        demoInicioRegistrado = true;
+
+        await registrarEventoCaixaPretaApp(
+            'NAVEGACAO_DEMO_INICIADA',
+            'info',
+            { origem_dados:'demo' }
+        );
+
+        return { ok:true, mensagem:'DEMO COM DADOS ativo.' };
+
+    } catch (erro) {
+        return { ok:false, mensagem:erro?.message || 'Falha ao iniciar DEMO no servidor.' };
+    }
+}
+
+async function finalizarDemoDadosNoServidor() {
+    if (!demoDadosAtivo || !demoInicioRegistrado) {
+        return {
+            ok:false,
+            apenas_visual:true,
+            mensagem:'DEMO visual concluída; nenhum dado foi enviado.'
+        };
+    }
+
+    if (demoFinalizando) {
+        return { ok:false, mensagem:'Finalização DEMO já em andamento.' };
+    }
+
+    demoFinalizando = true;
+
+    try {
+        const pontos = construirPontosDemoParaBackend();
+
+        if (pontos.length < 2) {
+            throw new Error('Não foi possível montar o histórico GPS do DEMO.');
+        }
+
+        const gpsResp = await fetch(
+            `${API_BASE}/viagens/${viagemAtualId}/demo/pontos`,
+            {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Authorization':tokenJWT
+                },
+                body:JSON.stringify({
+                    pontos,
+                    intervalo_segundos:12
+                })
+            }
+        );
+
+        const gpsData = await gpsResp.json().catch(() => ({}));
+
+        if (!gpsResp.ok) {
+            throw new Error(gpsData.erro || `Falha ao gravar GPS DEMO (HTTP ${gpsResp.status}).`);
+        }
+
+        await registrarEventoCaixaPretaApp(
+            'DEMO_TRAJETO_FINALIZADO',
+            'info',
+            {
+                origem_dados:'demo',
+                pontos:gpsData.pontos || pontos.length,
+                distancia_gps_km:gpsData.distancia_gps_km ?? null
+            },
+            {
+                lat:pontos[pontos.length - 1].lat,
+                lng:pontos[pontos.length - 1].lon
+            }
+        );
+
+        const concluirResp = await fetch(
+            `${API_BASE}/viagens/${viagemAtualId}/concluir`,
+            {
+                method:'POST',
+                headers:{ 'Authorization':tokenJWT }
+            }
+        );
+
+        const concluirData = await concluirResp.json().catch(() => ({}));
+
+        if (!concluirResp.ok) {
+            throw new Error(
+                concluirData.erro ||
+                `GPS DEMO gravado, mas a conclusão falhou (HTTP ${concluirResp.status}).`
+            );
+        }
+
+        demoDadosAtivo = false;
+        demoInicioRegistrado = false;
+
+        return {
+            ok:true,
+            mensagem:'DEMO concluída e gravada.',
+            pontos:gpsData.pontos || pontos.length,
+            distancia_gps_km:gpsData.distancia_gps_km ?? null,
+            qualidade_gps:concluirData.qualidade_gps || null,
+            id_passaporte:concluirData.id_passaporte || null,
+            validacao_rota:concluirData.validacao_rota || null
+        };
+
+    } catch (erro) {
+        console.error('❌ Finalização DEMO COM DADOS:', erro);
+        return { ok:false, mensagem:erro?.message || 'Erro finalizando DEMO com dados.' };
+    } finally {
+        demoFinalizando = false;
+    }
+}
+
+async function finalizarDemoMotorista() {
     if (intervalSimulacao) {
         clearInterval(intervalSimulacao);
         intervalSimulacao = null;
@@ -7313,20 +7506,39 @@ function finalizarDemoMotorista() {
         document.getElementById('status-bar');
 
     statusBar.innerHTML =
-        '🏁 DEMO concluída • destino alcançado';
+        demoDadosAtivo
+            ? '🧪 Finalizando DEMO e gravando dados...'
+            : '🏁 DEMO visual concluída • destino alcançado';
 
-    statusBar.className = 'sucesso';
+    statusBar.className = demoDadosAtivo ? 'carregando' : 'sucesso';
 
-    speak('Demonstração concluída. Destino alcançado.');
+    const resultadoDemo = await finalizarDemoDadosNoServidor();
 
-    /*
-     * IMPORTANTE:
-     * O DEMO NÃO chama /concluir no servidor e NÃO envia GPS.
-     * Assim podemos testar sem alterar a viagem real.
-     */
+    if (resultadoDemo.ok) {
+        const gpsTxt = resultadoDemo.qualidade_gps
+            ? `${resultadoDemo.qualidade_gps.status || '-'} ${resultadoDemo.qualidade_gps.score ?? '-'}`
+            : '-';
+
+        statusBar.innerHTML =
+            `✅ DEMO gravada • ${resultadoDemo.pontos || 0} pontos GPS • Passaporte #${resultadoDemo.id_passaporte || '-'} • GPS ${gpsTxt}`;
+
+        statusBar.className = 'sucesso';
+
+        speak('Demonstração concluída. Dados de teste gravados e viagem finalizada.');
+
+    } else if (resultadoDemo.apenas_visual) {
+        statusBar.innerHTML = '🏁 DEMO visual concluída • sem gravação no backend';
+        statusBar.className = 'sucesso';
+        speak('Demonstração visual concluída.');
+
+    } else {
+        statusBar.innerHTML = `⚠️ DEMO terminou, mas os dados não foram finalizados: ${resultadoDemo.mensagem}`;
+        statusBar.className = 'erro';
+        speak('Demonstração terminou, mas houve erro ao gravar os dados de teste.');
+    }
 }
 
-function iniciarDemonstracao() {
+async function iniciarDemonstracao() {
     if (!pathCoordinates || pathCoordinates.length < 2) {
         const statusBar =
             document.getElementById('status-bar');
@@ -7339,6 +7551,19 @@ function iniciarDemonstracao() {
     }
 
     if (!marcadorMotorista || !mapa) return;
+
+    const statusBarDemo = document.getElementById('status-bar');
+    if (statusBarDemo) {
+        statusBarDemo.innerHTML = '🧪 Preparando DEMO COM DADOS...';
+        statusBarDemo.className = 'carregando';
+    }
+
+    const inicioDemoServidor = await iniciarDemoDadosNoServidor();
+
+    if (statusBarDemo && !inicioDemoServidor.ok) {
+        statusBarDemo.innerHTML = `⚠️ ${inicioDemoServidor.mensagem}`;
+        statusBarDemo.className = 'erro';
+    }
 
     // Para GPS real para o teste não misturar posição real e posição simulada.
     if (watchId) {
@@ -7410,7 +7635,9 @@ function iniciarDemonstracao() {
     atualizarHUDDemo();
 
     speak(
-        'Modo demonstração iniciado. Simulando navegação do motorista.'
+        demoDadosAtivo
+            ? 'Modo demonstração com dados iniciado. A viagem será gravada como teste.'
+            : 'Modo demonstração visual iniciado.'
     );
 
     let ultimaVerificacaoReporte = 0;
@@ -7451,8 +7678,8 @@ function iniciarDemonstracao() {
         );
 
         /*
-         * Continua mostrando reportes/reação visual,
-         * mas o demo não envia a posição simulada ao servidor.
+         * O movimento continua local para ficar fluido. Ao chegar ao destino,
+         * o trajeto é amostrado e enviado em lote como GPS de simulação.
          */
         if (
             navigator.onLine &&
