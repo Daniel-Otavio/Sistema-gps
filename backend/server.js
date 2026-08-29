@@ -610,6 +610,10 @@ async function criarTabelas() {
         ON caixa_preta_eventos(id_viagem, criado_em ASC)
     `);
 
+    // V23 - separa explicitamente dados reais e dados de demonstração.
+    await pool.query(`ALTER TABLE viagens ADD COLUMN IF NOT EXISTS origem_dados VARCHAR(20) DEFAULT 'real'`);
+    await pool.query(`ALTER TABLE passaporte_viagens ADD COLUMN IF NOT EXISTS origem_dados VARCHAR(20) DEFAULT 'real'`);
+
     // Histórico de GPS
     await pool.query(`
         CREATE TABLE IF NOT EXISTS historico_localizacoes (
@@ -3278,8 +3282,8 @@ async function atualizarPassaporteAposViagem({ viagem, validacao, qualidadeGps, 
         INSERT INTO passaporte_viagens
         (id_passaporte,id_viagem,id_veiculo,altura_m,peso_t,comprimento_m,largura_m,
          rota_validada,desvio_longo,max_desvio_km,ocorrencias,qualidade_gps,
-         qualidade_gps_score,distancia_gps_km,dados)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+         qualidade_gps_score,distancia_gps_km,dados,origem_dados)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16)
         ON CONFLICT (id_viagem) DO NOTHING
     `, [
         idPassaporte, viagem.id, viagem.id_veiculo,
@@ -3294,7 +3298,8 @@ async function atualizarPassaporteAposViagem({ viagem, validacao, qualidadeGps, 
         qualidadeGps.status,
         qualidadeGps.score,
         qualidadeGps.distancia_gps_km,
-        JSON.stringify(resumoOperacional || {})
+        JSON.stringify(resumoOperacional || {}),
+        viagem.origem_dados || 'real'
     ]);
 
     // Recalcula a memória a partir dos snapshots. Só viagens validadas elevam
@@ -3323,6 +3328,8 @@ async function atualizarPassaporteAposViagem({ viagem, validacao, qualidadeGps, 
                 'versao',1,
                 'taxa_validacao',a.taxa_validacao,
                 'taxa_ocorrencia',a.taxa_ocorrencia,
+                'viagens_demo',a.viagens_demo,
+                'viagens_reais',a.viagens_reais,
                 'criterio','historico_operacional_da_frota'
             ),
             atualizado_em = CURRENT_TIMESTAMP
@@ -3332,6 +3339,8 @@ async function atualizarPassaporteAposViagem({ viagem, validacao, qualidadeGps, 
                 COUNT(*) FILTER (WHERE rota_validada)::int AS validadas,
                 COUNT(*) FILTER (WHERE desvio_longo)::int AS desvios,
                 COUNT(*) FILTER (WHERE ocorrencias > 0)::int AS com_ocorrencia,
+                COUNT(*) FILTER (WHERE origem_dados = 'demo')::int AS viagens_demo,
+                COUNT(*) FILTER (WHERE COALESCE(origem_dados,'real') <> 'demo')::int AS viagens_reais,
                 MAX(altura_m) FILTER (WHERE rota_validada) AS maior_altura,
                 MAX(peso_t) FILTER (WHERE rota_validada) AS maior_peso,
                 MAX(comprimento_m) FILTER (WHERE rota_validada) AS maior_comprimento,
@@ -5633,7 +5642,11 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
             UPDATE viagens vg
             SET status = 'em_andamento',
                 id_motorista = $1,
-                saida_real = COALESCE(saida_real, CURRENT_TIMESTAMP)
+                saida_real = COALESCE(saida_real, CURRENT_TIMESTAMP),
+                origem_dados = CASE
+                    WHEN LOWER(COALESCE($3,'')) = 'demo' THEN 'demo'
+                    ELSE COALESCE(vg.origem_dados,'real')
+                END
             FROM usuarios u
             WHERE vg.id = $2
               AND u.id = $1
@@ -5642,7 +5655,7 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
               AND COALESCE(vg.liberacao_rota, 'liberada') <> 'bloqueada'
               AND COALESCE(vg.status_aprovacao, 'aguardando_aprovacao') = 'aprovada'
             RETURNING vg.*
-        `, [req.usuario.id, req.params.id]);
+        `, [req.usuario.id, req.params.id, req.body?.origem_dados || null]);
 
         if (!resultado.rows.length) return res.status(404).json({ erro: 'Viagem não encontrada para este veículo' });
 
@@ -5658,7 +5671,8 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
             statusAnterior: 'planejada',
             statusNovo: 'em_andamento',
             detalhes: {
-                versao_aprovacao: resultado.rows[0].versao_aprovacao
+                versao_aprovacao: resultado.rows[0].versao_aprovacao,
+                origem_dados: resultado.rows[0].origem_dados || 'real'
             },
             req
         });
@@ -5669,8 +5683,11 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
             idMotorista: req.usuario.id,
             tipo: 'VIAGEM_INICIADA',
             severidade: 'info',
-            dados: { versao_aprovacao: resultado.rows[0].versao_aprovacao },
-            origem: 'backend'
+            dados: {
+                versao_aprovacao: resultado.rows[0].versao_aprovacao,
+                origem_dados: resultado.rows[0].origem_dados || 'real'
+            },
+            origem: resultado.rows[0].origem_dados === 'demo' ? 'demo' : 'backend'
         });
 
         res.json({ mensagem: 'Viagem iniciada', viagem: resultado.rows[0] });
@@ -5981,7 +5998,8 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             desvio_longo: Boolean(validacao.desvioLongo),
             max_desvio_km: Number(validacao.maxDesvioKm || 0),
             ocorrencias: Number(ocorrenciasResult.rows[0]?.total || 0),
-            qualidade_gps: qualidadeGps
+            qualidade_gps: qualidadeGps,
+            origem_dados: viagem.origem_dados || 'real'
         };
 
         await client.query(`
@@ -6003,6 +6021,22 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
                 desvio_longo: validacao.desvioLongo
             },
             req
+        });
+
+        await registrarEventoCaixaPreta({
+            client,
+            idViagem: viagem.id,
+            idVeiculo: viagem.id_veiculo,
+            idMotorista: req.usuario.id,
+            tipo:'VIAGEM_CONCLUIDA',
+            severidade:'info',
+            dados:{
+                origem_dados: viagem.origem_dados || 'real',
+                rota_validada: rotaPodeSerValidada,
+                qualidade_gps: qualidadeGps.status,
+                score_gps: qualidadeGps.score
+            },
+            origem: viagem.origem_dados === 'demo' ? 'demo' : 'backend'
         });
 
         await client.query('COMMIT');
@@ -8095,6 +8129,247 @@ function distanciaKmEntrePontos(lat1, lon1, lat2, lon2) {
         Math.sin(dLon / 2) ** 2;
     return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+
+// ======================================================
+// V23 - GPS SIMULADO PARA TESTES DO DEMO
+// ======================================================
+app.post('/viagens/:id/demo/pontos', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') {
+        return res.status(403).json({ erro:'Acesso negado' });
+    }
+
+    const pontos = Array.isArray(req.body?.pontos) ? req.body.pontos : [];
+
+    if (pontos.length < 2) {
+        return res.status(400).json({ erro:'Envie ao menos 2 pontos de demonstração.' });
+    }
+
+    if (pontos.length > 600) {
+        return res.status(400).json({ erro:'Máximo de 600 pontos por demonstração.' });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const v = await client.query(`
+            SELECT vg.*
+            FROM viagens vg
+            JOIN usuarios u
+              ON u.id = $1
+             AND u.id_veiculo = vg.id_veiculo
+            WHERE vg.id = $2
+              AND vg.status = 'em_andamento'
+            LIMIT 1
+            FOR UPDATE OF vg
+        `, [req.usuario.id, req.params.id]);
+
+        if (!v.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({
+                erro:'Viagem em andamento não encontrada para este motorista.'
+            });
+        }
+
+        const viagem = v.rows[0];
+
+        if (viagem.origem_dados !== 'demo') {
+            await client.query('ROLLBACK');
+            return res.status(409).json({
+                erro:'Esta viagem não foi iniciada em modo DEMO.'
+            });
+        }
+
+        // Remove apenas pontos simulados desta viagem para permitir repetir o teste
+        // sem misturar uma execução demo anterior.
+        await client.query(`
+            DELETE FROM historico_localizacoes
+            WHERE id_viagem = $1
+              AND origem_coleta = 'simulacao'
+        `, [viagem.id]);
+
+        const agora = Date.now();
+        const intervaloSeg = Math.max(
+            5,
+            Math.min(25, Number(req.body?.intervalo_segundos || 12))
+        );
+        const inicioMs = agora - ((pontos.length - 1) * intervaloSeg * 1000);
+
+        let totalInseridos = 0;
+        let distanciaBrutaKm = 0;
+        let anterior = null;
+        let somaVel = 0;
+        let pontosVel = 0;
+        let velMax = null;
+        let somaPrecisao = 0;
+        let pontosPrecisao = 0;
+
+        for (let i = 0; i < pontos.length; i++) {
+            const p = pontos[i] || {};
+            const lat = Number(p.lat);
+            const lon = Number(p.lon);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+            const velocidade =
+                Number.isFinite(Number(p.velocidade_kmh))
+                    ? Number(p.velocidade_kmh)
+                    : 55;
+
+            const precisao =
+                Number.isFinite(Number(p.precisao_m))
+                    ? Number(p.precisao_m)
+                    : 6;
+
+            const direcao =
+                Number.isFinite(Number(p.direcao_graus))
+                    ? Number(p.direcao_graus)
+                    : null;
+
+            const ts = new Date(inicioMs + (i * intervaloSeg * 1000));
+
+            await client.query(`
+                INSERT INTO historico_localizacoes
+                (
+                    id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em,
+                    velocidade_kmh,precisao_m,direcao_graus,altitude_m,
+                    timestamp_dispositivo,origem_coleta
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL,$6,'simulacao')
+            `, [
+                req.usuario.id,
+                viagem.id_veiculo,
+                viagem.id,
+                lat,
+                lon,
+                ts,
+                velocidade,
+                precisao,
+                direcao
+            ]);
+
+            if (anterior) {
+                const d = distanciaKmEntrePontos(
+                    anterior.lat, anterior.lon, lat, lon
+                );
+                if (Number.isFinite(d) && d >= 0 && d < 5) {
+                    distanciaBrutaKm += d;
+                }
+            }
+            anterior = { lat, lon };
+
+            if (Number.isFinite(velocidade)) {
+                somaVel += velocidade;
+                pontosVel++;
+                velMax = velMax === null ? velocidade : Math.max(velMax, velocidade);
+            }
+            if (Number.isFinite(precisao)) {
+                somaPrecisao += precisao;
+                pontosPrecisao++;
+            }
+
+            totalInseridos++;
+        }
+
+        if (totalInseridos < 2) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro:'Pontos DEMO inválidos.' });
+        }
+
+        const ultimo = anterior;
+
+        await client.query(`
+            INSERT INTO localizacoes
+            (id_motorista,lat,lon,ultima_atualizacao)
+            VALUES ($1,$2,$3,CURRENT_TIMESTAMP)
+            ON CONFLICT (id_motorista)
+            DO UPDATE SET
+                lat = EXCLUDED.lat,
+                lon = EXCLUDED.lon,
+                ultima_atualizacao = CURRENT_TIMESTAMP
+        `, [req.usuario.id, ultimo.lat, ultimo.lon]);
+
+        await client.query(`
+            INSERT INTO resumo_coleta_viagem
+            (
+                id_viagem,id_veiculo,id_motorista,
+                primeiro_gps_em,ultimo_gps_em,total_pontos,
+                pontos_com_velocidade,soma_velocidade_kmh,velocidade_max_kmh,
+                soma_precisao_m,pontos_com_precisao,
+                distancia_gps_bruta_km,ultima_lat,ultima_lon,atualizado_em
+            )
+            VALUES
+            ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,CURRENT_TIMESTAMP)
+            ON CONFLICT (id_viagem)
+            DO UPDATE SET
+                primeiro_gps_em = EXCLUDED.primeiro_gps_em,
+                ultimo_gps_em = EXCLUDED.ultimo_gps_em,
+                total_pontos = EXCLUDED.total_pontos,
+                pontos_com_velocidade = EXCLUDED.pontos_com_velocidade,
+                soma_velocidade_kmh = EXCLUDED.soma_velocidade_kmh,
+                velocidade_max_kmh = EXCLUDED.velocidade_max_kmh,
+                soma_precisao_m = EXCLUDED.soma_precisao_m,
+                pontos_com_precisao = EXCLUDED.pontos_com_precisao,
+                distancia_gps_bruta_km = EXCLUDED.distancia_gps_bruta_km,
+                ultima_lat = EXCLUDED.ultima_lat,
+                ultima_lon = EXCLUDED.ultima_lon,
+                atualizado_em = CURRENT_TIMESTAMP
+        `, [
+            viagem.id,
+            viagem.id_veiculo,
+            req.usuario.id,
+            new Date(inicioMs),
+            new Date(inicioMs + ((totalInseridos - 1) * intervaloSeg * 1000)),
+            totalInseridos,
+            pontosVel,
+            somaVel,
+            velMax,
+            somaPrecisao,
+            pontosPrecisao,
+            Number(distanciaBrutaKm.toFixed(4)),
+            ultimo.lat,
+            ultimo.lon
+        ]);
+
+        await registrarEventoCaixaPreta({
+            client,
+            idViagem: viagem.id,
+            idVeiculo: viagem.id_veiculo,
+            idMotorista: req.usuario.id,
+            tipo:'DEMO_GPS_GERADO',
+            severidade:'info',
+            lat:ultimo.lat,
+            lon:ultimo.lon,
+            velocidadeKmh:velMax,
+            precisaoM:pontosPrecisao ? somaPrecisao / pontosPrecisao : null,
+            dados:{
+                pontos:totalInseridos,
+                intervalo_segundos:intervaloSeg,
+                distancia_gps_km:Number(distanciaBrutaKm.toFixed(2)),
+                origem_dados:'demo'
+            },
+            origem:'demo'
+        });
+
+        await client.query('COMMIT');
+
+        res.json({
+            mensagem:'GPS de demonstração gravado.',
+            pontos:totalInseridos,
+            distancia_gps_km:Number(distanciaBrutaKm.toFixed(2)),
+            origem_dados:'demo'
+        });
+
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        console.error('❌ DEMO GPS:', erro);
+        res.status(500).json({ erro:erro.message });
+    } finally {
+        client.release();
+    }
+});
 
 // ======================================================
 // LOCALIZAÇÕES
