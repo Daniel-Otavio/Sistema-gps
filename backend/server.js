@@ -515,6 +515,101 @@ async function criarTabelas() {
         END $$;
     `);
 
+    // ==================================================
+    // V22 - PASSAPORTE DIGITAL DE ROTAS + CAIXA-PRETA
+    // ==================================================
+    // Um passaporte representa conhecimento operacional acumulado por rota base.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS passaportes_rotas (
+            id BIGSERIAL PRIMARY KEY,
+            id_rota INTEGER NOT NULL UNIQUE,
+            total_viagens INTEGER DEFAULT 0,
+            viagens_validadas INTEGER DEFAULT 0,
+            viagens_com_desvio INTEGER DEFAULT 0,
+            viagens_com_ocorrencia INTEGER DEFAULT 0,
+            maior_altura_m DOUBLE PRECISION,
+            maior_peso_t DOUBLE PRECISION,
+            maior_comprimento_m DOUBLE PRECISION,
+            maior_largura_m DOUBLE PRECISION,
+            ultima_passagem_em TIMESTAMPTZ,
+            nivel_confianca VARCHAR(20) DEFAULT 'sem_dados',
+            score_confianca INTEGER DEFAULT 0,
+            resumo JSONB DEFAULT '{}'::jsonb,
+            atualizado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_passaporte_rota FOREIGN KEY (id_rota)
+                REFERENCES rotas(id) ON DELETE CASCADE
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_passaportes_confianca
+        ON passaportes_rotas(score_confianca DESC, atualizado_em DESC)
+    `);
+
+    // Snapshot imutável de cada viagem que alimentou o passaporte.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS passaporte_viagens (
+            id BIGSERIAL PRIMARY KEY,
+            id_passaporte BIGINT NOT NULL,
+            id_viagem INTEGER NOT NULL UNIQUE,
+            id_veiculo INTEGER,
+            altura_m DOUBLE PRECISION,
+            peso_t DOUBLE PRECISION,
+            comprimento_m DOUBLE PRECISION,
+            largura_m DOUBLE PRECISION,
+            rota_validada BOOLEAN DEFAULT FALSE,
+            desvio_longo BOOLEAN DEFAULT FALSE,
+            max_desvio_km DOUBLE PRECISION DEFAULT 0,
+            ocorrencias INTEGER DEFAULT 0,
+            qualidade_gps VARCHAR(20),
+            qualidade_gps_score INTEGER,
+            distancia_gps_km DOUBLE PRECISION,
+            concluida_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            dados JSONB DEFAULT '{}'::jsonb,
+            CONSTRAINT fk_passaporte_viagem_passaporte FOREIGN KEY (id_passaporte)
+                REFERENCES passaportes_rotas(id) ON DELETE CASCADE,
+            CONSTRAINT fk_passaporte_viagem_viagem FOREIGN KEY (id_viagem)
+                REFERENCES viagens(id) ON DELETE CASCADE,
+            CONSTRAINT fk_passaporte_viagem_veiculo FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id) ON DELETE SET NULL
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_passaporte_viagens_passaporte_data
+        ON passaporte_viagens(id_passaporte, concluida_em DESC)
+    `);
+
+    // Caixa-preta operacional: eventos relevantes da navegação e decisões do sistema.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS caixa_preta_eventos (
+            id BIGSERIAL PRIMARY KEY,
+            id_viagem INTEGER NOT NULL,
+            id_veiculo INTEGER,
+            id_motorista INTEGER,
+            tipo VARCHAR(80) NOT NULL,
+            severidade VARCHAR(20) DEFAULT 'info',
+            lat DOUBLE PRECISION,
+            lon DOUBLE PRECISION,
+            velocidade_kmh DOUBLE PRECISION,
+            precisao_m DOUBLE PRECISION,
+            dados JSONB DEFAULT '{}'::jsonb,
+            origem VARCHAR(30) DEFAULT 'backend',
+            criado_em TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_caixa_preta_viagem FOREIGN KEY (id_viagem)
+                REFERENCES viagens(id) ON DELETE CASCADE,
+            CONSTRAINT fk_caixa_preta_veiculo FOREIGN KEY (id_veiculo)
+                REFERENCES veiculos(id) ON DELETE SET NULL,
+            CONSTRAINT fk_caixa_preta_motorista FOREIGN KEY (id_motorista)
+                REFERENCES usuarios(id) ON DELETE SET NULL
+        )
+    `);
+
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_caixa_preta_viagem_data
+        ON caixa_preta_eventos(id_viagem, criado_em ASC)
+    `);
+
     // Histórico de GPS
     await pool.query(`
         CREATE TABLE IF NOT EXISTS historico_localizacoes (
@@ -3133,6 +3228,131 @@ async function carregarInfraestruturaANTT() {
 // BASE GLOBAL VALIDADA + MOTOR DE SEGURANÇA
 // ======================================================
 
+async function registrarEventoCaixaPreta({
+    client = pool,
+    idViagem,
+    idVeiculo = null,
+    idMotorista = null,
+    tipo,
+    severidade = 'info',
+    lat = null,
+    lon = null,
+    velocidadeKmh = null,
+    precisaoM = null,
+    dados = {},
+    origem = 'backend'
+}) {
+    try {
+        await client.query(`
+            INSERT INTO caixa_preta_eventos
+            (id_viagem,id_veiculo,id_motorista,tipo,severidade,lat,lon,
+             velocidade_kmh,precisao_m,dados,origem)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
+        `, [
+            idViagem, idVeiculo, idMotorista, String(tipo || 'EVENTO').slice(0,80),
+            severidade, lat, lon, velocidadeKmh, precisaoM,
+            JSON.stringify(dados || {}), origem
+        ]);
+    } catch (erro) {
+        console.error('⚠️ Falha ao registrar caixa-preta:', erro.message);
+    }
+}
+
+async function atualizarPassaporteAposViagem({ viagem, validacao, qualidadeGps, resumoOperacional, ocorrencias, client }) {
+    const veiculoR = await client.query(`
+        SELECT comprimento, largura, peso
+        FROM veiculos WHERE id = $1 LIMIT 1
+    `, [viagem.id_veiculo]);
+    const veiculo = veiculoR.rows[0] || {};
+
+    const passR = await client.query(`
+        INSERT INTO passaportes_rotas (id_rota)
+        VALUES ($1)
+        ON CONFLICT (id_rota) DO UPDATE
+        SET atualizado_em = CURRENT_TIMESTAMP
+        RETURNING id
+    `, [viagem.id_rota]);
+    const idPassaporte = passR.rows[0].id;
+
+    await client.query(`
+        INSERT INTO passaporte_viagens
+        (id_passaporte,id_viagem,id_veiculo,altura_m,peso_t,comprimento_m,largura_m,
+         rota_validada,desvio_longo,max_desvio_km,ocorrencias,qualidade_gps,
+         qualidade_gps_score,distancia_gps_km,dados)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+        ON CONFLICT (id_viagem) DO NOTHING
+    `, [
+        idPassaporte, viagem.id, viagem.id_veiculo,
+        viagem.altura_total ?? null,
+        viagem.peso_total ?? veiculo.peso ?? null,
+        veiculo.comprimento ?? null,
+        veiculo.largura ?? null,
+        !validacao.desvioLongo,
+        Boolean(validacao.desvioLongo),
+        Number(validacao.maxDesvioKm || 0),
+        Number(ocorrencias || 0),
+        qualidadeGps.status,
+        qualidadeGps.score,
+        qualidadeGps.distancia_gps_km,
+        JSON.stringify(resumoOperacional || {})
+    ]);
+
+    // Recalcula a memória a partir dos snapshots. Só viagens validadas elevam
+    // os máximos físicos confirmados; viagens problemáticas reduzem confiança.
+    await client.query(`
+        UPDATE passaportes_rotas p
+        SET
+            total_viagens = a.total,
+            viagens_validadas = a.validadas,
+            viagens_com_desvio = a.desvios,
+            viagens_com_ocorrencia = a.com_ocorrencia,
+            maior_altura_m = a.maior_altura,
+            maior_peso_t = a.maior_peso,
+            maior_comprimento_m = a.maior_comprimento,
+            maior_largura_m = a.maior_largura,
+            ultima_passagem_em = a.ultima_passagem,
+            score_confianca = a.score,
+            nivel_confianca = CASE
+                WHEN a.total < 1 THEN 'sem_dados'
+                WHEN a.score >= 90 AND a.validadas >= 10 THEN 'muito_alta'
+                WHEN a.score >= 75 AND a.validadas >= 3 THEN 'alta'
+                WHEN a.score >= 55 THEN 'media'
+                ELSE 'baixa'
+            END,
+            resumo = jsonb_build_object(
+                'versao',1,
+                'taxa_validacao',a.taxa_validacao,
+                'taxa_ocorrencia',a.taxa_ocorrencia,
+                'criterio','historico_operacional_da_frota'
+            ),
+            atualizado_em = CURRENT_TIMESTAMP
+        FROM (
+            SELECT
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE rota_validada)::int AS validadas,
+                COUNT(*) FILTER (WHERE desvio_longo)::int AS desvios,
+                COUNT(*) FILTER (WHERE ocorrencias > 0)::int AS com_ocorrencia,
+                MAX(altura_m) FILTER (WHERE rota_validada) AS maior_altura,
+                MAX(peso_t) FILTER (WHERE rota_validada) AS maior_peso,
+                MAX(comprimento_m) FILTER (WHERE rota_validada) AS maior_comprimento,
+                MAX(largura_m) FILTER (WHERE rota_validada) AS maior_largura,
+                MAX(concluida_em) AS ultima_passagem,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE rota_validada) / GREATEST(COUNT(*),1),1) AS taxa_validacao,
+                ROUND(100.0 * COUNT(*) FILTER (WHERE ocorrencias > 0) / GREATEST(COUNT(*),1),1) AS taxa_ocorrencia,
+                GREATEST(0, LEAST(100, ROUND(
+                    (100.0 * COUNT(*) FILTER (WHERE rota_validada) / GREATEST(COUNT(*),1))
+                    - (10.0 * COUNT(*) FILTER (WHERE ocorrencias > 0))
+                    - (15.0 * COUNT(*) FILTER (WHERE qualidade_gps = 'ruim'))
+                )))::int AS score
+            FROM passaporte_viagens
+            WHERE id_passaporte = $1
+        ) a
+        WHERE p.id = $1
+    `, [idPassaporte]);
+
+    return idPassaporte;
+}
+
 // ======================================================
 // APROVAÇÃO FORMAL / AUDITORIA
 // ======================================================
@@ -4013,6 +4233,32 @@ async function atualizarEstadoDesvioTempoReal({
     ) {
         novoEstado = 'normal';
         desvioInicio = null;
+
+        const idPassaporte = await atualizarPassaporteAposViagem({
+            viagem,
+            validacao,
+            qualidadeGps,
+            resumoOperacional,
+            ocorrencias: Number(ocorrenciasResult.rows[0]?.total || 0),
+            client
+        });
+
+        await registrarEventoCaixaPreta({
+            client,
+            idViagem: viagem.id,
+            idVeiculo: viagem.id_veiculo,
+            idMotorista: req.usuario.id,
+            tipo: 'VIAGEM_CONCLUIDA',
+            severidade: rotaPodeSerValidada ? 'info' : 'atencao',
+            dados: {
+                id_passaporte: idPassaporte,
+                rota_validada: rotaPodeSerValidada,
+                max_desvio_km: validacao.maxDesvioKm,
+                desvio_longo: validacao.desvioLongo,
+                qualidade_gps: qualidadeGps
+            },
+            origem: 'backend'
+        });
 
         await registrarAuditoriaViagem({
             client,
@@ -5379,126 +5625,6 @@ app.post('/viagens', autenticar, validar(schemas.novaViagem), async (req, res) =
     }
 });
 
-
-// ======================================================
-// ADMIN - RETIRAR ROTA/VIAGEM ATUAL DE UM VEÍCULO
-// Mantém o registro no histórico e remove a viagem da lista ativa.
-// ======================================================
-app.post('/viagens/:id/retirar-veiculo', autenticar, async (req, res) => {
-    if (req.usuario.tipo !== 'admin') {
-        return res.status(403).json({ erro: 'Acesso negado' });
-    }
-
-    const idViagem = Number(req.params.id);
-    if (!Number.isInteger(idViagem) || idViagem <= 0) {
-        return res.status(400).json({ erro: 'ID da viagem inválido' });
-    }
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        const atual = await client.query(`
-            SELECT
-                vg.id,
-                vg.id_rota,
-                vg.id_veiculo,
-                vg.id_motorista,
-                vg.status,
-                v.placa,
-                v.frota
-            FROM viagens vg
-            JOIN veiculos v ON v.id = vg.id_veiculo
-            WHERE vg.id = $1
-            FOR UPDATE OF vg
-        `, [idViagem]);
-
-        if (!atual.rows.length) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ erro: 'Viagem não encontrada' });
-        }
-
-        const viagem = atual.rows[0];
-
-        if (!['planejada', 'em_andamento'].includes(viagem.status)) {
-            await client.query('ROLLBACK');
-            return res.status(409).json({
-                erro: 'Esta viagem não está ativa',
-                status: viagem.status
-            });
-        }
-
-        // "Retirar a rota" significa cancelar a viagem operacional.
-        // Não apagamos a viagem nem o histórico/GPS.
-        const atualizado = await client.query(`
-            UPDATE viagens
-            SET
-                status = 'cancelada',
-                chegada_real = CASE
-                    WHEN status = 'em_andamento'
-                        THEN COALESCE(chegada_real, CURRENT_TIMESTAMP)
-                    ELSE chegada_real
-                END,
-                estado_monitoramento = 'normal'
-            WHERE id = $1
-            RETURNING *
-        `, [idViagem]);
-
-        await registrarAuditoriaViagem({
-            client,
-            idViagem,
-            usuario: req.usuario,
-            acao: 'ROTA_RETIRADA_DO_VEICULO',
-            statusAnterior: viagem.status,
-            statusNovo: 'cancelada',
-            detalhes: {
-                id_veiculo: viagem.id_veiculo,
-                id_motorista: viagem.id_motorista,
-                placa: viagem.placa,
-                frota: viagem.frota,
-                motivo: 'Rota retirada manualmente pelo gestor'
-            },
-            req
-        });
-
-        // Só volta a rota base para pendente se não existir outra viagem
-        // ativa usando a mesma rota.
-        await client.query(`
-            UPDATE rotas r
-            SET status = 'pendente'
-            WHERE r.id = $1
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM viagens vg
-                    WHERE vg.id_rota = r.id
-                      AND vg.id <> $2
-                      AND vg.status IN ('planejada', 'em_andamento')
-              )
-        `, [viagem.id_rota, idViagem]);
-
-        await client.query('COMMIT');
-
-        return res.json({
-            sucesso: true,
-            mensagem: `Rota retirada do veículo ${viagem.placa}`,
-            viagem: atualizado.rows[0]
-        });
-
-    } catch (erro) {
-        try { await client.query('ROLLBACK'); } catch (_) {}
-
-        console.error('❌ Retirar rota do veículo:', erro);
-
-        return res.status(500).json({
-            erro: 'Erro ao retirar rota do veículo',
-            detalhes: erro.message
-        });
-    } finally {
-        client.release();
-    }
-});
-
 app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
@@ -5535,6 +5661,16 @@ app.post('/viagens/:id/iniciar', autenticar, async (req, res) => {
                 versao_aprovacao: resultado.rows[0].versao_aprovacao
             },
             req
+        });
+
+        await registrarEventoCaixaPreta({
+            idViagem: resultado.rows[0].id,
+            idVeiculo: resultado.rows[0].id_veiculo,
+            idMotorista: req.usuario.id,
+            tipo: 'VIAGEM_INICIADA',
+            severidade: 'info',
+            dados: { versao_aprovacao: resultado.rows[0].versao_aprovacao },
+            origem: 'backend'
         });
 
         res.json({ mensagem: 'Viagem iniciada', viagem: resultado.rows[0] });
@@ -5884,7 +6020,8 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
             },
             consumo_real: consumoRealResultado,
             qualidade_gps: qualidadeGps,
-            resumo_operacional: resumoOperacional
+            resumo_operacional: resumoOperacional,
+            id_passaporte: idPassaporte
         });
 
     } catch (erro) {
@@ -5896,6 +6033,97 @@ app.post('/viagens/:id/concluir', autenticar, async (req, res) => {
     }
 });
 
+
+// ======================================================
+// V22 - API PASSAPORTE DIGITAL / CAIXA-PRETA
+// ======================================================
+app.post('/viagens/:id/caixa-preta/evento', autenticar, async (req, res) => {
+    const idViagem = Number(req.params.id);
+    if (!Number.isInteger(idViagem) || idViagem <= 0) return res.status(400).json({ erro:'Viagem inválida.' });
+
+    try {
+        const v = await pool.query(`
+            SELECT vg.id, vg.id_veiculo, vg.id_motorista
+            FROM viagens vg
+            LEFT JOIN usuarios u ON u.id = $1
+            WHERE vg.id = $2
+              AND ($3 = 'admin' OR u.id_veiculo = vg.id_veiculo)
+            LIMIT 1
+        `, [req.usuario.id, idViagem, req.usuario.tipo]);
+        if (!v.rows.length) return res.status(404).json({ erro:'Viagem não encontrada.' });
+
+        const tipo = String(req.body?.tipo || '').trim().toUpperCase();
+        if (!tipo || tipo.length > 80) return res.status(400).json({ erro:'Tipo de evento inválido.' });
+        const severidadePermitida = ['info','atencao','alta','critica'];
+        const severidade = severidadePermitida.includes(req.body?.severidade) ? req.body.severidade : 'info';
+
+        await registrarEventoCaixaPreta({
+            idViagem,
+            idVeiculo:v.rows[0].id_veiculo,
+            idMotorista:req.usuario.tipo === 'motorista' ? req.usuario.id : v.rows[0].id_motorista,
+            tipo,
+            severidade,
+            lat:Number.isFinite(Number(req.body?.lat)) ? Number(req.body.lat) : null,
+            lon:Number.isFinite(Number(req.body?.lon)) ? Number(req.body.lon) : null,
+            velocidadeKmh:Number.isFinite(Number(req.body?.velocidade_kmh)) ? Number(req.body.velocidade_kmh) : null,
+            precisaoM:Number.isFinite(Number(req.body?.precisao_m)) ? Number(req.body.precisao_m) : null,
+            dados:req.body?.dados && typeof req.body.dados === 'object' ? req.body.dados : {},
+            origem:req.usuario.tipo === 'motorista' ? 'app_motorista' : 'dashboard'
+        });
+        res.json({ ok:true });
+    } catch (erro) {
+        res.status(500).json({ erro:erro.message });
+    }
+});
+
+app.get('/viagens/:id/caixa-preta', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    try {
+        const r = await pool.query(`
+            SELECT c.*, v.placa, v.frota, u.nome AS motorista
+            FROM caixa_preta_eventos c
+            LEFT JOIN veiculos v ON v.id = c.id_veiculo
+            LEFT JOIN usuarios u ON u.id = c.id_motorista
+            WHERE c.id_viagem = $1
+            ORDER BY c.criado_em ASC, c.id ASC
+        `, [req.params.id]);
+        res.json(r.rows);
+    } catch (erro) { res.status(500).json({ erro:erro.message }); }
+});
+
+app.get('/passaportes', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    try {
+        const r = await pool.query(`
+            SELECT p.*, r.nome AS rota_nome, r.origem, r.destino
+            FROM passaportes_rotas p
+            JOIN rotas r ON r.id = p.id_rota
+            ORDER BY p.ultima_passagem_em DESC NULLS LAST, p.atualizado_em DESC
+        `);
+        res.json(r.rows);
+    } catch (erro) { res.status(500).json({ erro:erro.message }); }
+});
+
+app.get('/passaportes/:id', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    try {
+        const p = await pool.query(`
+            SELECT p.*, r.nome AS rota_nome, r.origem, r.destino
+            FROM passaportes_rotas p JOIN rotas r ON r.id = p.id_rota
+            WHERE p.id = $1 LIMIT 1
+        `, [req.params.id]);
+        if (!p.rows.length) return res.status(404).json({ erro:'Passaporte não encontrado.' });
+        const viagens = await pool.query(`
+            SELECT pv.*, v.placa, v.frota
+            FROM passaporte_viagens pv
+            LEFT JOIN veiculos v ON v.id = pv.id_veiculo
+            WHERE pv.id_passaporte = $1
+            ORDER BY pv.concluida_em DESC
+            LIMIT 100
+        `, [req.params.id]);
+        res.json({ passaporte:p.rows[0], viagens:viagens.rows });
+    } catch (erro) { res.status(500).json({ erro:erro.message }); }
+});
 
 // ======================================================
 // APROVAÇÃO FORMAL DE VIAGENS
