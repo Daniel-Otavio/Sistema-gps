@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Dashboard Gestão - GPS Caminhão • V25 V22</title>
+<title>Dashboard Gestão - GPS Caminhão</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
@@ -42,8 +42,6 @@ body { font-family:'Segoe UI',sans-serif; overflow:hidden; background:#0f0f1a; c
 .btn-success:hover { background:#00a381; }
 .btn-secondary { background:#6c757d; }
 .btn-danger { background:#d63031; }
-.btn-retirar-rota { background:#b91c1c !important; color:#fff !important; }
-.btn-retirar-rota:hover { background:#991b1b !important; }
 .btn-tomtom { background:#33ccff; color:#000; }
 .status-box { margin-top:16px; padding:10px; background:#0a0a12; border-radius:8px; font-size:13px; text-align:center; border-left:3px solid #ff6600; min-height:40px; }
 .status-box.sucesso { border-left-color:#00b894; color:#00b894; }
@@ -377,6 +375,8 @@ body.verificacao-mapa #verificacao-lista-wrap {
 .btn-bloquear-viagem { background:#dc2626;color:#fff; }
 .btn-reabrir-viagem { background:#7c3aed;color:#fff; }
 .btn-auditoria-viagem { background:#334155;color:#fff; }
+.btn-retirar-rota { background:#b91c1c;color:#fff; }
+.btn-retirar-rota:hover { background:#991b1b; }
 .audit-item {
     position:relative;
     border-left:3px solid #475569;
@@ -422,9 +422,6 @@ body.verificacao-mapa #verificacao-lista-wrap {
     background:rgba(59,130,246,.15);
     color:#93c5fd;
 }
-
-.btn-liberar-veiculo{background:#7c3aed;border:1px solid #8b5cf6;color:#fff;font-weight:900;}
-.btn-liberar-veiculo:hover{filter:brightness(1.08);}
 </style>
 <!-- V21: coleta de produção em background; sem uso inteligente nesta versão. -->
 </head>
@@ -473,15 +470,8 @@ body.verificacao-mapa #verificacao-lista-wrap {
 
 <!-- ABA ROTAS -->
 <div id="tab-rotas" class="tab-content active">
-<div class="grupo">
-<label>🚘 Tipo de Veículo</label>
-<select id="tipo-veiculo-rota" onchange="atualizarTipoVeiculoRota()">
-<option value="carro">🚗 Carro</option>
-<option value="caminhao" selected>🚛 Caminhão</option>
-</select>
-<div id="info-tipo-veiculo-rota" style="font-size:10px;color:#888;margin-top:5px;">Caminhão: considera perfil pesado e restrições dimensionais.</div>
-</div>
 <div class="grupo"><label>⚙️ Preferência</label><select id="preferencia-rota"><option value="fastest">Mais Rápida</option><option value="shortest">Mais Curta</option></select></div>
+<div class="grupo"><label>🚘 Tipo de Veículo</label><select id="tipo-veiculo-rota" onchange="atualizarTipoVeiculoRota()"><option value="carro">🚗 Carro</option><option value="caminhao" selected>🚛 Caminhão</option></select><div id="info-tipo-veiculo-rota" style="font-size:10px;color:#888;margin-top:5px;">Caminhão: considera perfil pesado e restrições dimensionais.</div></div>
 <hr style="border-color:#2a2a3e;margin:16px 0;">
 <div class="grupo"><label>📌 Nome da Rota</label><input type="text" id="nome-rota" value="Rota Teste 01"></div>
 <div class="grupo"><label>📍 Origem</label><input type="text" id="origem" value="Linhares, ES"></div>
@@ -725,15 +715,6 @@ Selecione o caminhão para carregar suas medidas e peso cadastrados.
     </div>
 
     <div id="lista-auditoria" style="margin-top:12px;"></div>
-
-    <hr style="border-color:#2a2a3e;margin:18px 0;">
-    <h2 style="font-size:18px;margin-bottom:5px;">🛡️ Passaporte Digital de Rotas</h2>
-    <p style="color:#aaa;font-size:11px;margin-bottom:10px;">
-        Memória operacional criada automaticamente pelas viagens concluídas da frota.
-    </p>
-    <button class="btn-primary" onclick="carregarPassaportesDigitais()">🛡️ Carregar passaportes</button>
-    <div id="status-passaportes" class="status-box">Aguardando consulta.</div>
-    <div id="lista-passaportes" style="margin-top:12px;"></div>
 </div>
 
 <!-- ABA REPORTES -->
@@ -1470,8 +1451,10 @@ function renderizarRotasBiblioteca() {
         const dur = seg ? Number(seg.duration) : 0;
         const h = Math.floor(dur / 3600);
         const m = Math.floor((dur % 3600) / 60);
+        const tipo = r.restricoes?.altura_referencia ? 'caminhao' : 'carro';
+        const tipoLabel = tipo === 'carro' ? '🚗 Carro' : '🚛 Caminhão';
         return `<div class="rota-card">
-            <strong>🗺️ ${r.nome || 'Rota'}</strong>
+            <strong>🗺️ ${r.nome || 'Rota'}</strong> <span style="font-size:9px;background:#202032;padding:3px 7px;border-radius:10px;color:#ddd;">${tipoLabel}</span>
             <small>${r.origem} → ${r.destino}<br>🛣️ ${km} km • ⏱️ ${h}h ${m}min</small>
             <button class="btn-primary btn-secondary" style="padding:7px;font-size:11px;" onclick="visualizarRotaSalva(${r.id})">👁 Visualizar</button>
         </div>`;
@@ -1736,8 +1719,8 @@ async function carregarAlertas() {
         document.getElementById('alert-count').textContent = a.length;
         const lista = document.getElementById('lista-alertas');
         lista.innerHTML = a.length ? a.slice(0,8).map(x => `
-            <div class="alert-item ${x.severidade === 'alta' ? 'alta' : ''}">
-                <strong>${x.placa}${x.frota ? ` • ${x.frota}` : ''}</strong><br>${x.mensagem}
+            <div class="alert-item ${x.severidade === 'alta' || x.tipo === 'guardiao' ? 'alta' : ''}">
+                <strong>${x.tipo === 'guardiao' ? '🛡️ ' : ''}${x.placa}${x.frota ? ` • ${x.frota}` : ''}</strong><br>${x.mensagem}
             </div>`).join('') : '<div style="color:#888;font-size:11px;">Sem alertas.</div>';
     } catch(e) {}
 }
@@ -1861,11 +1844,6 @@ function iniciarMonitoramentoViagens() {
     }, 15000);
 }
 
-function formatarDataHora(valor) {
-    if (!valor) return '-';
-    const d = new Date(valor);
-    return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
-}
 
 async function retirarRotaDoVeiculo(idViagem, placa) {
     if (!tokenJWT) return;
@@ -1878,7 +1856,6 @@ async function retirarRotaDoVeiculo(idViagem, placa) {
     if (!confirmar) return;
 
     const status = document.getElementById('status-monitoramento');
-
     if (status) {
         status.className = 'status-box carregando';
         status.innerHTML = '🔄 Retirando rota do veículo...';
@@ -1900,11 +1877,12 @@ async function retirarRotaDoVeiculo(idViagem, placa) {
         try { data = await resp.json(); } catch (_) {}
 
         if (!resp.ok) {
-            throw new Error(
-                data.erro ||
-                data.message ||
-                'Não foi possível retirar a rota do veículo.'
-            );
+            if (resp.status === 404) {
+                throw new Error(
+                    'O dashboard já está pronto, mas o servidor ainda não possui a rota POST /viagens/:id/retirar-veiculo.'
+                );
+            }
+            throw new Error(data.erro || data.message || 'Não foi possível retirar a rota do veículo.');
         }
 
         if (status) {
@@ -1917,12 +1895,17 @@ async function retirarRotaDoVeiculo(idViagem, placa) {
 
     } catch (erro) {
         console.error('Erro ao retirar rota do veículo:', erro);
-
         if (status) {
             status.className = 'status-box erro';
             status.innerHTML = `❌ ${erro.message}`;
         }
     }
+}
+
+function formatarDataHora(valor) {
+    if (!valor) return '-';
+    const d = new Date(valor);
+    return isNaN(d.getTime()) ? '-' : d.toLocaleString('pt-BR');
 }
 
 async function carregarMonitoramento(centralizar = false) {
@@ -2192,7 +2175,6 @@ async function carregarMonitoramento(centralizar = false) {
                             onclick="event.stopPropagation();retirarRotaDoVeiculo(${Number(v.id)},'${String(v.placa || '').replace(/'/g,'')}')">
                             🗑️ Retirar rota
                         </button>
-<button class="btn-primary btn-liberar-veiculo" onclick="liberarVeiculoPortal(${v.id})">🔓 Liberar veículo</button>
 
                         <button
                             onclick="event.stopPropagation();selecionarViagemScanner(${Number(v.id)});"
@@ -3949,7 +3931,6 @@ function atualizarTipoVeiculoRota() {
     const tipo = document.getElementById('tipo-veiculo-rota')?.value || 'caminhao';
     const info = document.getElementById('info-tipo-veiculo-rota');
     if (!info) return;
-
     info.textContent = tipo === 'carro'
         ? 'Carro: usa rota normal, sem altura, largura, peso e comprimento de caminhão.'
         : 'Caminhão: considera perfil pesado e restrições dimensionais.';
@@ -4177,10 +4158,9 @@ async function salvarRota() {
                 origem: document.getElementById('origem').value,
                 destino: document.getElementById('destino').value,
                 restricoes: {
-                    altura_referencia:
-                        (document.getElementById('tipo-veiculo-rota')?.value || 'caminhao') === 'caminhao'
-                            ? 4.2
-                            : null
+                    // Mantém compatibilidade com o backend atual:
+                    // caminhão = altura_referencia; carro = null.
+                    altura_referencia: (document.getElementById('tipo-veiculo-rota')?.value || 'caminhao') === 'caminhao' ? 4.2 : null
                 },
                 dados_geojson: geoJsonCalculado
             })
@@ -4241,136 +4221,6 @@ document.addEventListener('keydown', e => {
         fazerLogin();
     }
 });
-
-
-// ======================================================
-// V22 - PASSAPORTE DIGITAL + CAIXA-PRETA
-// ======================================================
-async function carregarPassaportesDigitais() {
-    const status = document.getElementById('status-passaportes');
-    const lista = document.getElementById('lista-passaportes');
-    if (!tokenJWT || !status || !lista) return;
-    status.innerHTML = '🔄 Carregando memória operacional...';
-    status.className = 'status-box carregando';
-    try {
-        const resp = await fetch(`${API_BASE}/passaportes`, { headers:{ 'Authorization':tokenJWT } });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar passaportes.');
-        status.innerHTML = `✅ ${data.length} passaporte(s) encontrado(s)`;
-        status.className = 'status-box sucesso';
-        lista.innerHTML = data.length ? data.map(p => {
-            const score = Number(p.score_confianca || 0);
-            const cor = score >= 75 ? '#22c55e' : score >= 55 ? '#f59e0b' : '#ef4444';
-            return `<div class="rota-card" style="border-left:4px solid ${cor}">
-                <strong>🛡️ ${p.rota_nome || `Rota ${p.id_rota}`}</strong>
-                <small>${p.origem || '-'} → ${p.destino || '-'}</small>
-                <div style="margin-top:7px;font-size:11px;line-height:1.65;color:#d4d4d8;">
-                    Confiança: <strong style="color:${cor}">${score}/100 • ${p.nivel_confianca || 'sem_dados'}</strong><br>
-                    ✅ ${p.viagens_validadas || 0}/${p.total_viagens || 0} viagens validadas
-                    • ⚠️ ${p.viagens_com_ocorrencia || 0} com ocorrência
-                    • 🧪 ${p.resumo?.viagens_demo || 0} DEMO<br>
-                    📏 Máx. confirmado: altura ${p.maior_altura_m ?? '-'} m
-                    • peso ${p.maior_peso_t ?? '-'} t
-                    • comp. ${p.maior_comprimento_m ?? '-'} m
-                    • largura ${p.maior_largura_m ?? '-'} m
-                </div>
-                <button class="btn-primary" style="margin-top:8px;padding:8px;" onclick="abrirPassaporteDigital(${p.id})">🔎 Ver viagens do passaporte</button>
-            </div>`;
-        }).join('') : '<div class="rota-card">Nenhum passaporte ainda. Ele será criado automaticamente quando uma viagem for concluída.</div>';
-    } catch (erro) {
-        status.innerHTML = `❌ ${erro.message}`;
-        status.className = 'status-box erro';
-    }
-}
-
-async function abrirPassaporteDigital(id) {
-    try {
-        const resp = await fetch(`${API_BASE}/passaportes/${id}`, { headers:{ 'Authorization':tokenJWT } });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.erro || 'Erro ao abrir passaporte.');
-        const p = data.passaporte;
-        const linhas = (data.viagens || []).slice(0,20).map(v =>
-            `#${v.id_viagem} • ${v.placa || '-'} • ${v.origem_dados === 'demo' ? '🧪 DEMO' : '🚛 REAL'} • ${v.rota_validada ? 'VALIDADA' : 'REVISÃO'} • GPS ${v.qualidade_gps || '-'} • ${v.ocorrencias || 0} ocorrência(s)`
-        ).join('\n');
-        alert(`PASSAPORTE DIGITAL\n\n${p.rota_nome || ''}\n${p.origem || ''} → ${p.destino || ''}\n\nConfiança: ${p.score_confianca}/100 (${p.nivel_confianca})\nViagens: ${p.total_viagens}\nValidadas: ${p.viagens_validadas}\n\nÚLTIMAS VIAGENS\n${linhas || 'Nenhuma viagem.'}`);
-    } catch (erro) { alert(`❌ ${erro.message}`); }
-}
-
-async function abrirCaixaPretaViagem(idViagem) {
-    try {
-        const resp = await fetch(`${API_BASE}/viagens/${idViagem}/caixa-preta`, { headers:{ 'Authorization':tokenJWT } });
-        const data = await resp.json();
-        if (!resp.ok) throw new Error(data.erro || 'Erro ao carregar caixa-preta.');
-        const linhas = data.slice(-40).map(e => {
-            const hora = new Date(e.criado_em).toLocaleString('pt-BR');
-            return `${hora} • ${e.severidade?.toUpperCase() || 'INFO'} • ${e.tipo}`;
-        }).join('\n');
-        alert(`CAIXA-PRETA • VIAGEM #${idViagem}\n\n${linhas || 'Nenhum evento registrado.'}`);
-    } catch (erro) { alert(`❌ ${erro.message}`); }
-}
-
-async function liberarVeiculoPortal(idVeiculo) {
-    if (!idVeiculo || !tokenJWT) {
-        alert('Veículo inválido ou sessão expirada.');
-        return;
-    }
-
-    const confirmar = confirm(
-        'Liberar este veículo para receber outra viagem?\n\n' +
-        'A viagem concluída e todo o histórico serão preservados. ' +
-        'Se houver viagem em andamento, ela será cancelada. ' +
-        'Se houver viagem planejada/aprovada, o veículo será desassociado.'
-    );
-
-    if (!confirmar) return;
-
-    try {
-        const resp = await fetch(`${API_BASE}/veiculos/${idVeiculo}/liberar`, {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json',
-                'Authorization':tokenJWT
-            },
-            body:JSON.stringify({
-                motivo:'liberacao_manual_portal'
-            })
-        });
-
-        const data = await resp.json().catch(() => ({}));
-
-        if (!resp.ok) {
-            throw new Error(
-                data.erro ||
-                data.detalhe ||
-                `Erro HTTP ${resp.status}`
-            );
-        }
-
-        alert(
-            `✅ Veículo liberado.\n` +
-            `Viagens afetadas: ${data.viagens_afetadas || 0}`
-        );
-
-        // Recarrega os pontos/cards do monitoramento.
-        if (typeof carregarFrota === 'function') {
-            await carregarFrota();
-        }
-        if (typeof carregarMonitoramento === 'function') {
-            await carregarMonitoramento();
-        }
-        if (typeof carregarViagens === 'function') {
-            await carregarViagens();
-        }
-        if (typeof carregarResumoMonitoramento === 'function') {
-            await carregarResumoMonitoramento();
-        }
-
-    } catch (erro) {
-        console.error('❌ Liberar veículo:', erro);
-        alert(`❌ Não foi possível liberar o veículo: ${erro.message}`);
-    }
-}
-
 </script>
 </body>
 </html>
