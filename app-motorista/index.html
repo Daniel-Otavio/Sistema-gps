@@ -252,31 +252,6 @@ body.modo-navegacao #btn-tema-mapa { display:none !important; }
 #velocimetro { position:fixed; bottom:130px; left:20px; z-index:2000; width:70px; height:70px; background:rgba(13,13,18,0.85); backdrop-filter:blur(5px); border-radius:50%; border:3px solid #3b82f6; color:#fff; display:none; flex-direction:column; align-items:center; justify-content:center; }
 #velocidade-valor { font-size:24px; font-weight:700; }
 #velocidade-unidade { font-size:9px; color:#a1a1aa; font-weight:600; }
-#btn-demo-dados {
-    position:fixed;
-    bottom:64px;
-    left:50%;
-    transform:translateX(-50%);
-    z-index:2500;
-    display:none;
-    min-width:210px;
-    justify-content:center;
-    align-items:center;
-    background:#7c3aed;
-    color:#fff;
-    border:none;
-    padding:11px 20px;
-    border-radius:22px;
-    font-size:12px;
-    font-weight:800;
-    cursor:pointer;
-    box-shadow:0 5px 18px rgba(0,0,0,.35);
-}
-#btn-demo-dados:disabled {
-    opacity:.55;
-    cursor:not-allowed;
-}
-
 #btn-iniciar-3d {
     position:fixed;
     bottom:118px;
@@ -694,7 +669,7 @@ body.modo-navegacao #btn-tomtom-config {
 </style>
 
 <style>
-/* ===== IDENTIFICAÇÃO DE BUILD V25 ===== */
+/* ===== IDENTIFICAÇÃO DE BUILD V22.2 GPS REAL ===== */
 #build-demo-badge,
 body.modo-navegacao #build-demo-badge {
     opacity:1 !important;
@@ -705,7 +680,7 @@ body.modo-navegacao #build-demo-badge {
 
 
 <style>
-/* ===== GPS V25 - TESTE REAL ===== */
+/* ===== GPS V22.2 - TESTE REAL ===== */
 body.modo-navegacao #gps-partida-card {
     display:none !important;
 }
@@ -773,7 +748,7 @@ border-radius:10px;padding:5px 12px;
 font:900 11px Segoe UI,sans-serif;
 box-shadow:0 4px 14px rgba(0,0,0,.45);
 letter-spacing:.3px;white-space:nowrap;
-">GPS V30 • RECUPERAÇÃO DE SENHA • DEMO COM DADOS</div>
+">GPS V22.2 • GPS REAL</div>
 <div id="status-bar">⏳ Carregando...</div>
 <div id="offline-indicator">📴 OFFLINE • <span id="offline-pendencias">0 pendências</span></div>
 <div id="pacote-offline-status" style="
@@ -792,7 +767,6 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <span id="gps-partida-status">Aguardando localização...</span>
 </div>
 <button id="btn-iniciar-3d" onclick="iniciarNavegacao3D()">📍 INICIAR VIAGEM GPS</button>
-<button id="btn-demo-dados" onclick="iniciarDemonstracao()">🧪 INICIAR DEMO COM DADOS</button>
 <button id="btn-tema-mapa" title="Tema">◐</button>
 <button id="btn-centralizar" title="Centralizar">◎</button>
 <button id="btn-reportar" title="Reportar">⚑</button>
@@ -825,33 +799,8 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <div class="grupo"><label>E-mail ou login</label><input type="text" id="login-user" autocomplete="username" placeholder="seuemail@exemplo.com"></div>
 <div class="grupo"><label>Senha</label><input type="password" id="login-pass" autocomplete="current-password" placeholder="Sua senha"></div>
 <button class="btn-primary" onclick="fazerLoginMotorista()">Entrar</button>
-<button class="auth-link" onclick="mostrarEtapaAuth('recuperar')">Esqueci minha senha</button>
 <button class="auth-link" onclick="mostrarEtapaAuth('cadastro')">Primeiro acesso? Criar conta</button>
 <div id="login-status" class="status-box">Entre com seu e-mail e senha</div>
-</div>
-<div id="auth-recuperar" class="auth-step">
-<h3>Recuperar senha</h3>
-<div class="step-subtitle">Informe o e-mail cadastrado. Enviaremos um código de 6 dígitos.</div>
-<div class="grupo"><label>E-mail cadastrado</label><input type="email" id="recuperar-email" autocomplete="email" placeholder="seuemail@exemplo.com"></div>
-<button class="btn-primary" id="btn-recuperar-enviar" onclick="iniciarRecuperacaoSenha()">Enviar código</button>
-<button class="auth-back" onclick="mostrarEtapaAuth('login')">← Voltar para login</button>
-<div id="recuperar-status" class="status-box">O código expira em 10 minutos.</div>
-</div>
-<div id="auth-recuperar-codigo" class="auth-step">
-<h3>Confirmar código</h3>
-<div class="step-subtitle">Digite o código enviado para seu e-mail.</div>
-<div class="grupo"><label>Código</label><input type="text" inputmode="numeric" maxlength="6" id="recuperar-codigo" placeholder="000000"></div>
-<button class="btn-primary" onclick="verificarCodigoRecuperacao()">Confirmar código</button>
-<button class="auth-back" onclick="iniciarRecuperacaoSenha(true)">Reenviar código</button>
-<div id="recuperar-codigo-status" class="status-box">Aguardando código.</div>
-</div>
-<div id="auth-recuperar-nova" class="auth-step">
-<h3>Nova senha</h3>
-<div class="step-subtitle">Crie uma nova senha para sua conta.</div>
-<div class="grupo"><label>Nova senha</label><input type="password" id="recuperar-nova-senha" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></div>
-<div class="grupo"><label>Confirmar senha</label><input type="password" id="recuperar-confirmar-senha" autocomplete="new-password" placeholder="Repita a senha"></div>
-<button class="btn-primary" onclick="redefinirSenhaRecuperacao()">Alterar senha</button>
-<div id="recuperar-nova-status" class="status-box">A nova senha substituirá a anterior.</div>
 </div>
 <div id="auth-cadastro" class="auth-step">
 <h3>Primeiro acesso</h3>
@@ -890,7 +839,7 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 </div>
 </div>
 <script>
-console.log('%c GPS V26 • PASSAPORTE + CAIXA-PRETA ', 'background:#dc2626;color:white;font-weight:bold;padding:4px 8px');
+console.log('%c GPS V22.2 • GPS REAL ', 'background:#dc2626;color:white;font-weight:bold;padding:4px 8px');
 // ======================================================
 // API BASE – FIXO PARA RENDER
 // ======================================================
@@ -923,68 +872,6 @@ function configurarChaveTomTom() {
 // CADASTRO / PRIMEIRO ACESSO
 // ======================================================
 let cadastroAtual = { nome: '', email: '', placa: '' };
-
-let recuperacaoSenhaAtual = { email:'', codigo:'' };
-
-async function iniciarRecuperacaoSenha(reenvio=false) {
-    const email=(reenvio ? recuperacaoSenhaAtual.email : document.getElementById('recuperar-email').value.trim().toLowerCase());
-    const status=document.getElementById(reenvio ? 'recuperar-codigo-status' : 'recuperar-status');
-    if(!email || !email.includes('@')) { status.innerHTML='❌ Informe um e-mail válido.'; return; }
-    recuperacaoSenhaAtual={email,codigo:''};
-    status.innerHTML='🔄 Enviando código...';
-    try{
-        const resp=await fetch(`${API_BASE}/senha/recuperar/iniciar`,{
-            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})
-        });
-        const data=await lerRespostaJson(resp);
-        if(!resp.ok) throw new Error(data.erro||'Não foi possível enviar o código.');
-        document.getElementById('recuperar-codigo').value='';
-        document.getElementById('recuperar-codigo-status').innerHTML='📧 Se o e-mail estiver cadastrado, o código foi enviado. Expira em 10 minutos.';
-        mostrarEtapaAuth('recuperar-codigo');
-    }catch(e){status.innerHTML='❌ '+e.message;}
-}
-
-async function verificarCodigoRecuperacao(){
-    const codigo=document.getElementById('recuperar-codigo').value.trim();
-    const status=document.getElementById('recuperar-codigo-status');
-    if(!/^\d{6}$/.test(codigo)){status.innerHTML='❌ Digite os 6 números.';return;}
-    status.innerHTML='🔄 Confirmando...';
-    try{
-        const resp=await fetch(`${API_BASE}/senha/recuperar/verificar`,{
-            method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({email:recuperacaoSenhaAtual.email,codigo})
-        });
-        const data=await lerRespostaJson(resp);
-        if(!resp.ok) throw new Error(data.erro||'Código inválido.');
-        recuperacaoSenhaAtual.codigo=codigo;
-        document.getElementById('recuperar-nova-senha').value='';
-        document.getElementById('recuperar-confirmar-senha').value='';
-        mostrarEtapaAuth('recuperar-nova');
-    }catch(e){status.innerHTML='❌ '+e.message;}
-}
-
-async function redefinirSenhaRecuperacao(){
-    const senha=document.getElementById('recuperar-nova-senha').value;
-    const confirmar=document.getElementById('recuperar-confirmar-senha').value;
-    const status=document.getElementById('recuperar-nova-status');
-    if(senha.length<6){status.innerHTML='❌ A senha precisa ter pelo menos 6 caracteres.';return;}
-    if(senha!==confirmar){status.innerHTML='❌ As senhas não são iguais.';return;}
-    status.innerHTML='🔄 Alterando senha...';
-    try{
-        const resp=await fetch(`${API_BASE}/senha/recuperar/redefinir`,{
-            method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({email:recuperacaoSenhaAtual.email,codigo:recuperacaoSenhaAtual.codigo,senha})
-        });
-        const data=await lerRespostaJson(resp);
-        if(!resp.ok) throw new Error(data.erro||'Não foi possível alterar a senha.');
-        document.getElementById('login-user').value=recuperacaoSenhaAtual.email;
-        document.getElementById('login-pass').value='';
-        document.getElementById('login-status').innerHTML='✅ Senha alterada. Entre com a nova senha.';
-        mostrarEtapaAuth('login');
-    }catch(e){status.innerHTML='❌ '+e.message;}
-}
-
-
 
 function mostrarEtapaAuth(etapa) {
     document.querySelectorAll('.auth-step').forEach(el => el.classList.remove('active'));
@@ -1120,11 +1007,6 @@ let dadosRotaOriginal = null;
 let maiorIndiceRotaPercorrido = 0;
 let ultimoIndiceRotaRenderizado = -1;
 let viagemAtualId = null;
-
-// V27 - DEMO COM DADOS: o teste visual pode alimentar backend, Caixa-preta e Passaporte.
-let demoDadosAtivo = false;
-let demoInicioRegistrado = false;
-let demoFinalizando = false;
 let viagemConcluidaAutomaticamente = false;
 
 // ======================================================
@@ -1723,31 +1605,6 @@ function encontrarReentrada(idxIncidente, distanciaDesejadaKm = 1.5) {
     }
     return pathCoordinates.length - 1;
 }
-async function registrarEventoCaixaPretaApp(tipo, severidade = 'info', dados = {}, posicao = null) {
-    if (!viagemAtualId || !tokenJWT || !navigator.onLine) return;
-    try {
-        const pos = posicao || (marcadorMotorista ? marcadorMotorista.getLngLat() : null);
-        await fetch(`${API_BASE}/viagens/${viagemAtualId}/caixa-preta/evento`, {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json',
-                'Authorization':tokenJWT
-            },
-            body:JSON.stringify({
-                tipo,
-                severidade,
-                lat:pos?.lat ?? null,
-                lon:pos?.lng ?? null,
-                velocidade_kmh:Number.isFinite(Number(velocidadeAtual)) ? Number(velocidadeAtual) : null,
-                dados:dados || {}
-            })
-        });
-    } catch (erro) {
-        // Caixa-preta nunca pode interromper a navegação.
-        console.warn('Caixa-preta offline/indisponível:', erro?.message || erro);
-    }
-}
-
 async function enviarLocalizacaoServidor(lat, lon, telemetria = {}) {
     if (!tokenJWT) {
         await enfileirarGPS(lat, lon, telemetria);
@@ -2190,6 +2047,88 @@ async function atualizarIndicadorOffline(mensagemTemporaria = '') {
     }
 }
 
+
+let guardiaoUltimaChaveFalado = '';
+let guardiaoUltimaFalaEm = 0;
+let guardiaoUltimoDemoEnvio = 0;
+
+function garantirCardGuardiao() {
+    let card = document.getElementById('guardiao-card');
+    if (card) return card;
+
+    card = document.createElement('div');
+    card.id = 'guardiao-card';
+    card.style.cssText = [
+        'position:fixed','left:50%','top:88px','transform:translateX(-50%)',
+        'z-index:3900','display:none','width:min(430px,calc(100% - 24px))',
+        'padding:12px 14px','border-radius:16px',
+        'box-shadow:0 10px 32px rgba(0,0,0,.48)',
+        'font-family:Segoe UI,Tahoma,sans-serif','color:#fff',
+        'backdrop-filter:blur(10px)'
+    ].join(';');
+
+    document.body.appendChild(card);
+    return card;
+}
+
+function esconderGuardiao() {
+    const card=document.getElementById('guardiao-card');
+    if (card) card.style.display='none';
+}
+
+function processarRespostaGuardiao(guardiao) {
+    if (!guardiao) return;
+
+    if (guardiao.status === 'seguro' || guardiao.status === 'indisponivel') {
+        esconderGuardiao();
+        return;
+    }
+
+    if (guardiao.status !== 'alerta') return;
+
+    const card=garantirCardGuardiao();
+    const critico=guardiao.nivel === 'critico';
+
+    card.style.display='block';
+    card.style.background=critico?'rgba(127,29,29,.96)':'rgba(120,53,15,.96)';
+    card.style.border=critico?'2px solid #ef4444':'2px solid #f59e0b';
+
+    const distancia=Number.isFinite(Number(guardiao.distancia_km))
+        ? Number(guardiao.distancia_km).toFixed(1) : '-';
+
+    const tempo=Number.isFinite(Number(guardiao.tempo_estimado_min))
+        ? `${Math.max(1,Math.round(Number(guardiao.tempo_estimado_min)))} min` : '';
+
+    const conflito=guardiao.incompatibilidade || {};
+
+    card.innerHTML=`
+        <div style="font-size:12px;font-weight:900;letter-spacing:.4px;">
+            ${critico?'🔴':'🟠'} GUARDIÃO DE ROTA
+        </div>
+        <div style="font-size:18px;font-weight:900;margin-top:3px;">
+            ${String(guardiao.tipo_risco||'risco').toUpperCase()} INCOMPATÍVEL
+        </div>
+        <div style="font-size:12px;margin-top:5px;line-height:1.45;">
+            📍 A <strong>${distancia} km</strong>${tempo?` • ⏱️ ${tempo}`:''}<br>
+            Veículo: <strong>${Number(conflito.veiculo||0).toFixed(2)} ${conflito.unidade||''}</strong>
+            • Limite: <strong>${Number(conflito.limite||0).toFixed(2)} ${conflito.unidade||''}</strong>
+        </div>
+        <div style="font-size:10px;opacity:.84;margin-top:5px;">
+            ${guardiao.restricao?.nome || guardiao.restricao?.rodovia || 'Restrição validada'}
+            ${guardiao.restricao?.confianca?` • confiança ${guardiao.restricao.confianca}%`:''}
+        </div>
+    `;
+
+    const chave=`${guardiao.id_restricao||''}-${guardiao.nivel||''}-${guardiao.tipo_risco||''}`;
+    const agora=Date.now();
+
+    if (chave !== guardiaoUltimaChaveFalado || agora-guardiaoUltimaFalaEm>90000) {
+        guardiaoUltimaChaveFalado=chave;
+        guardiaoUltimaFalaEm=agora;
+        speak(`Atenção. Guardião detectou risco de ${String(guardiao.tipo_risco||'restrição')} a ${distancia} quilômetros.`);
+    }
+}
+
 async function enviarGPSDireto(item) {
     const resp = await fetch(`${API_BASE}/localizacao`, {
         method: 'POST',
@@ -2212,6 +2151,15 @@ async function enviarGPSDireto(item) {
     });
 
     if (!resp.ok) throw new Error(`GPS HTTP ${resp.status}`);
+
+    let dados = null;
+    try { dados = await resp.json(); } catch (_) {}
+
+    if (item.origem_coleta !== 'offline_sync') {
+        processarRespostaGuardiao(dados?.guardiao);
+    }
+
+    return dados;
 }
 
 async function sincronizarGPSOffline() {
@@ -2843,19 +2791,14 @@ function initMapa() {
         .addEventListener('click', toggleMenuReporte);
 
 
-    /*
-     * V24: só desliga o acompanhamento quando o MOTORISTA toca/arrasta o mapa.
-     * Eventos disparados pelo próprio jumpTo/easeTo do MapLibre não podem
-     * desligar o follow, senão o mapa fica parado enquanto a seta continua.
-     */
-    mapa.on('dragstart', (e) => {
-        if (modoNavegacaoAtivo && e?.originalEvent) {
+    mapa.on('dragstart', () => {
+        if (modoNavegacaoAtivo) {
             cameraFollowAtiva = false;
         }
     });
 
-    mapa.on('rotatestart', (e) => {
-        if (modoNavegacaoAtivo && e?.originalEvent) {
+    mapa.on('rotatestart', () => {
+        if (modoNavegacaoAtivo) {
             cameraFollowAtiva = false;
         }
     });
@@ -3194,17 +3137,8 @@ function ativarInterface() {
         btn.style.display = 'flex';
         btn.disabled = false;
         btn.style.opacity = '';
-        btn.innerHTML = '📍 INICIAR VIAGEM GPS REAL';
+        btn.innerHTML = '📍 INICIAR VIAGEM GPS';
         btn.onclick = iniciarNavegacao3D;
-    }
-
-    const btnDemo = document.getElementById('btn-demo-dados');
-    if (btnDemo) {
-        btnDemo.style.display = 'flex';
-        btnDemo.disabled = false;
-        btnDemo.style.opacity = '';
-        btnDemo.innerHTML = '🧪 INICIAR DEMO COM DADOS';
-        btnDemo.onclick = iniciarDemonstracao;
     }
 
     document.getElementById('btn-tema-mapa').style.display = 'flex';
@@ -3312,12 +3246,18 @@ function atualizarRotaRestante(indexAtual, posicaoAtual = null) {
 
     const restante = [];
 
-    /*
-     * V23: a linha restante começa no ponto da própria rota.
-     * O GPS bruto pode ficar alguns metros ao lado da rua e fazia o
-     * trecho já percorrido parecer continuar atrás do veículo.
-     */
-    restante.push(pathCoordinates[idx]);
+    if (
+        posicaoAtual &&
+        Number.isFinite(Number(posicaoAtual.lng)) &&
+        Number.isFinite(Number(posicaoAtual.lat))
+    ) {
+        restante.push([
+            Number(posicaoAtual.lng),
+            Number(posicaoAtual.lat)
+        ]);
+    } else {
+        restante.push(pathCoordinates[idx]);
+    }
 
     const inicio = Math.min(
         idx + 1,
@@ -4054,12 +3994,7 @@ function centralizarNoCarro() {
     cameraFollowAtiva = true;
 
     const pos =
-        posicaoVisualGps
-            ? {
-                lng:posicaoVisualGps.lng,
-                lat:posicaoVisualGps.lat
-            }
-            : marcadorMotorista.getLngLat();
+        marcadorMotorista.getLngLat();
 
     const idx =
         encontrarIndiceMaisProximo(
@@ -4094,7 +4029,7 @@ function centralizarNoCarro() {
 
     mapa.easeTo({
         center:
-            [pos.lng, pos.lat],
+            focoCamera.center,
         zoom:
             modoNavegacaoAtivo
                 ? 18.4
@@ -4108,7 +4043,7 @@ function centralizarNoCarro() {
                 ? bearing
                 : 0,
         duration:
-            250
+            650
     });
 }
 
@@ -4594,7 +4529,7 @@ async function iniciarNavegacao3D() {
         if (btnIniciar) {
             btnIniciar.disabled = false;
             btnIniciar.style.opacity = '';
-            btnIniciar.innerHTML = '📍 TENTAR GPS REAL NOVAMENTE';
+            btnIniciar.innerHTML = '📍 TENTAR INICIAR NOVAMENTE';
         }
 
         return;
@@ -4604,7 +4539,7 @@ async function iniciarNavegacao3D() {
         if (btnIniciar) {
             btnIniciar.disabled = false;
             btnIniciar.style.opacity = '';
-            btnIniciar.innerHTML = '📍 TENTAR GPS REAL NOVAMENTE';
+            btnIniciar.innerHTML = '📍 TENTAR INICIAR NOVAMENTE';
         }
         return;
     }
@@ -4640,13 +4575,6 @@ async function iniciarNavegacao3D() {
                     if (resp.status >= 500) {
                         await enfileirarAcaoViagem('iniciar', viagemAtualId);
                     }
-                }
-
-                if (resp.ok) {
-                    registrarEventoCaixaPretaApp('NAVEGACAO_GPS_INICIADA','info',{
-                        origem:'gps_real',
-                        accuracy:gpsInicial?.accuracy ?? null
-                    }, { lat:gpsInicial.lat, lng:gpsInicial.lng });
                 }
 
             } catch (erro) {
@@ -4696,24 +4624,6 @@ async function iniciarNavegacao3D() {
 
     const pos = marcadorMotorista.getLngLat();
 
-    posicaoVisualGps = {
-        lng:Number(pos.lng),
-        lat:Number(pos.lat)
-    };
-    alvoPosicaoVisualGps = {
-        lng:Number(pos.lng),
-        lat:Number(pos.lat)
-    };
-    bearingVisualGps =
-        Number.isFinite(Number(gpsInicial.heading))
-            ? Number(gpsInicial.heading)
-            : (ultimoBearing || 0);
-    alvoBearingVisualGps = bearingVisualGps;
-    cameraFollowAtiva = true;
-    maiorProgressoRota = 0;
-    ultimoFixVisualPerformance = performance.now();
-    iniciarLoopVisualGps();
-
     mapa.flyTo({
         center:pos,
         zoom:17.8,
@@ -4738,839 +4648,6 @@ async function iniciarNavegacao3D() {
     }
 }
 
-
-
-
-/* ======================================================
-   GPS V25 — MAP MATCHING + MOVIMENTO CONTÍNUO
-   ====================================================== */
-
-function limitar(v, min, max) {
-    return Math.max(min, Math.min(max, v));
-}
-
-function deslocarCoordenada(lat, lng, bearingGraus, metros) {
-    const R = 6378137;
-    const brng = Number(bearingGraus) * Math.PI / 180;
-    const d = Number(metros) / R;
-    const lat1 = Number(lat) * Math.PI / 180;
-    const lon1 = Number(lng) * Math.PI / 180;
-
-    const lat2 = Math.asin(
-        Math.sin(lat1) * Math.cos(d) +
-        Math.cos(lat1) * Math.sin(d) * Math.cos(brng)
-    );
-
-    const lon2 = lon1 + Math.atan2(
-        Math.sin(brng) * Math.sin(d) * Math.cos(lat1),
-        Math.cos(d) - Math.sin(lat1) * Math.sin(lat2)
-    );
-
-    return {
-        lat: lat2 * 180 / Math.PI,
-        lng: lon2 * 180 / Math.PI
-    };
-}
-
-function projetarPontoNoSegmentoRota(lat, lng, a, b) {
-    const latRef = Number(lat) * Math.PI / 180;
-    const mx = 111320 * Math.cos(latRef);
-    const my = 110540;
-
-    const ax = (Number(a[0]) - Number(lng)) * mx;
-    const ay = (Number(a[1]) - Number(lat)) * my;
-    const bx = (Number(b[0]) - Number(lng)) * mx;
-    const by = (Number(b[1]) - Number(lat)) * my;
-
-    const vx = bx - ax;
-    const vy = by - ay;
-    const vv = vx * vx + vy * vy;
-
-    let t = 0;
-    if (vv > 0.0001) {
-        t = -((ax * vx) + (ay * vy)) / vv;
-    }
-    t = limitar(t, 0, 1);
-
-    const px = ax + vx * t;
-    const py = ay + vy * t;
-
-    return {
-        t,
-        distanciaM: Math.sqrt(px * px + py * py),
-        lng: Number(lng) + px / mx,
-        lat: Number(lat) + py / my
-    };
-}
-
-function casarGpsComRota(lat, lng, inicioAprox = 0) {
-    if (!Array.isArray(pathCoordinates) || pathCoordinates.length < 2) {
-        return null;
-    }
-
-    const centro = limitar(
-        Math.floor(Number(inicioAprox) || 0),
-        0,
-        pathCoordinates.length - 2
-    );
-
-    /*
-     * A janela evita casar o GPS com um trecho antigo/paralelo muito longe
-     * na geometria, mas ainda permite curvas e retornos normais.
-     */
-    const inicio = Math.max(0, centro - 40);
-    const fim = Math.min(pathCoordinates.length - 2, centro + 1800);
-
-    let melhor = null;
-
-    for (let i = inicio; i <= fim; i++) {
-        const a = pathCoordinates[i];
-        const b = pathCoordinates[i + 1];
-        if (!a || !b) continue;
-
-        const p = projetarPontoNoSegmentoRota(lat, lng, a, b);
-
-        if (!melhor || p.distanciaM < melhor.distanciaM) {
-            melhor = {
-                ...p,
-                segmento: i,
-                progresso: i + p.t,
-                bearingRota: calcularBearing(
-                    Number(a[1]),
-                    Number(a[0]),
-                    Number(b[1]),
-                    Number(b[0])
-                )
-            };
-        }
-    }
-
-    return melhor;
-}
-
-function limiteMapMatchM(accuracy) {
-    const acc = Number.isFinite(Number(accuracy))
-        ? Number(accuracy)
-        : 12;
-
-    return limitar(
-        Math.max(20, acc * 1.15),
-        20,
-        42
-    );
-}
-
-function atualizarRotaRestantePrecisa(match) {
-    if (
-        !match ||
-        !mapa ||
-        !dadosGeoJsonAtual ||
-        !Array.isArray(pathCoordinates) ||
-        pathCoordinates.length < 2
-    ) return;
-
-    const source = mapa.getSource('rota-src');
-    if (!source) return;
-
-    /*
-     * Só avança o corte. Nunca deixa trecho já percorrido reaparecer.
-     */
-    if (match.progresso + 0.20 < maiorProgressoRota) {
-        return;
-    }
-
-    maiorProgressoRota = Math.max(
-        maiorProgressoRota,
-        match.progresso
-    );
-
-    maiorIndiceRotaPercorrido = Math.floor(maiorProgressoRota);
-
-    const segmento = limitar(
-        Math.floor(maiorProgressoRota),
-        0,
-        pathCoordinates.length - 2
-    );
-
-    const a = pathCoordinates[segmento];
-    const b = pathCoordinates[segmento + 1];
-
-    /*
-     * Recalcula a projeção no segmento efetivamente alcançado.
-     * Assim a linha azul termina EXATAMENTE na posição do veículo sobre
-     * a estrada, e não no vértice anterior do GeoJSON.
-     */
-    let inicioRota = {
-        lng: Number(match.lng),
-        lat: Number(match.lat)
-    };
-
-    if (match.segmento !== segmento && a && b) {
-        const p = projetarPontoNoSegmentoRota(
-            posicaoVisualGps?.lat ?? match.lat,
-            posicaoVisualGps?.lng ?? match.lng,
-            a,
-            b
-        );
-        inicioRota = { lng:p.lng, lat:p.lat };
-    }
-
-    const restante = [
-        [inicioRota.lng, inicioRota.lat]
-    ];
-
-    for (let i = segmento + 1; i < pathCoordinates.length; i++) {
-        restante.push(pathCoordinates[i]);
-    }
-
-    if (restante.length === 1) {
-        restante.push(restante[0]);
-    }
-
-    const featureOriginal = dadosGeoJsonAtual.features?.[0];
-    if (!featureOriginal) return;
-
-    source.setData({
-        ...dadosGeoJsonAtual,
-        features:[{
-            ...featureOriginal,
-            geometry:{
-                ...featureOriginal.geometry,
-                coordinates:restante
-            }
-        }]
-    });
-
-    ultimoIndiceRotaRenderizado = segmento;
-}
-
-function definirAlvoVisualGpsV25(
-    lng,
-    lat,
-    accuracy,
-    speedKmh,
-    bearingMovimento,
-    match
-) {
-    ultimoMatchRota = match || null;
-    velocidadeVisualMps = Math.max(0, Number(speedKmh) / 3.6);
-    bearingMovimentoGps = Number.isFinite(Number(bearingMovimento))
-        ? Number(bearingMovimento)
-        : bearingMovimentoGps;
-
-    ultimoFixVisualPerformance = performance.now();
-
-    const podeCasar =
-        match &&
-        match.distanciaM <= limiteMapMatchM(accuracy) &&
-        speedKmh >= 2;
-
-    /*
-     * Em rota: marcador fica "grudado" na via, igual navegador dedicado.
-     * Fora da rota: ele imediatamente passa a seguir o GPS real.
-     */
-    if (podeCasar) {
-        alvoPosicaoVisualGps = {
-            lng:Number(match.lng),
-            lat:Number(match.lat)
-        };
-
-        alvoBearingVisualGps = Number(match.bearingRota);
-
-    } else {
-        alvoPosicaoVisualGps = {
-            lng:Number(lng),
-            lat:Number(lat)
-        };
-
-        if (Number.isFinite(Number(bearingMovimento))) {
-            alvoBearingVisualGps = Number(bearingMovimento);
-        }
-    }
-
-    iniciarLoopVisualGps();
-}
-
-function iniciarLoopVisualGps() {
-    if (rafVisualGps) return;
-
-    const frame = (agora) => {
-        rafVisualGps = requestAnimationFrame(frame);
-
-        if (!alvoPosicaoVisualGps || !marcadorMotorista) return;
-
-        const dt = ultimoFrameVisualGps
-            ? limitar(agora - ultimoFrameVisualGps, 8, 50)
-            : 16;
-
-        ultimoFrameVisualGps = agora;
-
-        /*
-         * Predição de no máximo 0,75 s:
-         * o veículo continua deslizando entre dois fixes do Android,
-         * sem acumular um atraso perceptível em relação ao GPS real.
-         */
-        let alvoFrame = {
-            lng:alvoPosicaoVisualGps.lng,
-            lat:alvoPosicaoVisualGps.lat
-        };
-
-        const idadeFixS = ultimoFixVisualPerformance
-            ? Math.max(0, (performance.now() - ultimoFixVisualPerformance) / 1000)
-            : 0;
-
-        if (
-            modoNavegacaoAtivo &&
-            velocidadeVisualMps > 1.4 &&
-            Number.isFinite(Number(alvoBearingVisualGps))
-        ) {
-            const predicaoS = Math.min(0.75, idadeFixS);
-            const predicaoM = Math.min(
-                18,
-                velocidadeVisualMps * predicaoS
-            );
-
-            if (predicaoM > 0.4) {
-                const p = deslocarCoordenada(
-                    alvoFrame.lat,
-                    alvoFrame.lng,
-                    alvoBearingVisualGps,
-                    predicaoM
-                );
-                alvoFrame = p;
-            }
-        }
-
-        if (!posicaoVisualGps) {
-            posicaoVisualGps = {
-                lng:alvoFrame.lng,
-                lat:alvoFrame.lat
-            };
-        }
-
-        const erroM = calcularDistancia(
-            posicaoVisualGps.lat,
-            posicaoVisualGps.lng,
-            alvoFrame.lat,
-            alvoFrame.lng
-        ) * 1000;
-
-        /*
-         * Resposta rápida quando há erro maior e bem macia em micro-ajustes.
-         * Não usamos animações easeTo encadeadas: mapa e seta andam no
-         * MESMO frame.
-         */
-        const tau =
-            erroM > 28 ? 45 :
-            erroM > 10 ? 65 :
-            85;
-
-        const alpha = 1 - Math.exp(-dt / tau);
-
-        posicaoVisualGps.lng +=
-            (alvoFrame.lng - posicaoVisualGps.lng) * alpha;
-
-        posicaoVisualGps.lat +=
-            (alvoFrame.lat - posicaoVisualGps.lat) * alpha;
-
-        if (alvoBearingVisualGps !== null) {
-            if (bearingVisualGps === null) {
-                bearingVisualGps = Number(alvoBearingVisualGps);
-            } else {
-                const delta = diferencaAngularFollow(
-                    bearingVisualGps,
-                    Number(alvoBearingVisualGps)
-                );
-
-                const alphaAng =
-                    1 - Math.exp(-dt / 110);
-
-                bearingVisualGps =
-                    (bearingVisualGps + delta * alphaAng + 360) % 360;
-            }
-        }
-
-        marcadorMotorista.setLngLat([
-            posicaoVisualGps.lng,
-            posicaoVisualGps.lat
-        ]);
-
-        if (
-            cameraFollowAtiva &&
-            modoNavegacaoAtivo &&
-            mapa &&
-            mapa.loaded() &&
-            alvoCameraGps
-        ) {
-            const bearingAlvo =
-                bearingVisualGps !== null
-                    ? bearingVisualGps
-                    : Number(alvoCameraGps.bearing || mapa.getBearing());
-
-            bearingCameraSuavizado = suavizarAnguloCamera(
-                bearingCameraSuavizado,
-                bearingAlvo,
-                limitar(dt / 150, .09, .32)
-            );
-
-            /*
-             * jumpTo em cada frame evita fila de animações.
-             * O centro é exatamente o mesmo ponto da seta.
-             */
-            mapa.jumpTo({
-                center:[
-                    posicaoVisualGps.lng,
-                    posicaoVisualGps.lat
-                ],
-                bearing:bearingCameraSuavizado,
-                pitch:alvoCameraGps.pitch,
-                zoom:alvoCameraGps.zoom
-            });
-        }
-
-        /*
-         * Com follow ligado, mapa e carro apontam na mesma direção:
-         * seta permanece para cima. Ao mexer manualmente no mapa,
-         * ela passa a mostrar a direção relativa corretamente.
-         */
-        if (marcadorMotorista._element) {
-            const interno =
-                marcadorMotorista._element.querySelector('.seta') ||
-                marcadorMotorista._element.querySelector('div');
-
-            if (interno && bearingVisualGps !== null) {
-                const bearingMapa =
-                    mapa && Number.isFinite(Number(mapa.getBearing()))
-                        ? Number(mapa.getBearing())
-                        : 0;
-
-                const rotacao = cameraFollowAtiva
-                    ? 0
-                    : diferencaAngularFollow(
-                        bearingMapa,
-                        bearingVisualGps
-                    );
-
-                interno.style.transform =
-                    `rotate(${rotacao}deg)`;
-            }
-        }
-    };
-
-    rafVisualGps = requestAnimationFrame(frame);
-}
-
-function diferencaDirecaoAbs(a, b) {
-    return Math.abs(
-        diferencaAngularFollow(
-            Number(a) || 0,
-            Number(b) || 0
-        )
-    );
-}
-
-async function solicitarNovaRotaV25(
-    lat,
-    lng,
-    bearingAtual,
-    speedKmh,
-    usarOrigemDirecional = true
-) {
-    const destino =
-        pathCoordinates[pathCoordinates.length - 1];
-
-    if (!destino) {
-        throw new Error('Destino da viagem indisponível.');
-    }
-
-    let origem = {
-        lat:Number(lat),
-        lon:Number(lng)
-    };
-
-    /*
-     * Ao errar uma entrada, roteadores tendem a sugerir um retorno/U-turn
-     * para recuperar a rota antiga. Deslocamos a origem alguns metros À
-     * FRENTE na direção em que o veículo realmente está andando.
-     * Isso favorece continuar pela rua escolhida e montar um NOVO trajeto.
-     */
-    if (
-        usarOrigemDirecional &&
-        speedKmh >= 5 &&
-        Number.isFinite(Number(bearingAtual))
-    ) {
-        const frenteM = limitar(
-            14 + Number(speedKmh) * 0.12,
-            16,
-            28
-        );
-
-        const frente = deslocarCoordenada(
-            lat,
-            lng,
-            bearingAtual,
-            frenteM
-        );
-
-        origem = {
-            lat:frente.lat,
-            lon:frente.lng
-        };
-    }
-
-    const restricoes =
-        dadosRotaOriginal?.restricoes || {};
-
-    const tipoInformado = String(
-        dadosRotaOriginal?.tipo_veiculo ||
-        dadosRotaOriginal?.tipoVeiculo ||
-        ''
-    ).toLowerCase();
-
-    const perfilInformado = String(
-        dadosRotaOriginal?.perfil ||
-        dadosRotaOriginal?.perfil_rota ||
-        ''
-    ).toLowerCase();
-
-    const ehCarro =
-        tipoInformado === 'carro' ||
-        perfilInformado === 'driving-car';
-
-    const payload = ehCarro
-        ? {
-            origem,
-            destino:{
-                lat:Number(destino[1]),
-                lon:Number(destino[0])
-            },
-            perfil:'driving-car',
-            preferencia:'fastest'
-        }
-        : {
-            origem,
-            destino:{
-                lat:Number(destino[1]),
-                lon:Number(destino[0])
-            },
-            altura:Number(
-                restricoes.altura ||
-                restricoes.altura_total ||
-                dadosRotaOriginal?.altura_total ||
-                4.2
-            ),
-            peso:Number(
-                restricoes.peso ||
-                dadosRotaOriginal?.peso_total ||
-                15
-            ),
-            comprimento:Number(
-                restricoes.comprimento ||
-                dadosRotaOriginal?.comprimento ||
-                12
-            ),
-            largura:Number(
-                restricoes.largura ||
-                dadosRotaOriginal?.largura ||
-                2.6
-            ),
-            perfil:'driving-hgv',
-            preferencia:'fastest'
-        };
-
-    const resp = await fetch(
-        `${API_BASE}/api/calcular-rota`,
-        {
-            method:'POST',
-            headers:{
-                'Content-Type':'application/json',
-                'Authorization':tokenJWT
-            },
-            body:JSON.stringify(payload)
-        }
-    );
-
-    const novaRota =
-        await resp.json().catch(() => null);
-
-    if (
-        !resp.ok ||
-        !novaRota?.features?.[0]?.geometry?.coordinates?.length
-    ) {
-        throw new Error(
-            novaRota?.erro ||
-            novaRota?.detalhes ||
-            'O servidor não retornou uma nova rota válida.'
-        );
-    }
-
-    return novaRota;
-}
-
-async function recalcularRotaPorSaidaGps(
-    lat,
-    lng,
-    bearingAtual = bearingMovimentoGps,
-    speedKmh = 0
-) {
-    if (
-        recalculoSaidaEmAndamento ||
-        !navigator.onLine ||
-        !tokenJWT ||
-        !Array.isArray(pathCoordinates) ||
-        pathCoordinates.length < 2
-    ) return;
-
-    const agora = Date.now();
-
-    if (
-        agora - ultimoRecalculoSaidaRota <
-        RECALCULO_SAIDA_COOLDOWN_MS
-    ) return;
-
-    recalculoSaidaEmAndamento = true;
-    ultimoRecalculoSaidaRota = agora;
-
-    const statusBar =
-        document.getElementById('status-bar');
-
-    if (statusBar) {
-        statusBar.innerHTML =
-            '🔄 Desvio detectado • criando um novo trajeto...';
-        statusBar.className =
-            'carregando';
-    }
-
-    try {
-        let novaRota;
-
-        try {
-            novaRota = await solicitarNovaRotaV25(
-                lat,
-                lng,
-                bearingAtual,
-                speedKmh,
-                true
-            );
-        } catch (erroDirecional) {
-            console.warn(
-                'Rota direcional falhou; tentando GPS exato:',
-                erroDirecional
-            );
-
-            novaRota = await solicitarNovaRotaV25(
-                lat,
-                lng,
-                bearingAtual,
-                speedKmh,
-                false
-            );
-        }
-
-        const coords =
-            novaRota.features[0].geometry.coordinates;
-
-        /*
-         * A rota calculada com origem alguns metros à frente é conectada
-         * visualmente ao GPS atual. O próximo fix já fará map matching.
-         */
-        if (coords.length) {
-            const primeiro = coords[0];
-            const distPrimeiroM =
-                calcularDistancia(
-                    lat,
-                    lng,
-                    Number(primeiro[1]),
-                    Number(primeiro[0])
-                ) * 1000;
-
-            if (distPrimeiroM > 4 && distPrimeiroM < 60) {
-                coords.unshift([
-                    Number(lng),
-                    Number(lat)
-                ]);
-            }
-        }
-
-        dadosGeoJsonAtual = novaRota;
-        pathCoordinates =
-            novaRota.features[0].geometry.coordinates;
-
-        maiorIndiceRotaPercorrido = 0;
-        maiorProgressoRota = 0;
-        ultimoIndiceRotaRenderizado = -1;
-        foraRotaDesde = 0;
-        foraRotaFixes = 0;
-        direcaoErradaDesde = 0;
-        direcaoErradaFixes = 0;
-
-        desenharRota(
-            novaRota,
-            false
-        );
-
-        const source =
-            mapa?.getSource('rota-src');
-
-        if (source) {
-            source.setData(novaRota);
-        }
-
-        try {
-            if (
-                dadosRotaOriginal &&
-                typeof dadosRotaOriginal === 'object'
-            ) {
-                dadosRotaOriginal = {
-                    ...dadosRotaOriginal,
-                    dados_geojson:novaRota
-                };
-
-                await salvarRotaOffline(
-                    dadosRotaOriginal
-                );
-            }
-        } catch (erroCache) {
-            console.warn(
-                'Cache da nova rota:',
-                erroCache
-            );
-        }
-
-        cameraFollowAtiva = true;
-
-        registrarEventoCaixaPretaApp('ROTA_RECALCULADA','atencao',{
-            motivo:'desvio_detectado_gps',
-            bearing:Number.isFinite(Number(bearingAtual)) ? Number(bearingAtual) : null,
-            velocidade_kmh:Number(speedKmh || 0),
-            pontos_nova_rota:pathCoordinates.length
-        }, { lat:Number(lat), lng:Number(lng) });
-
-        speak(
-            'Novo trajeto calculado. Continue pela rota atual.'
-        );
-
-        if (statusBar) {
-            statusBar.innerHTML =
-                '✅ Novo trajeto calculado a partir do seu desvio.';
-            statusBar.className =
-                'sucesso';
-        }
-
-    } catch (erro) {
-        console.error(
-            '❌ Recálculo V25:',
-            erro
-        );
-
-        if (statusBar) {
-            statusBar.innerHTML =
-                `⚠️ Não foi possível recalcular: ${erro.message}`;
-            statusBar.className =
-                'erro';
-        }
-
-    } finally {
-        recalculoSaidaEmAndamento = false;
-    }
-}
-
-function verificarDesvioRotaV25(
-    match,
-    lat,
-    lng,
-    accuracy,
-    speedKmh,
-    bearingAtual
-) {
-    if (
-        !modoNavegacaoAtivo ||
-        recalculoSaidaEmAndamento ||
-        !match ||
-        !Array.isArray(pathCoordinates) ||
-        pathCoordinates.length < 2
-    ) return;
-
-    const precisaoM =
-        Number.isFinite(Number(accuracy))
-            ? Number(accuracy)
-            : 12;
-
-    /*
-     * Bem mais rigoroso que V24:
-     * GPS bom -> 18~22 m já considera saída;
-     * GPS mediano -> tolerância sobe para evitar falso positivo.
-     */
-    const limiteForaM = limitar(
-        Math.max(18, precisaoM * 1.10),
-        18,
-        36
-    );
-
-    const agora = Date.now();
-
-    const fora =
-        speedKmh >= 4 &&
-        match.distanciaM > limiteForaM;
-
-    if (fora) {
-        foraRotaFixes++;
-
-        if (!foraRotaDesde) {
-            foraRotaDesde = agora;
-        }
-    } else {
-        foraRotaFixes = 0;
-        foraRotaDesde = 0;
-    }
-
-    /*
-     * Detecta "entrei na rua errada" ANTES de ficar muito longe.
-     * Compara direção real do deslocamento com direção da rota atual.
-     */
-    const diferencaDirecao =
-        Number.isFinite(Number(bearingAtual))
-            ? diferencaDirecaoAbs(
-                match.bearingRota,
-                bearingAtual
-            )
-            : 0;
-
-    const direcaoErrada =
-        speedKmh >= 7 &&
-        precisaoM <= 45 &&
-        diferencaDirecao >= 58;
-
-    if (direcaoErrada) {
-        direcaoErradaFixes++;
-
-        if (!direcaoErradaDesde) {
-            direcaoErradaDesde = agora;
-        }
-    } else {
-        direcaoErradaFixes = 0;
-        direcaoErradaDesde = 0;
-    }
-
-    const confirmarFora =
-        foraRotaFixes >= FORA_ROTA_MIN_FIXES &&
-        foraRotaDesde &&
-        (agora - foraRotaDesde) >= FORA_ROTA_MIN_MS;
-
-    const confirmarDirecao =
-        direcaoErradaFixes >= DIRECAO_ERRADA_MIN_FIXES &&
-        direcaoErradaDesde &&
-        (agora - direcaoErradaDesde) >= DIRECAO_ERRADA_MIN_MS;
-
-    if (confirmarFora || confirmarDirecao) {
-        recalcularRotaPorSaidaGps(
-            lat,
-            lng,
-            bearingAtual,
-            speedKmh
-        );
-    }
-}
 
 function iniciarGPSReal() {
     if (gpsInicializado) return;
@@ -5653,42 +4730,37 @@ function iniciarGPSReal() {
              * 2) caso contrário calcula pelo deslocamento real.
              * Evita rotacionar a seta por ruído quando o veículo está parado.
              */
-            /*
-             * V25: direção principal vem do deslocamento entre FIXES.
-             * Heading do Android vira fallback. Isso reduz seta atravessada
-             * quando o sensor do aparelho aponta diferente do carro.
-             */
             if (
-                ultimaPosicaoLngLat &&
-                distMetros >= 3.5
+                headingNativo !== null &&
+                speedKmh >= 3
             ) {
-                bearingMovimentoGps =
+                ultimoBearing = headingNativo;
+
+            } else if (
+                ultimaPosicaoLngLat &&
+                distMetros >= 3
+            ) {
+                ultimoBearing =
                     calcularBearing(
                         ultimaPosicaoLngLat[1],
                         ultimaPosicaoLngLat[0],
                         lat,
                         lng
                     );
-
-                ultimoBearing =
-                    bearingMovimentoGps;
-
-            } else if (
-                headingNativo !== null &&
-                speedKmh >= 3
-            ) {
-                bearingMovimentoGps =
-                    headingNativo;
-
-                ultimoBearing =
-                    headingNativo;
             }
 
-            /*
-             * V24: o fix GPS vira ALVO. O loop requestAnimationFrame
-             * interpola marcador e câmera, evitando saltos.
-             */
-            alvoPosicaoVisualGps = { lng, lat };
+            marcadorMotorista.setLngLat(novaPosicao);
+
+            if (marcadorMotorista._element) {
+                const interno =
+                    marcadorMotorista._element.querySelector('.seta') ||
+                    marcadorMotorista._element.querySelector('div');
+
+                if (interno) {
+                    interno.style.transform =
+                        `rotate(${ultimoBearing || 0}deg)`;
+                }
+            }
 
             const velTexto = document.getElementById('velocidade-valor');
             if (velTexto) velTexto.textContent = Math.round(speedKmh);
@@ -5740,56 +4812,8 @@ function iniciarGPSReal() {
              * e isso podia deixar a câmera/rota "parada" visualmente.
              */
             if (modoNavegacaoAtivo && mapa && mapa.loaded()) {
-                const match =
-                    casarGpsComRota(
-                        lat,
-                        lng,
-                        maiorProgressoRota
-                    );
-
                 const idxAtual =
-                    match
-                        ? Math.max(0, match.segmento)
-                        : encontrarIndiceMaisProximo(
-                            lat,
-                            lng,
-                            maiorIndiceRotaPercorrido
-                        );
-
-                definirAlvoVisualGpsV25(
-                    lng,
-                    lat,
-                    accuracy,
-                    speedKmh,
-                    bearingMovimentoGps || ultimoBearing,
-                    match
-                );
-
-                verificarDesvioRotaV25(
-                    match,
-                    lat,
-                    lng,
-                    accuracy,
-                    speedKmh,
-                    bearingMovimentoGps || ultimoBearing
-                );
-
-                /*
-                 * Corte preciso da rota em CADA fix GPS aceito.
-                 * Usa projeção no segmento, não apenas índice/vértice.
-                 */
-                if (
-                    match &&
-                    match.distanciaM <=
-                        Math.max(
-                            32,
-                            limiteMapMatchM(accuracy) + 8
-                        )
-                ) {
-                    atualizarRotaRestantePrecisa(
-                        match
-                    );
-                }
+                    encontrarIndiceMaisProximo(lat, lng);
 
                 if (
                     idxAtual >= 0 &&
@@ -5802,6 +4826,11 @@ function iniciarGPSReal() {
                         speedKmh
                     );
 
+                    atualizarRotaRestante(
+                        idxAtual,
+                        { lng, lat }
+                    );
+
                     atualizarLimiteTomTomPorPosicao(
                         lat,
                         lng,
@@ -5809,50 +4838,63 @@ function iniciarGPSReal() {
                     );
                 }
 
-                /*
-                 * Zoom/pitch são atualizados por fix.
-                 * Movimento do centro/bearing acontece continuamente no RAF.
-                 */
-                const focoCamera =
-                    obterCentroCameraNavegacao(
-                        lat,
-                        lng,
-                        Math.max(0, idxAtual),
-                        speedKmh
-                    );
+                if (
+                    cameraFollowAtiva &&
+                    (agora - ultimoUpdateCameraGps) >= GPS_INTERVALO_CAMERA_MS
+                ) {
+                    ultimoUpdateCameraGps = agora;
 
-                let zoomGPS = 17.70;
-                let pitchGPS = 54;
+                    const focoCamera =
+                        obterCentroCameraNavegacao(
+                            lat,
+                            lng,
+                            idxAtual,
+                            speedKmh
+                        );
 
-                if (speedKmh >= 90) {
-                    zoomGPS = 17.28;
-                    pitchGPS = 55;
-                } else if (speedKmh >= 70) {
-                    zoomGPS = 17.42;
-                    pitchGPS = 55;
-                } else if (speedKmh <= 35) {
-                    zoomGPS = 17.88;
-                    pitchGPS = 51;
+                    const bearingFollow =
+                        calcularBearingFollow(
+                            lat,
+                            lng,
+                            idxAtual,
+                            ultimoBearing,
+                            speedKmh
+                        );
+
+                    let zoomGPS = 17.60;
+                    let pitchGPS = 54;
+
+                    if (speedKmh >= 90) {
+                        zoomGPS = 17.25;
+                        pitchGPS = 55;
+                    } else if (speedKmh >= 70) {
+                        zoomGPS = 17.40;
+                        pitchGPS = 55;
+                    } else if (speedKmh <= 35) {
+                        zoomGPS = 17.85;
+                        pitchGPS = 51;
+                    }
+
+                    if (focoCamera.curva >= 28) {
+                        zoomGPS = Math.min(zoomGPS, 17.20);
+                        pitchGPS = Math.min(pitchGPS, 50);
+                    } else if (focoCamera.curva >= 14) {
+                        zoomGPS = Math.min(zoomGPS, 17.45);
+                        pitchGPS = Math.min(pitchGPS, 53);
+                    }
+
+                    mapa.easeTo({
+                        center:focoCamera.center,
+                        bearing:bearingFollow,
+                        pitch:pitchGPS,
+                        zoom:zoomGPS,
+                        duration:
+                            focoCamera.curva >= 14
+                                ? 420
+                                : 520,
+                        easing:t => 1 - Math.pow(1 - t, 3)
+                    });
                 }
-
-                if (focoCamera.curva >= 28) {
-                    zoomGPS = Math.min(zoomGPS, 17.24);
-                    pitchGPS = Math.min(pitchGPS, 50);
-                } else if (focoCamera.curva >= 14) {
-                    zoomGPS = Math.min(zoomGPS, 17.48);
-                    pitchGPS = Math.min(pitchGPS, 53);
-                }
-
-                alvoCameraGps = {
-                    bearing:
-                        alvoBearingVisualGps ??
-                        bearingMovimentoGps ??
-                        ultimoBearing,
-                    pitch:pitchGPS,
-                    zoom:zoomGPS
-                };
-
-                iniciarLoopVisualGps();
             }
 
             if (distMetros >= 2) {
@@ -5938,9 +4980,6 @@ async function enviarReporte(tipo) {
         if (!resp.ok) throw new Error('Erro ao enviar reporte');
 
         speak(`Reporte de ${tipo} enviado`);
-        registrarEventoCaixaPretaApp('REPORTE_MOTORISTA','atencao',{
-            tipo_reporte:tipo
-        }, { lat:pos.lat, lng:pos.lng });
         await carregarReportesMotorista();
 
     } catch(erro) {
@@ -7013,6 +6052,28 @@ function atualizarMarcadorDemo(posicao) {
         posicao.lat
     ];
 
+
+    // 🛡️ DEMO também testa o Guardião sem depender do GPS físico.
+    if (
+        modoDemoMotorista &&
+        tokenJWT &&
+        navigator.onLine &&
+        Date.now() - guardiaoUltimoDemoEnvio >= 5000
+    ) {
+        guardiaoUltimoDemoEnvio = Date.now();
+
+        enviarGPSDireto({
+            lat:posicao.lat,
+            lon:posicao.lng,
+            velocidade_kmh:velocidadeDemoAtual || 55,
+            precisao_m:5,
+            direcao_graus:posicao.bearing,
+            altitude_m:null,
+            timestamp_dispositivo:new Date().toISOString(),
+            origem_coleta:'simulacao'
+        }).catch(erro => console.warn('Guardião DEMO:',erro));
+    }
+
     if (marcadorMotorista._element) {
         const interno =
             marcadorMotorista._element.querySelector('div');
@@ -7398,203 +6459,7 @@ function atualizarHUDDemo() {
     }
 }
 
-
-function construirPontosDemoParaBackend() {
-    if (!Array.isArray(pathCoordinates) || pathCoordinates.length < 2) return [];
-
-    const alvo = Math.min(180, Math.max(30, Math.ceil(distanciaTotalRotaKm * 2.5)));
-    const passo = Math.max(1, Math.floor((pathCoordinates.length - 1) / Math.max(1, alvo - 1)));
-    const pontos = [];
-
-    for (let i = 0; i < pathCoordinates.length; i += passo) {
-        const atual = pathCoordinates[i];
-        const prox = pathCoordinates[Math.min(pathCoordinates.length - 1, i + passo)];
-
-        pontos.push({
-            lat:Number(atual[1]),
-            lon:Number(atual[0]),
-            velocidade_kmh:55,
-            precisao_m:6,
-            direcao_graus:
-                prox && (prox[0] !== atual[0] || prox[1] !== atual[1])
-                    ? calcularBearing(atual[1], atual[0], prox[1], prox[0])
-                    : ultimoBearing
-        });
-    }
-
-    const ultimo = pathCoordinates[pathCoordinates.length - 1];
-    const ultimoGerado = pontos[pontos.length - 1];
-
-    if (
-        !ultimoGerado ||
-        Math.abs(ultimoGerado.lat - Number(ultimo[1])) > 0.000001 ||
-        Math.abs(ultimoGerado.lon - Number(ultimo[0])) > 0.000001
-    ) {
-        pontos.push({
-            lat:Number(ultimo[1]),
-            lon:Number(ultimo[0]),
-            velocidade_kmh:30,
-            precisao_m:6,
-            direcao_graus:ultimoBearing
-        });
-    }
-
-    return pontos.slice(0, 220);
-}
-
-async function iniciarDemoDadosNoServidor() {
-    demoDadosAtivo = false;
-    demoInicioRegistrado = false;
-
-    if (!viagemAtualId || !tokenJWT || !navigator.onLine) {
-        return {
-            ok:false,
-            mensagem:'DEMO visual iniciado, mas sem dados: é necessário estar online e com uma viagem carregada.'
-        };
-    }
-
-    try {
-        const resp = await fetch(
-            `${API_BASE}/viagens/${viagemAtualId}/iniciar`,
-            {
-                method:'POST',
-                headers:{
-                    'Content-Type':'application/json',
-                    'Authorization':tokenJWT
-                },
-                body:JSON.stringify({ origem_dados:'demo' })
-            }
-        );
-
-        const data = await resp.json().catch(() => ({}));
-
-        if (!resp.ok) {
-            return {
-                ok:false,
-                mensagem:data.erro || `Falha ao iniciar DEMO no servidor (HTTP ${resp.status}).`
-            };
-        }
-
-        demoDadosAtivo = true;
-        demoInicioRegistrado = true;
-
-        await registrarEventoCaixaPretaApp(
-            'NAVEGACAO_DEMO_INICIADA',
-            'info',
-            { origem_dados:'demo' }
-        );
-
-        return { ok:true, mensagem:'DEMO COM DADOS ativo.' };
-
-    } catch (erro) {
-        return { ok:false, mensagem:erro?.message || 'Falha ao iniciar DEMO no servidor.' };
-    }
-}
-
-async function finalizarDemoDadosNoServidor() {
-    if (!demoDadosAtivo || !demoInicioRegistrado) {
-        return {
-            ok:false,
-            apenas_visual:true,
-            mensagem:'DEMO visual concluída; nenhum dado foi enviado.'
-        };
-    }
-
-    if (demoFinalizando) {
-        return { ok:false, mensagem:'Finalização DEMO já em andamento.' };
-    }
-
-    demoFinalizando = true;
-
-    try {
-        const pontos = construirPontosDemoParaBackend();
-
-        if (pontos.length < 2) {
-            throw new Error('Não foi possível montar o histórico GPS do DEMO.');
-        }
-
-        const gpsResp = await fetch(
-            `${API_BASE}/viagens/${viagemAtualId}/demo/pontos`,
-            {
-                method:'POST',
-                headers:{
-                    'Content-Type':'application/json',
-                    'Authorization':tokenJWT
-                },
-                body:JSON.stringify({
-                    pontos,
-                    intervalo_segundos:12
-                })
-            }
-        );
-
-        const gpsData = await gpsResp.json().catch(() => ({}));
-
-        if (!gpsResp.ok) {
-            throw new Error(gpsData.erro || `Falha ao gravar GPS DEMO (HTTP ${gpsResp.status}).`);
-        }
-
-        await registrarEventoCaixaPretaApp(
-            'DEMO_TRAJETO_FINALIZADO',
-            'info',
-            {
-                origem_dados:'demo',
-                pontos:gpsData.pontos || pontos.length,
-                distancia_gps_km:gpsData.distancia_gps_km ?? null
-            },
-            {
-                lat:pontos[pontos.length - 1].lat,
-                lng:pontos[pontos.length - 1].lon
-            }
-        );
-
-        const concluirResp = await fetch(
-            `${API_BASE}/viagens/${viagemAtualId}/concluir`,
-            {
-                method:'POST',
-                headers:{ 'Authorization':tokenJWT }
-            }
-        );
-
-        const concluirData = await concluirResp.json().catch(() => ({}));
-
-        if (!concluirResp.ok) {
-            throw new Error(
-                concluirData.erro ||
-                `GPS DEMO gravado, mas a conclusão falhou (HTTP ${concluirResp.status}).`
-            );
-        }
-
-        demoDadosAtivo = false;
-        demoInicioRegistrado = false;
-
-        // V28 - a conclusão libera o veículo no backend.
-        // Limpamos a referência local para não continuar tratando a viagem
-        // concluída como viagem ativa no app.
-        const viagemConcluidaId = viagemAtualId;
-        viagemAtualId = null;
-
-        return {
-            ok:true,
-            viagem_concluida_id:viagemConcluidaId,
-            veiculo_liberado:concluirData.veiculo_liberado === true,
-            mensagem:'DEMO concluída e gravada.',
-            pontos:gpsData.pontos || pontos.length,
-            distancia_gps_km:gpsData.distancia_gps_km ?? null,
-            qualidade_gps:concluirData.qualidade_gps || null,
-            id_passaporte:concluirData.id_passaporte || null,
-            validacao_rota:concluirData.validacao_rota || null
-        };
-
-    } catch (erro) {
-        console.error('❌ Finalização DEMO COM DADOS:', erro);
-        return { ok:false, mensagem:erro?.message || 'Erro finalizando DEMO com dados.' };
-    } finally {
-        demoFinalizando = false;
-    }
-}
-
-async function finalizarDemoMotorista() {
+function finalizarDemoMotorista() {
     if (intervalSimulacao) {
         clearInterval(intervalSimulacao);
         intervalSimulacao = null;
@@ -7636,55 +6501,20 @@ async function finalizarDemoMotorista() {
         document.getElementById('status-bar');
 
     statusBar.innerHTML =
-        demoDadosAtivo
-            ? '🧪 Finalizando DEMO e gravando dados...'
-            : '🏁 DEMO visual concluída • destino alcançado';
+        '🏁 DEMO concluída • destino alcançado';
 
-    statusBar.className = demoDadosAtivo ? 'carregando' : 'sucesso';
+    statusBar.className = 'sucesso';
 
-    const resultadoDemo = await finalizarDemoDadosNoServidor();
+    speak('Demonstração concluída. Destino alcançado.');
 
-    const btnDemoFinal = document.getElementById('btn-demo-dados');
-    const btnRealFinal = document.getElementById('btn-iniciar-3d');
-
-    if (btnDemoFinal) {
-        btnDemoFinal.disabled = false;
-        btnDemoFinal.style.opacity = '';
-        btnDemoFinal.innerHTML = '🧪 INICIAR DEMO COM DADOS';
-    }
-    if (btnRealFinal) {
-        btnRealFinal.disabled = false;
-        btnRealFinal.style.opacity = '';
-    }
-
-    if (resultadoDemo.ok) {
-        const gpsTxt = resultadoDemo.qualidade_gps
-            ? `${resultadoDemo.qualidade_gps.status || '-'} ${resultadoDemo.qualidade_gps.score ?? '-'}`
-            : '-';
-
-        statusBar.innerHTML =
-            `✅ DEMO gravada • ${resultadoDemo.pontos || 0} pontos GPS • Passaporte #${resultadoDemo.id_passaporte || '-'} • GPS ${gpsTxt}`;
-
-        statusBar.className = 'sucesso';
-
-        speak('Demonstração concluída. Dados de teste gravados e viagem finalizada.');
-
-    } else if (resultadoDemo.apenas_visual) {
-        statusBar.innerHTML = '🏁 DEMO visual concluída • sem gravação no backend';
-        statusBar.className = 'sucesso';
-        speak('Demonstração visual concluída.');
-
-    } else {
-        statusBar.innerHTML = `⚠️ DEMO terminou, mas os dados não foram finalizados: ${resultadoDemo.mensagem}`;
-        statusBar.className = 'erro';
-        speak('Demonstração terminou, mas houve erro ao gravar os dados de teste.');
-    }
+    /*
+     * IMPORTANTE:
+     * O DEMO NÃO chama /concluir no servidor e NÃO envia GPS.
+     * Assim podemos testar sem alterar a viagem real.
+     */
 }
 
-async function iniciarDemonstracao() {
-    // V29 - DEMO é 100% independente do GPS real.
-    // Não chama prepararInicioRealPeloGps(), não verifica accuracy e não envia
-    // a posição física do computador/celular como ponto inicial do teste.
+function iniciarDemonstracao() {
     if (!pathCoordinates || pathCoordinates.length < 2) {
         const statusBar =
             document.getElementById('status-bar');
@@ -7697,55 +6527,6 @@ async function iniciarDemonstracao() {
     }
 
     if (!marcadorMotorista || !mapa) return;
-
-    const btnDemo = document.getElementById('btn-demo-dados');
-    const btnReal = document.getElementById('btn-iniciar-3d');
-
-    if (btnDemo) {
-        btnDemo.disabled = true;
-        btnDemo.style.opacity = '.6';
-        btnDemo.innerHTML = '🧪 PREPARANDO DEMO...';
-    }
-    if (btnReal) {
-        btnReal.disabled = true;
-        btnReal.style.opacity = '.45';
-    }
-
-    const partidaCard = document.getElementById('gps-partida-card');
-    if (partidaCard) partidaCard.style.display = 'none';
-
-    // Começa visualmente exatamente no primeiro ponto da rota planejada.
-    const origemDemo = pathCoordinates[0];
-    if (origemDemo && marcadorMotorista) {
-        marcadorMotorista.setLngLat([Number(origemDemo[0]), Number(origemDemo[1])]);
-        ultimaPosicaoLngLat = [Number(origemDemo[0]), Number(origemDemo[1])];
-    }
-
-    const statusBarDemo = document.getElementById('status-bar');
-    if (statusBarDemo) {
-        statusBarDemo.innerHTML = '🧪 Preparando DEMO COM DADOS...';
-        statusBarDemo.className = 'carregando';
-    }
-
-    const inicioDemoServidor = await iniciarDemoDadosNoServidor();
-
-    if (!inicioDemoServidor.ok) {
-        if (statusBarDemo) {
-            statusBarDemo.innerHTML = `❌ DEMO COM DADOS não iniciou: ${inicioDemoServidor.mensagem}`;
-            statusBarDemo.className = 'erro';
-        }
-
-        if (btnDemo) {
-            btnDemo.disabled = false;
-            btnDemo.style.opacity = '';
-            btnDemo.innerHTML = '🧪 TENTAR DEMO COM DADOS';
-        }
-        if (btnReal) {
-            btnReal.disabled = false;
-            btnReal.style.opacity = '';
-        }
-        return;
-    }
 
     // Para GPS real para o teste não misturar posição real e posição simulada.
     if (watchId) {
@@ -7782,7 +6563,6 @@ async function iniciarDemonstracao() {
     if (infoRotaDemo) infoRotaDemo.style.opacity = '0.22';
 
     modoNavegacaoAtivo = true;
-    document.body.classList.add('modo-navegacao');
     distanciaDemoPercorridaKm = 0;
     indexSimulacao = 0;
     velocidadeDemoAtual = 55;
@@ -7818,9 +6598,7 @@ async function iniciarDemonstracao() {
     atualizarHUDDemo();
 
     speak(
-        demoDadosAtivo
-            ? 'Modo demonstração com dados iniciado. A viagem será gravada como teste.'
-            : 'Modo demonstração visual iniciado.'
+        'Modo demonstração iniciado. Simulando navegação do motorista.'
     );
 
     let ultimaVerificacaoReporte = 0;
@@ -7861,8 +6639,8 @@ async function iniciarDemonstracao() {
         );
 
         /*
-         * O movimento continua local para ficar fluido. Ao chegar ao destino,
-         * o trajeto é amostrado e enviado em lote como GPS de simulação.
+         * Continua mostrando reportes/reação visual,
+         * mas o demo não envia a posição simulada ao servidor.
          */
         if (
             navigator.onLine &&
@@ -8087,38 +6865,8 @@ let ultimoUpdateCameraGps = 0;
 let ultimoUpdateHudGps = 0;
 const GPS_PRECISAO_MAX_INICIO_M = 80;
 const GPS_PRECISAO_REJEITAR_M = 150;
-const GPS_INTERVALO_CAMERA_MS = 180;
-const GPS_INTERVALO_HUD_MS = 180;
-
-/* ===== V25: movimento visual profissional ===== */
-let alvoPosicaoVisualGps = null;
-let posicaoVisualGps = null;
-let alvoBearingVisualGps = null;
-let bearingVisualGps = null;
-let alvoCameraGps = null;
-let ultimoFrameVisualGps = 0;
-let rafVisualGps = null;
-
-/* Predição curta entre fixes para não "parar e pular" como GPS bruto. */
-let ultimoFixVisualPerformance = 0;
-let velocidadeVisualMps = 0;
-let bearingMovimentoGps = 0;
-let ultimoMatchRota = null;
-let maiorProgressoRota = 0;
-
-/* ===== V25: recálculo rigoroso de desvio ===== */
-let foraRotaDesde = 0;
-let foraRotaFixes = 0;
-let direcaoErradaDesde = 0;
-let direcaoErradaFixes = 0;
-let recalculoSaidaEmAndamento = false;
-let ultimoRecalculoSaidaRota = 0;
-const FORA_ROTA_MIN_FIXES = 2;
-const FORA_ROTA_MIN_MS = 1200;
-const DIRECAO_ERRADA_MIN_FIXES = 2;
-const DIRECAO_ERRADA_MIN_MS = 900;
-const RECALCULO_SAIDA_COOLDOWN_MS = 5000;
-
+const GPS_INTERVALO_CAMERA_MS = 450;
+const GPS_INTERVALO_HUD_MS = 250;
 
 // ======================================================
 // EVENTOS
