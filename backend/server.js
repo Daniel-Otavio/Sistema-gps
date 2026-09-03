@@ -823,6 +823,11 @@ async function criarTabelas() {
         ON guardiao_eventos(id_viagem, ativo, atualizado_em DESC)
     `);
 
+    await pool.query(`
+        CREATE INDEX IF NOT EXISTS idx_guardiao_veiculo_ativo
+        ON guardiao_eventos(id_veiculo, ativo, atualizado_em DESC)
+    `);
+
     // Segurança operacional da viagem.
     await pool.query(`
         ALTER TABLE viagens
@@ -4365,6 +4370,7 @@ async function buscarRestricoesValidadasAtivas(client = pool) {
         SELECT *
         FROM restricoes_validadas
         WHERE ativa = TRUE
+          AND LOWER(COALESCE(fonte,'')) <> 'teste_guardiao'
           AND (valida_ate IS NULL OR valida_ate > CURRENT_TIMESTAMP)
         ORDER BY validado_em DESC
     `);
@@ -6482,6 +6488,136 @@ app.get('/monitoramento/resumo', autenticar, async (req, res) => {
 });
 
 
+function guardiaoPontoNaRotaPorPercentual(geojson, percentual) {
+    const coords = guardiaoExtrairCoordenadas(geojson);
+    if (coords.length < 2) return null;
+
+    const segmentos = [];
+    let totalKm = 0;
+    for (let i = 1; i < coords.length; i++) {
+        const km = distanciaKmEntrePontos(
+            Number(coords[i - 1][1]), Number(coords[i - 1][0]),
+            Number(coords[i][1]), Number(coords[i][0])
+        );
+        if (!Number.isFinite(km)) continue;
+        segmentos.push({ inicio:coords[i - 1], fim:coords[i], km });
+        totalKm += km;
+    }
+    if (totalKm <= 0) return null;
+
+    const alvoKm = totalKm * (percentual / 100);
+    let percorridoKm = 0;
+    for (const segmento of segmentos) {
+        if (percorridoKm + segmento.km >= alvoKm) {
+            const fracao = segmento.km > 0
+                ? (alvoKm - percorridoKm) / segmento.km
+                : 0;
+            return {
+                lat:Number(segmento.inicio[1]) + (Number(segmento.fim[1]) - Number(segmento.inicio[1])) * fracao,
+                lng:Number(segmento.inicio[0]) + (Number(segmento.fim[0]) - Number(segmento.inicio[0])) * fracao,
+                distancia_total_km:Number(totalKm.toFixed(3)),
+                percentual
+            };
+        }
+        percorridoKm += segmento.km;
+    }
+
+    const ultimo = coords[coords.length - 1];
+    return { lat:Number(ultimo[1]), lng:Number(ultimo[0]), distancia_total_km:Number(totalKm.toFixed(3)), percentual };
+}
+
+// Restrição efêmera para ensaio do Guardião. É ignorada pelo roteamento e pré-check.
+app.post('/guardiao/teste/restricao', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+
+    const idViagem = Number(req.body?.id_viagem);
+    const percentual = Math.max(5, Math.min(95, Number(req.body?.percentual ?? 50)));
+    const limiteAltura = Number(req.body?.limite_altura);
+    const duracaoHoras = Math.max(1, Math.min(24, Number(req.body?.duracao_horas ?? 4)));
+
+    if (!Number.isInteger(idViagem) || idViagem <= 0) {
+        return res.status(400).json({ erro:'Selecione uma viagem válida.' });
+    }
+    if (!Number.isFinite(limiteAltura) || limiteAltura <= 0 || limiteAltura > 10) {
+        return res.status(400).json({ erro:'Informe uma altura limite válida.' });
+    }
+
+    try {
+        const viagemResult = await pool.query(`
+            SELECT vg.id,vg.status,v.placa,
+                   COALESCE(vg.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson) AS dados_geojson
+            FROM viagens vg
+            JOIN veiculos v ON v.id=vg.id_veiculo
+            JOIN rotas r ON r.id=vg.id_rota
+            LEFT JOIN rotas_especificas re ON re.id=vg.id_rota_especifica
+            WHERE vg.id=$1 AND vg.status IN ('planejada','em_andamento')
+            LIMIT 1
+        `,[idViagem]);
+
+        if (!viagemResult.rows.length) {
+            return res.status(404).json({ erro:'Viagem planejada ou em andamento não encontrada.' });
+        }
+
+        const viagem = viagemResult.rows[0];
+        const ponto = guardiaoPontoNaRotaPorPercentual(viagem.dados_geojson, percentual);
+        if (!ponto) return res.status(400).json({ erro:'A rota não possui geometria suficiente para o teste.' });
+
+        const fonteId = `viagem-${idViagem}-${Date.now()}`;
+        const nome = `VIADUTO FICTÍCIO • TESTE GUARDIÃO • ${viagem.placa}`;
+        const criado = await pool.query(`
+            INSERT INTO restricoes_validadas
+            (fonte,fonte_id,tipo,nome,lat,lng,raio_metros,limite_altura,
+             evidencia_texto,observacao,confianca,ativa,valida_ate,validado_por,validado_em,atualizada_em)
+            VALUES
+            ('teste_guardiao',$1,'ponte_viaduto_teste',$2,$3,$4,180,$5,
+             'Restrição fictícia criada exclusivamente para teste do Guardião.',
+             $6,100,TRUE,CURRENT_TIMESTAMP + ($7 || ' hours')::INTERVAL,
+             $8,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+            RETURNING *
+        `,[fonteId,nome,ponto.lat,ponto.lng,limiteAltura,
+            `Teste em ${percentual}% da rota da viagem #${idViagem}. Ignorar em decisões reais.`,
+            duracaoHoras,req.usuario.id]);
+
+        res.status(201).json({
+            mensagem:'Restrição fictícia criada. O roteador a ignorará; somente o Guardião poderá alertar.',
+            restricao:criado.rows[0],
+            ponto_rota:ponto
+        });
+    } catch (erro) {
+        res.status(500).json({ erro:erro.message });
+    }
+});
+
+app.delete('/guardiao/teste/restricoes/:id', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ erro:'Restrição inválida.' });
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(`
+            UPDATE guardiao_eventos SET ativo=FALSE,atualizado_em=CURRENT_TIMESTAMP
+            WHERE id_restricao=$1
+        `,[id]);
+        const removida = await client.query(`
+            DELETE FROM restricoes_validadas
+            WHERE id=$1 AND LOWER(COALESCE(fonte,''))='teste_guardiao'
+            RETURNING id
+        `,[id]);
+        if (!removida.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ erro:'Restrição fictícia não encontrada.' });
+        }
+        await client.query('COMMIT');
+        res.json({ mensagem:'Restrição fictícia removida.', id });
+    } catch (erro) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        res.status(500).json({ erro:erro.message });
+    } finally {
+        client.release();
+    }
+});
 app.get('/guardiao/eventos', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro:'Acesso negado' });
@@ -6582,7 +6718,7 @@ app.get('/alertas', autenticar, async (req, res) => {
         const guardiaoAtivos = await pool.query(`
             SELECT
                 ge.id,ge.id_viagem,ge.nivel,ge.tipo_risco,ge.distancia_km,
-                ge.tempo_estimado_min,ge.mensagem,ge.atualizado_em,
+                ge.tempo_estimado_min,ge.mensagem,ge.dados,ge.atualizado_em,
                 v.placa,v.frota
             FROM guardiao_eventos ge
             JOIN viagens vg ON vg.id = ge.id_viagem
@@ -6606,7 +6742,9 @@ app.get('/alertas', autenticar, async (req, res) => {
                 guardiao_evento_id:g.id,
                 mensagem:`🛡️ ${g.mensagem}`,
                 distancia_km:g.distancia_km,
-                tempo_estimado_min:g.tempo_estimado_min
+                tempo_estimado_min:g.tempo_estimado_min,
+                incompatibilidade:g.dados?.incompatibilidade || null,
+                restricao:g.dados?.restricao || null
             });
         }
 
@@ -7943,8 +8081,10 @@ app.delete('/reportes', autenticar, async (req, res) => {
 // 🛡️ GUARDIÃO V1
 // ======================================================
 function guardiaoExtrairCoordenadas(geojson) {
-    const c = geojson?.features?.[0]?.geometry?.coordinates;
-    return Array.isArray(c) ? c : [];
+    const geometria = geojson?.features?.[0]?.geometry || geojson?.geometry || geojson;
+    const coordenadas = geometria?.coordinates;
+    if (!Array.isArray(coordenadas)) return [];
+    return geometria?.type === 'MultiLineString' ? coordenadas.flat() : coordenadas;
 }
 
 function guardiaoAlcanceKmPorVelocidade(v) {
@@ -8039,8 +8179,11 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
             const tempo=guardiaoTempoMin(distAte,velocidadeKmh);
             const nivel=(distAte<=2 || (tempo!==null && tempo<=2.5)) ? 'critico' : 'atencao';
             const nome=r.nome||r.rodovia||'Restrição validada';
+            const confianca=Number(r.confianca);
+            const baixaConfianca=Number.isFinite(confianca) && confianca < 60;
+            const qualificacao=baixaConfianca?'Possível incompatibilidade':'Incompatibilidade';
             const mensagem=
-                `${nivel==='critico'?'🔴':'🟠'} ${conflito.tipo.toUpperCase()} incompatível a `+
+                `${nivel==='critico'?'🔴':'🟠'} ${qualificacao} de ${conflito.tipo.toUpperCase()} a `+
                 `${distAte.toFixed(1)} km • veículo ${conflito.veiculo.toFixed(2)} ${conflito.unidade} • `+
                 `limite ${conflito.limite.toFixed(2)} ${conflito.unidade} • ${nome}`;
 
@@ -8051,7 +8194,8 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
                 mensagem,
                 restricao:{id:r.id,nome:r.nome,tipo:r.tipo,lat:Number(r.lat),lng:Number(r.lng),
                     rodovia:r.rodovia,km:r.km,confianca:r.confianca,fonte:r.fonte},
-                incompatibilidade:conflito
+                incompatibilidade:conflito,
+                baixa_confianca:baixaConfianca
             });
         }
 
@@ -8065,7 +8209,6 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
             await pool.query(`
                 UPDATE guardiao_eventos SET ativo=FALSE, atualizado_em=CURRENT_TIMESTAMP
                 WHERE id_viagem=$1 AND ativo=TRUE
-                  AND atualizado_em < CURRENT_TIMESTAMP - INTERVAL '3 minutes'
             `,[viagem.id]);
             return {status:'seguro',alcance_km:alcanceKm,total_riscos:0};
         }
@@ -8081,7 +8224,9 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
             posicao:{lat:Number(lat),lon:Number(lon)},
             velocidade_kmh:Number.isFinite(Number(velocidadeKmh))?Number(velocidadeKmh):null,
             restricao:principal.restricao,
-            incompatibilidade:principal.incompatibilidade
+            incompatibilidade:principal.incompatibilidade,
+            baixa_confianca:principal.baixa_confianca,
+            origem_coleta:req?.body?.origem_coleta || 'gps_app'
         };
 
         let idEvento=null;
@@ -8111,7 +8256,14 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
                     idViagem:viagem.id,usuario,acao:'GUARDIAO_ALERTA',
                     statusAnterior:viagem.estado_monitoramento||'normal',
                     statusNovo:principal.nivel==='critico'?'critico':'atencao',
-                    detalhes:{id_evento:idEvento,...dados,mensagem:principal.mensagem},req
+                    detalhes:{
+                        id_evento:idEvento,id_viagem:viagem.id,id_veiculo:viagem.id_veiculo,
+                        id_restricao:principal.id_restricao,distancia_km:principal.distancia_km,
+                        tipo_risco:principal.tipo_risco,valor_veiculo:principal.incompatibilidade.veiculo,
+                        limite:principal.incompatibilidade.limite,unidade:principal.incompatibilidade.unidade,
+                        confianca:principal.restricao.confianca,fonte:principal.restricao.fonte,
+                        ...dados,mensagem:principal.mensagem
+                    },req
                 });
             } catch (_) {}
         }
