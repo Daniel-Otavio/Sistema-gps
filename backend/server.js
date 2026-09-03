@@ -6289,6 +6289,7 @@ app.get('/viagens/:id/auditoria', autenticar, async (req, res) => {
             JOIN rotas r ON r.id = vg.id_rota
             LEFT JOIN usuarios u ON u.id = a.id_usuario
             WHERE a.id_viagem = $1
+              AND a.acao <> 'GPS_RECUPERADO'
             ORDER BY a.criado_em DESC
             LIMIT 300
         `, [req.params.id]);
@@ -6329,6 +6330,7 @@ app.get('/auditoria/viagens', autenticar, async (req, res) => {
             WHERE
                 ($1 = '' OR UPPER(v.placa) LIKE '%' || $1 || '%')
                 AND ($2 = '' OR a.acao = $2)
+                AND a.acao <> 'GPS_RECUPERADO'
             ORDER BY a.criado_em DESC
             LIMIT 500
         `, [
@@ -8480,22 +8482,6 @@ app.post('/localizacao', autenticar, validar(schemas.localizacao), async (req, r
             idViagem &&
             contextoViagem.dados_geojson
         ) {
-            if (
-                contextoViagem.estado_monitoramento === 'gps_offline'
-            ) {
-                await registrarAuditoriaViagem({
-                    idViagem,
-                    usuario: req.usuario,
-                    acao: 'GPS_RECUPERADO',
-                    statusAnterior: 'gps_offline',
-                    statusNovo: 'normal',
-                    detalhes: {
-                        lat: req.body.lat,
-                        lon: req.body.lon
-                    },
-                    req
-                });
-            }
 
             monitoramento =
                 await atualizarEstadoDesvioTempoReal({
