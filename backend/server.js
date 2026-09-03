@@ -8129,6 +8129,60 @@ function guardiaoIncompatibilidade(restricao, viagem) {
     return testes[0] || null;
 }
 
+function guardiaoIndiceCoordenadaMaisProxima(coords, lat, lng) {
+    let indice = -1;
+    let menor = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+        const d = distanciaKmEntrePontos(lat,lng,Number(coords[i][1]),Number(coords[i][0]));
+        if (d < menor) { menor=d; indice=i; }
+    }
+    return indice;
+}
+
+async function encerrarEventosGuardiao({ viagem, coords, idxAtual, lat, lon, velocidadeKmh, usuario, req }) {
+    const ativos = await pool.query(`
+        SELECT id,id_restricao,nivel,tipo_risco,distancia_km,dados
+        FROM guardiao_eventos
+        WHERE id_viagem=$1 AND ativo=TRUE
+    `,[viagem.id]);
+
+    for (const evento of ativos.rows) {
+        const dados = evento.dados || {};
+        const restricao = dados.restricao || {};
+        const idxRestricao = Number.isFinite(Number(restricao.lat)) && Number.isFinite(Number(restricao.lng))
+            ? guardiaoIndiceCoordenadaMaisProxima(coords,Number(restricao.lat),Number(restricao.lng))
+            : -1;
+        const ultrapassou = idxRestricao >= 0 && idxAtual > idxRestricao;
+        const acao = ultrapassou ? 'GUARDIAO_RISCO_ULTRAPASSADO' : 'GUARDIAO_RISCO_ENCERRADO';
+        const comportamento = dados.comportamento || {};
+
+        await pool.query(`
+            UPDATE guardiao_eventos
+            SET ativo=FALSE,atualizado_em=CURRENT_TIMESTAMP,
+                dados=jsonb_set(COALESCE(dados,'{}'::jsonb),'{encerramento}', $1::jsonb,TRUE)
+            WHERE id=$2 AND ativo=TRUE
+        `,[JSON.stringify({
+            tipo:ultrapassou?'ultrapassado':'encerrado',lat:Number(lat),lon:Number(lon),
+            velocidade_kmh:Number.isFinite(Number(velocidadeKmh))?Number(velocidadeKmh):null,
+            registrado_em:new Date().toISOString()
+        }),evento.id]);
+
+        await registrarAuditoriaViagem({
+            idViagem:viagem.id,usuario,acao,
+            statusAnterior:evento.nivel,statusNovo:'encerrado',
+            detalhes:{
+                id_evento:evento.id,id_restricao:evento.id_restricao,tipo_risco:evento.tipo_risco,
+                distancia_anterior_km:evento.distancia_km,posicao:{lat:Number(lat),lon:Number(lon)},
+                restricao,incompatibilidade:dados.incompatibilidade || null,
+                velocidade_inicial_kmh:comportamento.velocidade_inicial_kmh ?? null,
+                velocidade_minima_kmh:comportamento.velocidade_minima_kmh ?? null,
+                reduziu_velocidade:Boolean(comportamento.reduziu_velocidade),
+                parou_antes:Boolean(comportamento.parou_antes),
+                mensagem:ultrapassou?'O veículo ultrapassou o ponto da restrição.':'O risco deixou de estar no corredor à frente.'
+            },req
+        });
+    }
+}
 async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario, req }) {
     try {
         const coords = guardiaoExtrairCoordenadas(viagem.dados_geojson);
@@ -8208,30 +8262,51 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
 
         const principal=candidatos[0]||null;
         if (!principal) {
-            await pool.query(`
-                UPDATE guardiao_eventos SET ativo=FALSE, atualizado_em=CURRENT_TIMESTAMP
-                WHERE id_viagem=$1 AND ativo=TRUE
-            `,[viagem.id]);
+            await encerrarEventosGuardiao({
+                viagem,coords,idxAtual,lat,lon,velocidadeKmh,usuario,req
+            });
             return {status:'seguro',alcance_km:alcanceKm,total_riscos:0};
         }
 
         const existente=await pool.query(`
-            SELECT id FROM guardiao_eventos
+            SELECT id,nivel,dados FROM guardiao_eventos
             WHERE id_viagem=$1 AND id_restricao=$2 AND tipo_risco=$3 AND ativo=TRUE
             ORDER BY atualizado_em DESC LIMIT 1
         `,[viagem.id,principal.id_restricao,principal.tipo_risco]);
 
+        const velocidadeAtual=Number.isFinite(Number(velocidadeKmh))?Number(velocidadeKmh):null;
+        const dadosAnteriores=existente.rows[0]?.dados || {};
+        const comportamentoAnterior=dadosAnteriores.comportamento || {};
+        const velocidadeInicial=comportamentoAnterior.velocidade_inicial_kmh ?? velocidadeAtual;
+        const velocidadeMinima=velocidadeAtual===null
+            ? (comportamentoAnterior.velocidade_minima_kmh ?? null)
+            : Math.min(comportamentoAnterior.velocidade_minima_kmh ?? velocidadeAtual,velocidadeAtual);
+        const reduziu=Boolean(comportamentoAnterior.reduziu_velocidade) || (
+            velocidadeAtual!==null && velocidadeInicial!==null && velocidadeInicial>=15 &&
+            velocidadeAtual <= Math.max(velocidadeInicial-10,velocidadeInicial*.8)
+        );
+        const parou=Boolean(comportamentoAnterior.parou_antes) || (
+            velocidadeAtual!==null && velocidadeAtual<=5 && principal.distancia_km>0.1
+        );
         const dados={
             alcance_km:alcanceKm,
             posicao:{lat:Number(lat),lon:Number(lon)},
-            velocidade_kmh:Number.isFinite(Number(velocidadeKmh))?Number(velocidadeKmh):null,
+            velocidade_kmh:velocidadeAtual,
             restricao:principal.restricao,
             incompatibilidade:principal.incompatibilidade,
             baixa_confianca:principal.baixa_confianca,
-            origem_coleta:req?.body?.origem_coleta || 'gps_app'
+            origem_coleta:req?.body?.origem_coleta || 'gps_app',
+            critico_registrado:Boolean(dadosAnteriores.critico_registrado) || principal.nivel==='critico',
+            comportamento:{
+                velocidade_inicial_kmh:velocidadeInicial,
+                velocidade_minima_kmh:velocidadeMinima,
+                reduziu_velocidade:reduziu,
+                parou_antes:parou
+            }
         };
 
         let idEvento=null;
+        const entrouCritico=principal.nivel==='critico' && !Boolean(dadosAnteriores.critico_registrado);
         if (existente.rows.length) {
             idEvento=existente.rows[0].id;
             await pool.query(`
@@ -8268,6 +8343,19 @@ async function analisarGuardiaoViagem({ viagem, lat, lon, velocidadeKmh, usuario
                     },req
                 });
             } catch (_) {}
+        }
+
+        if (entrouCritico) {
+            await registrarAuditoriaViagem({
+                idViagem:viagem.id,usuario,acao:'GUARDIAO_CRITICO',
+                statusAnterior:existente.rows[0]?.nivel || 'novo_risco',statusNovo:'critico',
+                detalhes:{
+                    id_evento:idEvento,id_restricao:principal.id_restricao,tipo_risco:principal.tipo_risco,
+                    distancia_km:principal.distancia_km,tempo_estimado_min:principal.tempo_estimado_min,
+                    posicao:dados.posicao,restricao:principal.restricao,incompatibilidade:principal.incompatibilidade,
+                    ...dados.comportamento,mensagem:principal.mensagem
+                },req
+            });
         }
 
         return {
