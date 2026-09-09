@@ -3273,17 +3273,28 @@ function hashFonteANTT(registro) {
 }
 
 async function carregarInfraestruturaANTT() {
-    const [pontesDataset, alturaDataset] =
-        await Promise.all([
+    const [pontesResultado, alturaResultado] =
+        await Promise.allSettled([
             consultarDatasetANTT(ANTT_DATASETS.pontes),
             consultarDatasetANTT(ANTT_DATASETS.altura)
         ]);
 
-    const pontes = pontesDataset.registros
+    const pontesDataset = pontesResultado.status === 'fulfilled'
+        ? pontesResultado.value
+        : null;
+    const alturaDataset = alturaResultado.status === 'fulfilled'
+        ? alturaResultado.value
+        : null;
+
+    if (!pontesDataset && !alturaDataset) {
+        throw new Error(`Nenhum conjunto ANTT disponível. Pontes: ${pontesResultado.reason?.message || 'indisponível'}; Altura: ${alturaResultado.reason?.message || 'indisponível'}`);
+    }
+
+    const pontes = (pontesDataset?.registros || [])
         .map(prepararPonteANTT)
         .filter(r => Number.isFinite(r.latitude) && Number.isFinite(r.longitude));
 
-    const deteccaoAltura = alturaDataset.registros
+    const deteccaoAltura = (alturaDataset?.registros || [])
         .map(prepararDeteccaoAlturaANTT)
         .filter(r =>
             Number.isFinite(r.latitude) &&
@@ -3295,9 +3306,13 @@ async function carregarInfraestruturaANTT() {
         pontes,
         deteccaoAltura,
         datasets: {
-            pontes: pontesDataset.titulo,
-            altura: alturaDataset.titulo
-        }
+            pontes: pontesDataset?.titulo || null,
+            altura: alturaDataset?.titulo || null
+        },
+        avisos: [
+            pontesResultado.status === 'rejected' ? `Pontes: ${pontesResultado.reason?.message}` : null,
+            alturaResultado.status === 'rejected' ? `Detecção de altura: ${alturaResultado.reason?.message}` : null
+        ].filter(Boolean)
     };
 }
 
@@ -7369,7 +7384,9 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             equipamentos_altura_na_rota:
                 salvos.filter(x =>
                     x.tipo === 'equipamento_deteccao_altura'
-                ).length
+                ).length,
+            avisos: infraestrutura.avisos || [],
+            datasets: infraestrutura.datasets
         });
 
     } catch (erro) {
