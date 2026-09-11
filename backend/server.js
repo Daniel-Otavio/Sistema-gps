@@ -757,6 +757,39 @@ async function criarTabelas() {
     await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS feedback_em TIMESTAMPTZ`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guardiao_sombra_empresa_data ON guardiao_sombra_eventos(id_empresa,ultimo_evento_em DESC)`);
 
+    // Piloto móvel do Guardião: o celular atua como fonte independente de GPS.
+    await pool.query(`CREATE TABLE IF NOT EXISTS piloto_mobile_sessoes (
+        id BIGSERIAL PRIMARY KEY,
+        id_empresa INTEGER REFERENCES empresas_integracao(id) ON DELETE SET NULL,
+        id_motorista INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+        id_veiculo INTEGER NOT NULL REFERENCES veiculos(id) ON DELETE CASCADE,
+        id_viagem INTEGER REFERENCES viagens(id) ON DELETE SET NULL,
+        status VARCHAR(24) NOT NULL DEFAULT 'ativa'
+            CHECK(status IN('ativa','encerrada','interrompida')),
+        modo_sombra BOOLEAN NOT NULL DEFAULT TRUE,
+        composicao JSONB NOT NULL DEFAULT '{}'::jsonb,
+        dispositivo JSONB NOT NULL DEFAULT '{}'::jsonb,
+        ultima_lat DOUBLE PRECISION,
+        ultima_lon DOUBLE PRECISION,
+        ultima_precisao_m DOUBLE PRECISION,
+        ultima_velocidade_kmh DOUBLE PRECISION,
+        bateria_percentual DOUBLE PRECISION,
+        carregando BOOLEAN,
+        tipo_rede VARCHAR(30),
+        gps_ativo BOOLEAN,
+        app_segundo_plano BOOLEAN,
+        ultima_sequencia BIGINT,
+        total_posicoes INTEGER NOT NULL DEFAULT 0,
+        total_analises INTEGER NOT NULL DEFAULT 0,
+        total_riscos INTEGER NOT NULL DEFAULT 0,
+        iniciado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        ultima_comunicacao_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        encerrado_em TIMESTAMPTZ,
+        motivo_encerramento VARCHAR(120)
+    )`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_piloto_mobile_ativo_motorista ON piloto_mobile_sessoes(id_motorista) WHERE status='ativa'`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_piloto_mobile_empresa_status ON piloto_mobile_sessoes(id_empresa,status,ultima_comunicacao_em DESC)`);
+
     // Reportes
     await pool.query(`
         CREATE TABLE IF NOT EXISTS reportes (
@@ -1351,7 +1384,14 @@ const schemas = {
         direcao_graus: Joi.number().min(0).max(360).allow(null).optional(),
         altitude_m: Joi.number().min(-500).max(10000).allow(null).optional(),
         timestamp_dispositivo: Joi.date().iso().allow(null).optional(),
-        origem_coleta: Joi.string().valid('gps_app','offline_sync','simulacao').optional()
+        origem_coleta: Joi.string().valid('gps_app','offline_sync','simulacao','piloto_mobile').optional(),
+        sessao_piloto_id: Joi.number().integer().positive().allow(null).optional(),
+        sequencia: Joi.number().integer().min(0).allow(null).optional(),
+        bateria_percentual: Joi.number().min(0).max(100).allow(null).optional(),
+        carregando: Joi.boolean().allow(null).optional(),
+        tipo_rede: Joi.string().max(30).allow('',null).optional(),
+        gps_ativo: Joi.boolean().allow(null).optional(),
+        app_segundo_plano: Joi.boolean().allow(null).optional()
     }),
 
     status: Joi.object({
@@ -2921,6 +2961,21 @@ const anttDatasetCache = new NodeCache({
     stdTTL: 6 * 60 * 60,
     checkperiod: 10 * 60
 });
+const osmCruzamentoCache = new NodeCache({stdTTL:6*60*60,checkperiod:10*60});
+
+function numeroLimiteOSM(valor){if(valor===null||valor===undefined)return null;const n=Number(String(valor).replace(',','.').match(/[0-9]+(?:\.[0-9]+)?/)?.[0]);return Number.isFinite(n)&&n>0?n:null;}
+async function cruzarCandidatosComOSM(candidatos){
+    if(!candidatos.length)return{porIndice:new Map(),aviso:null};
+    const chave=`osm_${candidatos.map(x=>`${x.reg.latitude.toFixed(4)},${x.reg.longitude.toFixed(4)}`).join('|')}`;
+    const cache=osmCruzamentoCache.get(chave);if(cache)return cache;
+    try{
+        const elementos=[];
+        for(let inicio=0;inicio<candidatos.length;inicio+=25){const lote=candidatos.slice(inicio,inicio+25);const blocos=lote.map(x=>{const p=`around:120,${x.reg.latitude},${x.reg.longitude}`;return `nwr(${p})["bridge"];nwr(${p})["tunnel"];nwr(${p})["maxheight"];nwr(${p})["maxweight"];nwr(${p})["hgv"];`;}).join('');const query=`[out:json][timeout:45];(${blocos});out center tags;`;const resposta=await axios.post('https://overpass-api.de/api/interpreter',new URLSearchParams({data:query}).toString(),{headers:{'Content-Type':'application/x-www-form-urlencoded','User-Agent':'GPS-Caminhao-Restricoes/1.0'},timeout:60000,maxContentLength:10*1024*1024});elementos.push(...(resposta.data?.elements||[]));}
+        const unicos=[...new Map(elementos.map(e=>[`${e.type}/${e.id}`,e])).values()];const porIndice=new Map();
+        candidatos.forEach((x,indice)=>{const proximos=unicos.map(e=>({e,lat:Number(e.lat??e.center?.lat),lon:Number(e.lon??e.center?.lon)})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)).map(p=>({...p,distancia_km:distanciaKmEntrePontos(x.reg.latitude,x.reg.longitude,p.lat,p.lon)})).filter(p=>p.distancia_km<=.12).sort((a,b)=>a.distancia_km-b.distancia_km).slice(0,5);porIndice.set(indice,proximos);});
+        const resultado={porIndice,aviso:null};osmCruzamentoCache.set(chave,resultado);return resultado;
+    }catch(erro){return{porIndice:new Map(),aviso:`OpenStreetMap indisponível para cruzamento: ${erro.message}`};}
+}
 
 function semAcentoANTT(valor) {
     return String(valor ?? '')
@@ -7284,19 +7339,23 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             ...infraestrutura.deteccaoAltura
         ];
 
-        const salvos = [];
-
-        for (const reg of registros) {
-            const analise = analisarPosicaoNaRota(
+        const candidatosNaRota = registros.map(reg=>({reg,analise:analisarPosicaoNaRota(
                 viagem.dados_geojson,
                 reg.latitude,
                 reg.longitude
-            );
+            )})).filter(x=>x.analise.distanciaRotaKm!==null&&x.analise.distanciaRotaKm<=.08);
+        const cruzamentoOSM=await cruzarCandidatosComOSM(candidatosNaRota);
+        const salvos = [];
 
-            if (
-                analise.distanciaRotaKm === null ||
-                analise.distanciaRotaKm > 1
-            ) continue;
+        for (let indice=0;indice<candidatosNaRota.length;indice++) {
+            const {reg,analise}=candidatosNaRota[indice];
+            const osm=(cruzamentoOSM.porIndice.get(indice)||[]).map(x=>({id:`${x.e.type}/${x.e.id}`,distancia_m:Math.round(x.distancia_km*1000),tags:x.e.tags||{}}));
+            const limitesOSM=osm.map(x=>({altura:numeroLimiteOSM(x.tags.maxheight),peso:numeroLimiteOSM(x.tags.maxweight),fonte:x.id})).filter(x=>x.altura||x.peso);
+            const incompatibilidades=limitesOSM.flatMap(x=>[x.altura&&valorPositivoOuNulo(viagem.altura_total)>x.altura?{tipo:'altura',veiculo:viagem.altura_total,limite:x.altura,fonte:x.fonte}:null,x.peso&&valorPositivoOuNulo(viagem.peso)>x.peso?{tipo:'peso',veiculo:viagem.peso,limite:x.peso,fonte:x.fonte}:null].filter(Boolean));
+            const alturasDistintas=new Set(limitesOSM.map(x=>x.altura).filter(Boolean).map(x=>Number(x).toFixed(2)));
+            const pesosDistintos=new Set(limitesOSM.map(x=>x.peso).filter(Boolean).map(x=>Number(x).toFixed(2)));
+            const fontesDivergentes=alturasDistintas.size>1||pesosDistintos.size>1;
+            const classificacao=incompatibilidades.length?'alta_prioridade':fontesDivergentes?'divergencia_fontes':limitesOSM.length||osm.length?'possivel_risco':'inventario';
 
             const tipoTexto = semAcentoANTT(reg.tipo).toLowerCase();
 
@@ -7318,7 +7377,14 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 km: reg.km,
                 sentido: reg.sentido,
                 origem_dado: 'Portal de Dados Abertos ANTT',
-                dados_originais: reg.original
+                dados_originais: reg.original,
+                fontes_consultadas:['ANTT','OpenStreetMap'],
+                correspondencias_osm:osm,
+                limites_osm:limitesOSM,
+                incompatibilidades,
+                fontes_divergentes:fontesDivergentes,
+                classificacao_triagem:classificacao,
+                requer_validacao_humana:true
             };
 
             const observacao =
@@ -7340,7 +7406,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                     $1,$2,$3,$4,
                     'antt',$5,$6,$7,
                     $8,$9,$10,
-                    'verificar','baixo',$11,$12::jsonb,$13,
+                    'verificar',$14,$11,$12::jsonb,$13,
                     CURRENT_TIMESTAMP
                 )
                 ON CONFLICT (id_viagem, fonte, fonte_id)
@@ -7351,6 +7417,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                     lng = EXCLUDED.lng,
                     distancia_rota_km = EXCLUDED.distancia_rota_km,
                     tags = EXCLUDED.tags,
+                    risco = EXCLUDED.risco,
                     observacao = EXCLUDED.observacao,
                     ultima_deteccao = CURRENT_TIMESTAMP
                 RETURNING *
@@ -7367,7 +7434,8 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 Number(analise.distanciaRotaKm.toFixed(3)),
                 reg.categoria === 'PONTE_SIMILAR' ? 90 : 92,
                 JSON.stringify(tags),
-                observacao
+                observacao,
+                classificacao==='alta_prioridade'?'alto':classificacao==='possivel_risco'?'medio':'baixo'
             ]);
 
             salvos.push(salvo.rows[0]);
@@ -7377,6 +7445,12 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             mensagem: 'Varredura ANTT concluída.',
             fonte: 'ANTT',
             candidatos_na_rota: salvos.length,
+            fora_do_corredor: Math.max(0, registros.length - candidatosNaRota.length),
+            triagem: salvos.reduce((total,item)=>{
+                const categoria=item.tags?.classificacao_triagem||'inventario';
+                total[categoria]=(total[categoria]||0)+1;
+                return total;
+            },{}),
             pontes_similares_na_rota:
                 salvos.filter(x =>
                     ['ponte_viaduto','passagem_inferior'].includes(x.tipo)
@@ -7385,7 +7459,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 salvos.filter(x =>
                     x.tipo === 'equipamento_deteccao_altura'
                 ).length,
-            avisos: infraestrutura.avisos || [],
+            avisos: [...(infraestrutura.avisos || []),cruzamentoOSM.aviso].filter(Boolean),
             datasets: infraestrutura.datasets
         });
 
@@ -8729,7 +8803,7 @@ function diferencaAngularGuardiao(a,b){return Math.abs(((Number(a)-Number(b)+540
 function direcaoEntrePontosGuardiao(lat1,lon1,lat2,lon2){const rad=v=>Number(v)*Math.PI/180,p1=rad(lat1),p2=rad(lat2),dl=rad(lon2-lon1);return(Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))*180/Math.PI+360)%360;}
 const cacheRestricoesRadarEmpresa=new Map();
 async function buscarRestricoesRadarEmpresa(lat,lon,margem){const chave=`${Number(lat).toFixed(2)}:${Number(lon).toFixed(2)}:${Number(margem).toFixed(3)}`,agora=Date.now(),existente=cacheRestricoesRadarEmpresa.get(chave);if(existente&&existente.expiraEm>agora)return existente.promise;const promise=pool.query(`SELECT * FROM restricoes_validadas WHERE ativa=TRUE AND(valida_ate IS NULL OR valida_ate>CURRENT_TIMESTAMP)AND lat BETWEEN $1 AND $2 AND lng BETWEEN $3 AND $4`,[lat-margem,lat+margem,lon-margem,lon+margem]).then(r=>r.rows).catch(erro=>{cacheRestricoesRadarEmpresa.delete(chave);throw erro;});cacheRestricoesRadarEmpresa.set(chave,{expiraEm:agora+2000,promise});if(cacheRestricoesRadarEmpresa.size>500)for(const[k,v]of cacheRestricoesRadarEmpresa)if(v.expiraEm<=agora)cacheRestricoesRadarEmpresa.delete(k);return promise;}
-async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,direcao}){
+async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,direcao,perfilForcado=null}){
     let rumo=Number(direcao),vel=Number(velocidade),a=null;if(!Number.isFinite(rumo)||!Number.isFinite(vel)){const anterior=await pool.query(`SELECT * FROM empresa_telemetria_estado WHERE id_empresa=$1 AND id_veiculo=$2`,[empresa.id,veiculo.id]);a=anterior.rows[0]||null;}if(!Number.isFinite(rumo)&&a&&distanciaKmEntrePontos(a.lat,a.lon,lat,lon)>=.003)rumo=direcaoEntrePontosGuardiao(a.lat,a.lon,lat,lon);if(!Number.isFinite(vel)&&a){const horas=(Date.now()-new Date(a.atualizado_em).getTime())/3600000,km=distanciaKmEntrePontos(a.lat,a.lon,lat,lon);if(horas>0)vel=Math.min(160,km/horas);}if(!Number.isFinite(rumo))rumo=Number(a?.direcao_graus);if(!Number.isFinite(vel))vel=Number(a?.velocidade_kmh)||0;
     await pool.query(`INSERT INTO empresa_telemetria_estado(id_empresa,id_veiculo,lat,lon,velocidade_kmh,direcao_graus,atualizado_em)VALUES($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)ON CONFLICT(id_empresa,id_veiculo)DO UPDATE SET lat=EXCLUDED.lat,lon=EXCLUDED.lon,velocidade_kmh=EXCLUDED.velocidade_kmh,direcao_graus=EXCLUDED.direcao_graus,atualizado_em=CURRENT_TIMESTAMP`,[empresa.id,veiculo.id,lat,lon,vel,Number.isFinite(rumo)?rumo:null]);if(!Number.isFinite(rumo))return{status:'calibrando',riscos:[]};
     const alcance=guardiaoAlcanceKmPorVelocidade(vel),margem=Math.max(.07,alcance/90);
@@ -8737,7 +8811,7 @@ async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,dir
         (SELECT row_to_json(vg) FROM(SELECT id,altura_total,peso_total,carga FROM viagens WHERE id_veiculo=$1 AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST,id DESC LIMIT 1)vg) AS viagem,
         (SELECT row_to_json(pc) FROM(SELECT * FROM perfis_composicao WHERE id_veiculo=$1 AND ativo=TRUE ORDER BY updated_at DESC LIMIT 1)pc) AS composicao`,[veiculo.id]);
     const viagemAtiva=contextoPerfil.rows[0]?.viagem,composicao=contextoPerfil.rows[0]?.composicao;
-    const perfil=viagemAtiva?{
+    const perfil=perfilForcado?{...perfilForcado,origem_dados:'sessao_piloto_mobile'}:viagemAtiva?{
         id_viagem:viagemAtiva.id,nome:'Viagem ativa',origem_dados:'viagem_ativa',carga:viagemAtiva.carga,
         altura:valorPositivoOuNulo(viagemAtiva.altura_total)??valorPositivoOuNulo(composicao?.altura),
         largura:valorPositivoOuNulo(composicao?.largura)??valorPositivoOuNulo(veiculo.largura),
@@ -8777,6 +8851,87 @@ app.post('/integracoes/gps/localizacao',autenticarEmpresaIntegracao,exigirEscopo
 });
 // LOCALIZAÇÕES
 // ======================================================
+app.post('/piloto-mobile/sessoes/iniciar', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro:'Acesso negado' });
+    const composicao = req.body?.composicao || {};
+    const dimensoes = ['altura','largura','comprimento','peso'];
+    if (!String(composicao.tipo || '').trim() || dimensoes.some(c => !Number.isFinite(Number(composicao[c])) || Number(composicao[c]) <= 0)) {
+        return res.status(400).json({ erro:'Informe tipo, altura, largura, comprimento e peso positivos da composição carregada.' });
+    }
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const contexto = await client.query(`
+            SELECT u.id_veiculo,v.placa,ev.id_empresa,
+                vg.id AS id_viagem
+            FROM usuarios u
+            JOIN veiculos v ON v.id=u.id_veiculo AND v.ativo=TRUE
+            LEFT JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id
+            LEFT JOIN LATERAL(
+                SELECT id FROM viagens
+                WHERE id_veiculo=v.id AND status='em_andamento'
+                ORDER BY saida_real DESC NULLS LAST LIMIT 1
+            )vg ON TRUE
+            WHERE u.id=$1 AND u.tipo='motorista'
+            LIMIT 1
+        `,[req.usuario.id]);
+        if (!contexto.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ erro:'Motorista sem veículo ativo vinculado.' });
+        }
+        const ctx=contexto.rows[0];
+        await client.query(`UPDATE piloto_mobile_sessoes SET status='interrompida',encerrado_em=CURRENT_TIMESTAMP,motivo_encerramento='nova_sessao_iniciada' WHERE id_motorista=$1 AND status='ativa'`,[req.usuario.id]);
+        const criada=await client.query(`
+            INSERT INTO piloto_mobile_sessoes
+                (id_empresa,id_motorista,id_veiculo,id_viagem,modo_sombra,composicao,dispositivo,gps_ativo,app_segundo_plano)
+            VALUES($1,$2,$3,$4,TRUE,$5::jsonb,$6::jsonb,$7,FALSE)
+            RETURNING *
+        `,[ctx.id_empresa||null,req.usuario.id,ctx.id_veiculo,ctx.id_viagem||null,JSON.stringify({...composicao,eixos:Number(composicao.eixos)||null}),JSON.stringify(req.body?.dispositivo||{}),req.body?.gps_ativo!==false]);
+        await client.query('COMMIT');
+        res.status(201).json({...criada.rows[0],placa:ctx.placa,aviso:'Piloto iniciado exclusivamente em modo sombra.'});
+    } catch (erro) {
+        await client.query('ROLLBACK');
+        res.status(500).json({ erro:erro.message });
+    } finally { client.release(); }
+});
+
+app.get('/piloto-mobile/sessoes/ativa', autenticar, async (req,res)=>{
+    if(req.usuario.tipo!=='motorista')return res.status(403).json({erro:'Acesso negado'});
+    try{const r=await pool.query(`SELECT s.*,v.placa,v.modelo FROM piloto_mobile_sessoes s JOIN veiculos v ON v.id=s.id_veiculo WHERE s.id_motorista=$1 AND s.status='ativa' ORDER BY s.iniciado_em DESC LIMIT 1`,[req.usuario.id]);res.json(r.rows[0]||null);}catch(erro){res.status(500).json({erro:erro.message});}
+});
+
+app.post('/piloto-mobile/sessoes/:id/heartbeat', autenticar, async(req,res)=>{
+    if(req.usuario.tipo!=='motorista')return res.status(403).json({erro:'Acesso negado'});
+    try{const r=await pool.query(`UPDATE piloto_mobile_sessoes SET
+        bateria_percentual=COALESCE($1,bateria_percentual),carregando=COALESCE($2,carregando),
+        tipo_rede=COALESCE(NULLIF($3,''),tipo_rede),gps_ativo=COALESCE($4,gps_ativo),
+        app_segundo_plano=COALESCE($5,app_segundo_plano),ultima_comunicacao_em=CURRENT_TIMESTAMP
+        WHERE id=$6 AND id_motorista=$7 AND status='ativa' RETURNING *`,[
+        req.body?.bateria_percentual??null,req.body?.carregando??null,String(req.body?.tipo_rede||'').slice(0,30),req.body?.gps_ativo??null,req.body?.app_segundo_plano??null,req.params.id,req.usuario.id
+    ]);if(!r.rows.length)return res.status(404).json({erro:'Sessão ativa não encontrada.'});res.json(r.rows[0]);}catch(erro){res.status(500).json({erro:erro.message});}
+});
+
+app.post('/piloto-mobile/sessoes/:id/encerrar', autenticar, async(req,res)=>{
+    if(req.usuario.tipo!=='motorista')return res.status(403).json({erro:'Acesso negado'});
+    try{const r=await pool.query(`UPDATE piloto_mobile_sessoes SET status='encerrada',encerrado_em=CURRENT_TIMESTAMP,motivo_encerramento=$1,ultima_comunicacao_em=CURRENT_TIMESTAMP WHERE id=$2 AND id_motorista=$3 AND status='ativa' RETURNING *`,[String(req.body?.motivo||'finalizada_pelo_motorista').slice(0,120),req.params.id,req.usuario.id]);if(!r.rows.length)return res.status(404).json({erro:'Sessão ativa não encontrada.'});res.json(r.rows[0]);}catch(erro){res.status(500).json({erro:erro.message});}
+});
+
+app.get('/piloto-mobile/sessoes', autenticar, async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    try{const limite=Math.min(300,Math.max(1,Number(req.query.limite)||100));const r=await pool.query(`
+        SELECT s.*,v.placa,v.modelo,u.nome AS motorista,e.nome AS empresa,
+            CASE WHEN s.status<>'ativa' THEN s.status
+                 WHEN s.gps_ativo=FALSE THEN 'gps_desligado'
+                 WHEN s.ultima_comunicacao_em<CURRENT_TIMESTAMP-INTERVAL '3 minutes' THEN 'sem_sinal'
+                 WHEN s.ultima_comunicacao_em<CURRENT_TIMESTAMP-INTERVAL '45 seconds' THEN 'instavel'
+                 ELSE 'online' END AS estado_atual
+        FROM piloto_mobile_sessoes s
+        JOIN veiculos v ON v.id=s.id_veiculo JOIN usuarios u ON u.id=s.id_motorista
+        LEFT JOIN empresas_integracao e ON e.id=s.id_empresa
+        ORDER BY CASE WHEN s.status='ativa' THEN 0 ELSE 1 END,s.ultima_comunicacao_em DESC LIMIT $1
+    `,[limite]);res.json(r.rows);}catch(erro){res.status(500).json({erro:erro.message});}
+});
+
 app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localizacao), async (req, res) => {
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
@@ -8824,6 +8979,26 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
 
         const idViagem =
             contextoViagem.id_viagem || null;
+
+        const sessaoPilotoResultado = req.body.sessao_piloto_id
+            ? await pool.query(`
+                SELECT s.id,s.id_empresa,s.id_veiculo,s.composicao,s.ultima_sequencia,
+                       e.nome AS empresa_nome,v.placa,v.modelo,v.comprimento,v.largura,v.peso
+                FROM piloto_mobile_sessoes s
+                JOIN veiculos v ON v.id=s.id_veiculo
+                LEFT JOIN empresas_integracao e ON e.id=s.id_empresa
+                WHERE s.id=$1 AND s.id_motorista=$2 AND s.status='ativa'
+                LIMIT 1
+            `,[req.body.sessao_piloto_id,req.usuario.id])
+            : {rows:[]};
+        const sessaoPiloto=sessaoPilotoResultado.rows[0]||null;
+
+        if(req.body.sessao_piloto_id&&!sessaoPiloto){
+            return res.status(409).json({erro:'Sessão do piloto inexistente, encerrada ou pertencente a outro motorista.'});
+        }
+        if(sessaoPiloto&&req.body.sequencia!=null&&sessaoPiloto.ultima_sequencia!=null&&Number(req.body.sequencia)<=Number(sessaoPiloto.ultima_sequencia)){
+            return res.status(200).json({mensagem:'Posição duplicada ou fora de ordem ignorada.',duplicada:true,sessao_piloto_id:sessaoPiloto.id});
+        }
 
         await pool.query(`
             INSERT INTO localizacoes (id_motorista,lat,lon,ultima_atualizacao)
@@ -8979,7 +9154,16 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
         }
 
         let guardiao = null;
-        if (idViagem && contextoViagem.dados_geojson && req.body.origem_coleta !== 'offline_sync') {
+        if(sessaoPiloto?.id_empresa&&req.body.origem_coleta!=='offline_sync'){
+            const cp=sessaoPiloto.composicao||{};
+            guardiao=await analisarRadarLivreEmpresa({
+                empresa:{id:sessaoPiloto.id_empresa,nome:sessaoPiloto.empresa_nome,modo_sombra:true},
+                veiculo:sessaoPiloto,lat:req.body.lat,lon:req.body.lon,
+                velocidade:req.body.velocidade_kmh,direcao:req.body.direcao_graus,
+                perfilForcado:{nome:cp.tipo||'Composição do piloto',tipo:cp.tipo,carga:cp.carga||null,
+                    altura:Number(cp.altura),largura:Number(cp.largura),comprimento:Number(cp.comprimento),peso:Number(cp.peso),eixos:Number(cp.eixos)||null}
+            });
+        } else if (idViagem && contextoViagem.dados_geojson && req.body.origem_coleta !== 'offline_sync') {
             guardiao = await analisarGuardiaoQuandoNecessario({
                 viagem:{...contextoViagem,id:idViagem,id_veiculo:idVeiculo},
                 lat:req.body.lat,lon:req.body.lon,
@@ -8988,8 +9172,27 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
             });
         }
 
+        if(sessaoPiloto){
+            const riscos=Array.isArray(guardiao?.riscos)?guardiao.riscos.length:Number(guardiao?.total_riscos)||0;
+            await pool.query(`UPDATE piloto_mobile_sessoes SET
+                ultima_lat=$1,ultima_lon=$2,ultima_precisao_m=$3,ultima_velocidade_kmh=$4,
+                bateria_percentual=COALESCE($5,bateria_percentual),carregando=COALESCE($6,carregando),
+                tipo_rede=COALESCE(NULLIF($7,''),tipo_rede),gps_ativo=COALESCE($8,gps_ativo),
+                app_segundo_plano=COALESCE($9,app_segundo_plano),ultima_sequencia=COALESCE($10,ultima_sequencia),
+                total_posicoes=total_posicoes+1,total_analises=total_analises+$11,total_riscos=total_riscos+$12,
+                ultima_comunicacao_em=CURRENT_TIMESTAMP
+                WHERE id=$13`,[
+                req.body.lat,req.body.lon,req.body.precisao_m??null,req.body.velocidade_kmh??null,
+                req.body.bateria_percentual??null,req.body.carregando??null,String(req.body.tipo_rede||'').slice(0,30),
+                req.body.gps_ativo??true,req.body.app_segundo_plano??null,req.body.sequencia??null,
+                guardiao?1:0,riscos,sessaoPiloto.id
+            ]);
+        }
+
         res.json({
             mensagem: 'Localização atualizada',
+            sessao_piloto_id:sessaoPiloto?.id||null,
+            modo_sombra:Boolean(sessaoPiloto),
             monitoramento,
             guardiao
         });
