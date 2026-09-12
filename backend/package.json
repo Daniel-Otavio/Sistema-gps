@@ -5,7 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "migrate": "node database/migrate.js",
+    "test": "node --test tests/*.test.js",
+    "test:integration": "node --test tests/integracao-empresarial.test.js",
+    "test:load": "node --test tests/carga-15-veiculos.test.js",
+    "simulate:gps": "node tools/gps-empresarial-simulator.js"
   },
   "keywords": [],
   "author": "",
