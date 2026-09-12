@@ -30,6 +30,9 @@ const JWT_SECRET = process.env.JWT_SECRET;
 const BREVO_API_KEY = process.env.BREVO_API_KEY;
 const EMAIL_REMETENTE = process.env.EMAIL_REMETENTE;
 const EMAIL_NOME = process.env.EMAIL_NOME || 'GPS Caminhão';
+const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || '';
+const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
+const ORS_GUARDIAO_DAILY_LIMIT = Math.max(100,Math.min(1900,Number(process.env.ORS_GUARDIAO_DAILY_LIMIT)||1800));
 
 // ======================================================
 // V21.8 - CONFIGURAÇÃO DE PRODUÇÃO
@@ -755,7 +758,21 @@ async function criarTabelas() {
     await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS feedback_observacao TEXT`);
     await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS feedback_por INTEGER`);
     await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS feedback_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS status_operacional VARCHAR(24) NOT NULL DEFAULT 'novo'`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS assumido_por INTEGER`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS assumido_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS resolvido_por INTEGER`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS resolvido_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE guardiao_sombra_eventos ADD COLUMN IF NOT EXISTS resolucao TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_guardiao_sombra_empresa_data ON guardiao_sombra_eventos(id_empresa,ultimo_evento_em DESC)`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS notificacoes_outbox (
+        id BIGSERIAL PRIMARY KEY, tipo VARCHAR(50) NOT NULL, referencia_tipo VARCHAR(50), referencia_id VARCHAR(80),
+        destinatario TEXT, payload JSONB NOT NULL DEFAULT '{}'::jsonb, status VARCHAR(20) NOT NULL DEFAULT 'pendente',
+        tentativas INTEGER NOT NULL DEFAULT 0, proxima_tentativa_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        ultimo_erro TEXT, criado_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, enviado_em TIMESTAMPTZ,
+        UNIQUE(tipo,referencia_tipo,referencia_id,destinatario)
+    )`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_notificacoes_pendentes ON notificacoes_outbox(status,proxima_tentativa_em)`);
 
     // Piloto móvel do Guardião: o celular atua como fonte independente de GPS.
     await pool.query(`CREATE TABLE IF NOT EXISTS piloto_mobile_sessoes (
@@ -935,6 +952,8 @@ async function criarTabelas() {
     `);
     await pool.query(`ALTER TABLE restricoes_validadas ADD COLUMN IF NOT EXISTS status_confiabilidade VARCHAR(30) NOT NULL DEFAULT 'confirmada'`);
     await pool.query(`ALTER TABLE restricoes_validadas ADD COLUMN IF NOT EXISTS fonte_atualizada_em TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE restricoes_validadas ADD COLUMN IF NOT EXISTS natureza VARCHAR(20) NOT NULL DEFAULT 'definitiva' CHECK(natureza IN('definitiva','temporaria'))`);
+    await pool.query(`ALTER TABLE restricoes_validadas ADD COLUMN IF NOT EXISTS vigencia_inicio TIMESTAMPTZ`);
 
     // GUARDIÃO V1
     await pool.query(`
@@ -6963,6 +6982,9 @@ app.get('/alertas', autenticar, async (req, res) => {
             });
         }
 
+        const sombraAtivos=await pool.query(`SELECT g.*,e.nome AS empresa FROM guardiao_sombra_eventos g JOIN empresas_integracao e ON e.id=g.id_empresa WHERE g.ativo=TRUE AND g.ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' ORDER BY CASE g.nivel WHEN 'iminente' THEN 0 WHEN 'critico' THEN 1 WHEN 'atencao' THEN 2 ELSE 3 END,g.distancia_km LIMIT 100`);
+        for(const g of sombraAtivos.rows)alertas.push({id:g.id,tipo:'guardiao_sombra',origem:'modo_sombra',severidade:['iminente','critico'].includes(g.nivel)?'alta':'media',nivel:g.nivel,placa:g.placa,empresa:g.empresa,mensagem:`Guardião ${g.tipo_risco||'restrição'} a ${Number(g.distancia_km||0).toFixed(2)} km`,distancia_km:g.distancia_km,tempo_estimado_min:g.tempo_estimado_min,status_operacional:g.status_operacional,ultimo_evento_em:g.ultimo_evento_em,restricao:g.dados?.restricao||null,metodo_analise:g.dados?.metodo_analise||null});
+
         res.json(alertas);
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
@@ -7834,6 +7856,8 @@ app.patch('/restricoes-validadas/:id', autenticar, async (req, res) => {
         if (!anterior.rows.length) return res.status(404).json({ erro: 'Restrição global não encontrada' });
         const statusConfiabilidade = req.body?.status_confiabilidade;
         if (statusConfiabilidade && !['possivel_risco','confirmada','em_revisao'].includes(statusConfiabilidade)) return res.status(400).json({erro:'Status de confiabilidade inválido.'});
+        const natureza=req.body?.natureza;
+        if(natureza&&!['definitiva','temporaria'].includes(natureza))return res.status(400).json({erro:'Natureza da restrição inválida.'});
         const resultado = await pool.query(`
             UPDATE restricoes_validadas
             SET
@@ -7849,8 +7873,11 @@ app.patch('/restricoes-validadas/:id', autenticar, async (req, res) => {
                 confianca = COALESCE($10, confianca),
                 status_confiabilidade = COALESCE($11, status_confiabilidade),
                 fonte_atualizada_em = COALESCE($12, fonte_atualizada_em),
+                natureza = COALESCE($13, natureza),
+                vigencia_inicio = CASE WHEN $14::BOOLEAN THEN $15::TIMESTAMPTZ ELSE vigencia_inicio END,
+                valida_ate = CASE WHEN $16::BOOLEAN THEN $17::TIMESTAMPTZ ELSE valida_ate END,
                 atualizada_em = CURRENT_TIMESTAMP
-            WHERE id = $13
+            WHERE id = $18
             RETURNING *
         `, [
             req.body?.ativa ?? null,
@@ -7865,6 +7892,11 @@ app.patch('/restricoes-validadas/:id', autenticar, async (req, res) => {
             Number.isFinite(Number(req.body?.confianca)) ? Math.max(0,Math.min(100,Number(req.body.confianca))) : null,
             statusConfiabilidade || null,
             req.body?.fonte_atualizada_em || null,
+            natureza || null,
+            Object.prototype.hasOwnProperty.call(req.body||{},'vigencia_inicio'),
+            req.body?.vigencia_inicio||null,
+            Object.prototype.hasOwnProperty.call(req.body||{},'valida_ate'),
+            req.body?.valida_ate||null,
             req.params.id
         ]);
 
@@ -8779,6 +8811,12 @@ function autorizarPerfilEmpresa(perfis=[]){return(req,res,next)=>req.usuario?.ti
 app.get('/integracoes/portal/diagnostico',autenticar,autorizarPerfilEmpresa(['administrador','supervisor','analista','somente_leitura']),async(req,res)=>{try{const id=req.usuario.id_empresa;const veiculos=await pool.query(`SELECT v.id,v.placa,v.modelo,l.lat,l.lon,l.ultima_atualizacao,CASE WHEN l.ultima_atualizacao IS NULL THEN 'sem_dados' WHEN l.ultima_atualizacao<CURRENT_TIMESTAMP-INTERVAL '5 minutes' THEN 'offline' ELSE 'online' END AS status FROM empresa_integracao_veiculos ev JOIN veiculos v ON v.id=ev.id_veiculo LEFT JOIN localizacoes l ON l.id_veiculo=v.id WHERE ev.id_empresa=$1 ORDER BY v.placa`,[id]);const resumo=await pool.query(`SELECT COUNT(*)FILTER(WHERE sucesso)::int AS recebidas_24h,COUNT(*)FILTER(WHERE NOT sucesso)::int AS falhas_24h,ROUND(AVG(duracao_ms))::int AS latencia_media_ms,MAX(recebido_em) AS ultima_requisicao FROM integracao_requisicoes WHERE id_empresa=$1 AND recebido_em>CURRENT_TIMESTAMP-INTERVAL '24 hours'`,[id]);res.json({empresa:{id,nome:req.usuario.empresa},resumo:resumo.rows[0],veiculos:veiculos.rows});}catch(erro){res.status(500).json({erro:erro.message});}});
 app.get('/integracoes/portal/historico',autenticar,autorizarPerfilEmpresa(['administrador','supervisor','analista','somente_leitura']),async(req,res)=>{try{const id=req.usuario.id_empresa,limite=Math.min(500,Math.max(1,Number(req.query.limite)||100));const r=await pool.query(`SELECT a.*,v.placa FROM guardiao_analises a JOIN veiculos v ON v.id=a.id_veiculo WHERE a.id_empresa=$1 ORDER BY a.analisado_em DESC LIMIT $2`,[id,limite]);res.json(r.rows);}catch(erro){res.status(500).json({erro:erro.message});}});
 app.get('/auditoria/empresarial',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});try{const r=await pool.query(`SELECT a.*,e.nome AS empresa FROM auditoria_empresarial a LEFT JOIN empresas_integracao e ON e.id=a.id_empresa WHERE($1::INTEGER IS NULL OR a.id_empresa=$1)ORDER BY a.criado_em DESC LIMIT 500`,[req.query.id_empresa?Number(req.query.id_empresa):null]);res.json(r.rows);}catch(erro){res.status(500).json({erro:erro.message});}});
+app.patch('/guardiao/eventos-empresa/:id/operacao',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    const status=String(req.body?.status||'');if(!['novo','em_analise','monitorando','resolvido','descartado'].includes(status))return res.status(400).json({erro:'Status operacional inválido.'});
+    try{const anterior=await pool.query(`SELECT * FROM guardiao_sombra_eventos WHERE id=$1`,[req.params.id]);if(!anterior.rows.length)return res.status(404).json({erro:'Alerta não encontrado.'});const encerrado=['resolvido','descartado'].includes(status);const r=await pool.query(`UPDATE guardiao_sombra_eventos SET status_operacional=$1,assumido_por=CASE WHEN $1 IN('em_analise','monitorando') THEN COALESCE(assumido_por,$2) ELSE assumido_por END,assumido_em=CASE WHEN $1 IN('em_analise','monitorando') THEN COALESCE(assumido_em,CURRENT_TIMESTAMP) ELSE assumido_em END,resolvido_por=CASE WHEN $3 THEN $2 ELSE NULL END,resolvido_em=CASE WHEN $3 THEN CURRENT_TIMESTAMP ELSE NULL END,resolucao=CASE WHEN $3 THEN $4 ELSE resolucao END,ativo=NOT $3 WHERE id=$5 RETURNING *`,[status,req.usuario.id,encerrado,String(req.body?.resolucao||'').slice(0,1500),req.params.id]);await auditarEmpresa({req,idEmpresa:r.rows[0].id_empresa,acao:'ALERTA_TRATADO',recurso:'alerta_guardiao',recursoId:req.params.id,antes:anterior.rows[0],depois:r.rows[0]});res.json(r.rows[0]);}catch(erro){res.status(500).json({erro:erro.message});}
+});
+app.get('/notificacoes/diagnostico',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});try{const resumo=await pool.query(`SELECT status,COUNT(*)::int AS total FROM notificacoes_outbox GROUP BY status`);const recentes=await pool.query(`SELECT * FROM notificacoes_outbox ORDER BY criado_em DESC LIMIT 100`);res.json({canais:{painel:true,webhook:Boolean(ALERT_WEBHOOK_URL),email:Boolean(ALERT_EMAIL_TO&&BREVO_API_KEY&&EMAIL_REMETENTE)},resumo:resumo.rows,recentes:recentes.rows});}catch(erro){res.status(500).json({erro:erro.message});}});
 app.patch('/guardiao/eventos-empresa/:id/feedback',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});const classificacao=String(req.body?.classificacao||'');if(!['aberto','falso_positivo','ignorado','confirmado'].includes(classificacao))return res.status(400).json({erro:'Classificação inválida.'});try{const anterior=await pool.query(`SELECT * FROM guardiao_sombra_eventos WHERE id=$1`,[req.params.id]);if(!anterior.rows.length)return res.status(404).json({erro:'Alerta não encontrado.'});const r=await pool.query(`UPDATE guardiao_sombra_eventos SET classificacao=$1,feedback_observacao=$2,feedback_por=$3,feedback_em=CURRENT_TIMESTAMP WHERE id=$4 RETURNING *`,[classificacao,String(req.body?.observacao||'').slice(0,1500),req.usuario.id,req.params.id]);await auditarEmpresa({req,idEmpresa:r.rows[0].id_empresa,acao:'FEEDBACK_ALERTA',recurso:'alerta_guardiao',recursoId:req.params.id,antes:anterior.rows[0],depois:r.rows[0]});res.json(r.rows[0]);}catch(erro){res.status(500).json({erro:erro.message});}});
 app.get('/guardiao/perfis-composicao',autenticar,async(req,res)=>{
     if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
@@ -8801,14 +8839,71 @@ app.get('/guardiao/modo-sombra/relatorio',autenticar,async(req,res)=>{
 
 function diferencaAngularGuardiao(a,b){return Math.abs(((Number(a)-Number(b)+540)%360)-180);}
 function direcaoEntrePontosGuardiao(lat1,lon1,lat2,lon2){const rad=v=>Number(v)*Math.PI/180,p1=rad(lat1),p2=rad(lat2),dl=rad(lon2-lon1);return(Math.atan2(Math.sin(dl)*Math.cos(p2),Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl))*180/Math.PI+360)%360;}
+function guardiaoPontoNoSegmentoKm(lat,lon,a,b){
+    const latRef=Number(lat)*Math.PI/180;
+    const escalaX=111.32*Math.max(.1,Math.cos(latRef)),escalaY=110.574;
+    const ax=(Number(a[0])-Number(lon))*escalaX,ay=(Number(a[1])-Number(lat))*escalaY;
+    const bx=(Number(b[0])-Number(lon))*escalaX,by=(Number(b[1])-Number(lat))*escalaY;
+    const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;
+    const t=den>0?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/den)):0;
+    return{distancia_km:Math.hypot(ax+t*dx,ay+t*dy),proporcao:t};
+}
+function guardiaoCorredorRotaAdiante(geojson,lat,lon,alcanceKm){
+    const coords=guardiaoExtrairCoordenadas(geojson).filter(p=>Array.isArray(p)&&Number.isFinite(Number(p[0]))&&Number.isFinite(Number(p[1])));
+    if(coords.length<2)return null;
+    let melhor={distancia_km:Infinity,indice:0,proporcao:0};
+    for(let i=0;i<coords.length-1;i++){
+        const p=guardiaoPontoNoSegmentoKm(lat,lon,coords[i],coords[i+1]);
+        if(p.distancia_km<melhor.distancia_km)melhor={...p,indice:i};
+    }
+    if(melhor.distancia_km>1.2)return null;
+    const pontos=[];let acumulada=0;
+    const a=coords[melhor.indice],b=coords[melhor.indice+1];
+    pontos.push([
+        Number(a[0])+(Number(b[0])-Number(a[0]))*melhor.proporcao,
+        Number(a[1])+(Number(b[1])-Number(a[1]))*melhor.proporcao
+    ]);
+    for(let i=melhor.indice+1;i<coords.length;i++){
+        const anterior=pontos[pontos.length-1],atual=coords[i];
+        acumulada+=distanciaKmEntrePontos(anterior[1],anterior[0],atual[1],atual[0]);
+        pontos.push(atual);
+        if(acumulada>=alcanceKm+1)break;
+    }
+    return{pontos,distancia_encaixe_km:melhor.distancia_km};
+}
+function guardiaoRestricaoNoCorredor(corredor,lat,lon){
+    let acumulada=0,melhor={distancia_lateral_km:Infinity,distancia_adiante_km:null};
+    for(let i=0;i<corredor.length-1;i++){
+        const a=corredor[i],b=corredor[i+1];
+        const tamanho=distanciaKmEntrePontos(a[1],a[0],b[1],b[0]);
+        const p=guardiaoPontoNoSegmentoKm(lat,lon,a,b);
+        if(p.distancia_km<melhor.distancia_lateral_km)melhor={distancia_lateral_km:p.distancia_km,distancia_adiante_km:acumulada+tamanho*p.proporcao};
+        acumulada+=tamanho;
+    }
+    return melhor;
+}
 const cacheRestricoesRadarEmpresa=new Map();
-async function buscarRestricoesRadarEmpresa(lat,lon,margem){const chave=`${Number(lat).toFixed(2)}:${Number(lon).toFixed(2)}:${Number(margem).toFixed(3)}`,agora=Date.now(),existente=cacheRestricoesRadarEmpresa.get(chave);if(existente&&existente.expiraEm>agora)return existente.promise;const promise=pool.query(`SELECT * FROM restricoes_validadas WHERE ativa=TRUE AND(valida_ate IS NULL OR valida_ate>CURRENT_TIMESTAMP)AND lat BETWEEN $1 AND $2 AND lng BETWEEN $3 AND $4`,[lat-margem,lat+margem,lon-margem,lon+margem]).then(r=>r.rows).catch(erro=>{cacheRestricoesRadarEmpresa.delete(chave);throw erro;});cacheRestricoesRadarEmpresa.set(chave,{expiraEm:agora+2000,promise});if(cacheRestricoesRadarEmpresa.size>500)for(const[k,v]of cacheRestricoesRadarEmpresa)if(v.expiraEm<=agora)cacheRestricoesRadarEmpresa.delete(k);return promise;}
+async function buscarRestricoesRadarEmpresa(lat,lon,margem){const chave=`${Number(lat).toFixed(2)}:${Number(lon).toFixed(2)}:${Number(margem).toFixed(3)}`,agora=Date.now(),existente=cacheRestricoesRadarEmpresa.get(chave);if(existente&&existente.expiraEm>agora)return existente.promise;const promise=pool.query(`SELECT * FROM restricoes_validadas WHERE ativa=TRUE AND(vigencia_inicio IS NULL OR vigencia_inicio<=CURRENT_TIMESTAMP)AND(valida_ate IS NULL OR valida_ate>CURRENT_TIMESTAMP)AND lat BETWEEN $1 AND $2 AND lng BETWEEN $3 AND $4`,[lat-margem,lat+margem,lon-margem,lon+margem]).then(r=>r.rows).catch(erro=>{cacheRestricoesRadarEmpresa.delete(chave);throw erro;});cacheRestricoesRadarEmpresa.set(chave,{expiraEm:agora+2000,promise});if(cacheRestricoesRadarEmpresa.size>500)for(const[k,v]of cacheRestricoesRadarEmpresa)if(v.expiraEm<=agora)cacheRestricoesRadarEmpresa.delete(k);return promise;}
+const cacheCorredorRodoviario=new Map();
+let quotaOrsGuardiao={dia:new Date().toISOString().slice(0,10),usadas:0};
+function guardiaoProjetarDestino(lat,lon,rumo,km){const R=6371,rad=x=>Number(x)*Math.PI/180,deg=x=>x*180/Math.PI,p1=rad(lat),l1=rad(lon),b=rad(rumo),d=km/R;const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(b));const l2=l1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return{lat:deg(p2),lon:((deg(l2)+540)%360)-180};}
+async function obterCorredorRodoviarioEstimado({idVeiculo,lat,lon,rumo,alcance,perfil}){
+    if(!ORS_API_KEY||!Number.isFinite(Number(rumo)))return null;
+    const agora=Date.now(),salvo=cacheCorredorRodoviario.get(String(idVeiculo));
+    if(salvo&&salvo.expiraEm>agora&&diferencaAngularGuardiao(salvo.rumo,rumo)<=30){const reaproveitado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:salvo.coordenadas},lat,lon,alcance);if(reaproveitado&&reaproveitado.distancia_encaixe_km<=.5)return{...reaproveitado,estimado:true,fonte:'openrouteservice_cache'};}
+    const dia=new Date().toISOString().slice(0,10);if(quotaOrsGuardiao.dia!==dia)quotaOrsGuardiao={dia,usadas:0};if(quotaOrsGuardiao.usadas>=ORS_GUARDIAO_DAILY_LIMIT)return null;
+    try{const destino=guardiaoProjetarDestino(lat,lon,rumo,Math.min(alcance,12));const restricoes={height:valorPositivoOuNulo(perfil?.altura),width:valorPositivoOuNulo(perfil?.largura),length:valorPositivoOuNulo(perfil?.comprimento),weight:valorPositivoOuNulo(perfil?.peso)};Object.keys(restricoes).forEach(k=>restricoes[k]==null&&delete restricoes[k]);quotaOrsGuardiao.usadas++;const resp=await axios.post('https://api.openrouteservice.org/v2/directions/driving-hgv/geojson',{coordinates:[[Number(lon),Number(lat)],[destino.lon,destino.lat]],preference:'recommended',...(Object.keys(restricoes).length?{options:{profile_params:{restrictions:restricoes}}}:{})},{headers:{Authorization:ORS_API_KEY,'Content-Type':'application/json',Accept:'application/json'},timeout:5000});const coords=resp.data?.features?.[0]?.geometry?.coordinates;if(!Array.isArray(coords)||coords.length<2)return null;cacheCorredorRodoviario.set(String(idVeiculo),{expiraEm:agora+120000,rumo:Number(rumo),coordenadas:coords});const ajustado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:coords},lat,lon,alcance);return ajustado?{...ajustado,estimado:true,fonte:'openrouteservice'}:null;}catch(erro){console.warn('Corredor openrouteservice indisponível:',erro.response?.status||erro.message);return null;}
+}
+async function enfileirarNotificacaoGuardiao(evento){const destinos=[ALERT_WEBHOOK_URL?'webhook':null,ALERT_EMAIL_TO||null].filter(Boolean);if(!destinos.length)destinos.push('painel');for(const destino of destinos)await pool.query(`INSERT INTO notificacoes_outbox(tipo,referencia_tipo,referencia_id,destinatario,payload)VALUES('alerta_guardiao','guardiao_sombra_evento',$1,$2,$3::jsonb)ON CONFLICT DO NOTHING`,[String(evento.id),destino,JSON.stringify(evento)]);}
 async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,direcao,perfilForcado=null}){
     let rumo=Number(direcao),vel=Number(velocidade),a=null;if(!Number.isFinite(rumo)||!Number.isFinite(vel)){const anterior=await pool.query(`SELECT * FROM empresa_telemetria_estado WHERE id_empresa=$1 AND id_veiculo=$2`,[empresa.id,veiculo.id]);a=anterior.rows[0]||null;}if(!Number.isFinite(rumo)&&a&&distanciaKmEntrePontos(a.lat,a.lon,lat,lon)>=.003)rumo=direcaoEntrePontosGuardiao(a.lat,a.lon,lat,lon);if(!Number.isFinite(vel)&&a){const horas=(Date.now()-new Date(a.atualizado_em).getTime())/3600000,km=distanciaKmEntrePontos(a.lat,a.lon,lat,lon);if(horas>0)vel=Math.min(160,km/horas);}if(!Number.isFinite(rumo))rumo=Number(a?.direcao_graus);if(!Number.isFinite(vel))vel=Number(a?.velocidade_kmh)||0;
-    await pool.query(`INSERT INTO empresa_telemetria_estado(id_empresa,id_veiculo,lat,lon,velocidade_kmh,direcao_graus,atualizado_em)VALUES($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)ON CONFLICT(id_empresa,id_veiculo)DO UPDATE SET lat=EXCLUDED.lat,lon=EXCLUDED.lon,velocidade_kmh=EXCLUDED.velocidade_kmh,direcao_graus=EXCLUDED.direcao_graus,atualizado_em=CURRENT_TIMESTAMP`,[empresa.id,veiculo.id,lat,lon,vel,Number.isFinite(rumo)?rumo:null]);if(!Number.isFinite(rumo))return{status:'calibrando',riscos:[]};
+    await pool.query(`INSERT INTO empresa_telemetria_estado(id_empresa,id_veiculo,lat,lon,velocidade_kmh,direcao_graus,atualizado_em)VALUES($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)ON CONFLICT(id_empresa,id_veiculo)DO UPDATE SET lat=EXCLUDED.lat,lon=EXCLUDED.lon,velocidade_kmh=EXCLUDED.velocidade_kmh,direcao_graus=EXCLUDED.direcao_graus,atualizado_em=CURRENT_TIMESTAMP`,[empresa.id,veiculo.id,lat,lon,vel,Number.isFinite(rumo)?rumo:null]);
     const alcance=guardiaoAlcanceKmPorVelocidade(vel),margem=Math.max(.07,alcance/90);
     const contextoPerfil=await pool.query(`SELECT
-        (SELECT row_to_json(vg) FROM(SELECT id,altura_total,peso_total,carga FROM viagens WHERE id_veiculo=$1 AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST,id DESC LIMIT 1)vg) AS viagem,
+        (SELECT row_to_json(vg) FROM(SELECT vj.id,vj.altura_total,vj.peso_total,vj.carga,
+            COALESCE(vj.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson) AS dados_geojson
+            FROM viagens vj LEFT JOIN rotas_especificas re ON re.id=vj.id_rota_especifica LEFT JOIN rotas r ON r.id=vj.id_rota
+            WHERE vj.id_veiculo=$1 AND vj.status='em_andamento' ORDER BY vj.saida_real DESC NULLS LAST,vj.id DESC LIMIT 1)vg) AS viagem,
         (SELECT row_to_json(pc) FROM(SELECT * FROM perfis_composicao WHERE id_veiculo=$1 AND ativo=TRUE ORDER BY updated_at DESC LIMIT 1)pc) AS composicao`,[veiculo.id]);
     const viagemAtiva=contextoPerfil.rows[0]?.viagem,composicao=contextoPerfil.rows[0]?.composicao;
     const perfil=perfilForcado?{...perfilForcado,origem_dados:'sessao_piloto_mobile'}:viagemAtiva?{
@@ -8818,9 +8913,18 @@ async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,dir
         comprimento:valorPositivoOuNulo(composicao?.comprimento)??valorPositivoOuNulo(veiculo.comprimento),
         peso:valorPositivoOuNulo(viagemAtiva.peso_total)??valorPositivoOuNulo(composicao?.peso)??valorPositivoOuNulo(veiculo.peso)
     }:composicao?{...composicao,origem_dados:'composicao_ativa'}:{altura:null,largura:veiculo.largura,comprimento:veiculo.comprimento,peso:veiculo.peso,nome:'Cadastro do veículo',origem_dados:'cadastro_veiculo'};
+    let corredor=viagemAtiva?.dados_geojson?guardiaoCorredorRotaAdiante(viagemAtiva.dados_geojson,lat,lon,alcance):null;
+    let metodoAnalise=corredor?'corredor_rota':null;
+    if(!corredor){corredor=await obterCorredorRodoviarioEstimado({idVeiculo:veiculo.id,lat,lon,rumo,alcance,perfil});if(corredor)metodoAnalise='corredor_rodoviario_estimado';}
+    if(!metodoAnalise)metodoAnalise='radar_direcional';
+    if(!corredor&&!Number.isFinite(rumo))return{status:'calibrando',metodo_analise:metodoAnalise,alcance_km:alcance,riscos:[]};
     const rr={rows:await buscarRestricoesRadarEmpresa(lat,lon,margem)};const riscos=[];
-    for(const r of rr.rows){const km=distanciaKmEntrePontos(lat,lon,r.lat,r.lng),dir=direcaoEntrePontosGuardiao(lat,lon,r.lat,r.lng);if(km>alcance||diferencaAngularGuardiao(dir,rumo)>38)continue;const conflito=guardiaoIncompatibilidade(r,{altura_total:perfil.altura,largura:perfil.largura,comprimento:perfil.comprimento,peso_total:perfil.peso,peso:perfil.peso});const tempo=guardiaoTempoMin(km,vel);const nivel=km<=.5||(tempo!==null&&tempo<=.75)?'iminente':km<=2||(tempo!==null&&tempo<=2.5)?'critico':km<=5||(tempo!==null&&tempo<=6)?'atencao':'preventivo';const dados={restricao:r,perfil_composicao:perfil,incompatibilidade:conflito,velocidade_kmh:vel,direcao_graus:rumo,alcance_km:alcance};const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,r.id]);if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);else await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,[empresa.id,veiculo.id,r.id,nivel,conflito?.tipo||r.tipo,km,tempo,veiculo.placa,JSON.stringify(dados)]);riscos.push({nivel,distancia_km:Number(km.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),restricao:r,incompatibilidade:conflito});}
-    return{status:riscos.length?'risco':'seguro',alcance_km:alcance,velocidade_kmh:Number(vel.toFixed(1)),direcao_graus:Number(rumo.toFixed(1)),perfil_composicao:perfil,riscos:riscos.sort((x,y)=>x.distancia_km-y.distancia_km)};
+    for(const r of rr.rows){
+        let km,lateralKm=null;
+        if(corredor){const p=guardiaoRestricaoNoCorredor(corredor.pontos,Number(r.lat),Number(r.lng));lateralKm=p.distancia_lateral_km;km=p.distancia_adiante_km;const tolerancia=Math.max(.18,Number(r.raio_metros||180)/1000+.08);if(km===null||km>alcance||lateralKm>tolerancia)continue;}
+        else{km=distanciaKmEntrePontos(lat,lon,r.lat,r.lng);const dir=direcaoEntrePontosGuardiao(lat,lon,r.lat,r.lng);if(km>alcance||diferencaAngularGuardiao(dir,rumo)>38)continue;}
+        const conflito=guardiaoIncompatibilidade(r,{altura_total:perfil.altura,largura:perfil.largura,comprimento:perfil.comprimento,peso_total:perfil.peso,peso:perfil.peso});const tempo=guardiaoTempoMin(km,vel);const nivel=km<=.5||(tempo!==null&&tempo<=.75)?'iminente':km<=2||(tempo!==null&&tempo<=2.5)?'critico':km<=5||(tempo!==null&&tempo<=6)?'atencao':'preventivo';const dados={restricao:r,perfil_composicao:perfil,incompatibilidade:conflito,velocidade_kmh:vel,direcao_graus:rumo,alcance_km:alcance,metodo_analise:metodoAnalise,distancia_lateral_km:lateralKm,distancia_encaixe_rota_km:corredor?.distancia_encaixe_km??null};const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,r.id]);if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);else{const criado=await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)RETURNING *`,[empresa.id,veiculo.id,r.id,nivel,conflito?.tipo||r.tipo,km,tempo,veiculo.placa,JSON.stringify(dados)]);await enfileirarNotificacaoGuardiao(criado.rows[0]);}riscos.push({nivel,distancia_km:Number(km.toFixed(3)),distancia_lateral_km:lateralKm===null?null:Number(lateralKm.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),restricao:r,incompatibilidade:conflito});}
+    return{status:riscos.length?'risco':'seguro',metodo_analise:metodoAnalise,alcance_km:alcance,distancia_encaixe_rota_km:corredor?Number(corredor.distancia_encaixe_km.toFixed(3)):null,velocidade_kmh:Number(vel.toFixed(1)),direcao_graus:Number.isFinite(rumo)?Number(rumo.toFixed(1)):null,perfil_composicao:perfil,riscos:riscos.sort((x,y)=>x.distancia_km-y.distancia_km)};
 }
 app.post('/integracoes/gps/localizacao',autenticarEmpresaIntegracao,exigirEscopo('telemetria:escrever'),localizacaoLimiter,async(req,res)=>{
     const inicio=Date.now();
@@ -8996,9 +9100,24 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
         if(req.body.sessao_piloto_id&&!sessaoPiloto){
             return res.status(409).json({erro:'Sessão do piloto inexistente, encerrada ou pertencente a outro motorista.'});
         }
+        if(sessaoPiloto&&(req.body.sequencia==null||!req.body.timestamp_dispositivo||req.body.precisao_m==null)){
+            return res.status(422).json({erro:'No piloto móvel, sequência, timestamp_dispositivo e precisao_m são obrigatórios.'});
+        }
         if(sessaoPiloto&&req.body.sequencia!=null&&sessaoPiloto.ultima_sequencia!=null&&Number(req.body.sequencia)<=Number(sessaoPiloto.ultima_sequencia)){
             return res.status(200).json({mensagem:'Posição duplicada ou fora de ordem ignorada.',duplicada:true,sessao_piloto_id:sessaoPiloto.id});
         }
+
+        const idadePosicaoSeg=req.body.timestamp_dispositivo?Math.round((Date.now()-new Date(req.body.timestamp_dispositivo).getTime())/1000):null;
+        const qualidadeTelemetria={
+            apta_tempo_real:true,
+            idade_segundos:idadePosicaoSeg,
+            precisao_m:req.body.precisao_m??null,
+            motivos:[]
+        };
+        if(Number.isFinite(idadePosicaoSeg)&&(idadePosicaoSeg>120||idadePosicaoSeg < -300))qualidadeTelemetria.motivos.push(idadePosicaoSeg>120?'posicao_atrasada':'relogio_dispositivo_incorreto');
+        if(req.body.precisao_m!=null&&Number(req.body.precisao_m)>100)qualidadeTelemetria.motivos.push('precisao_insuficiente');
+        if(req.body.origem_coleta==='offline_sync')qualidadeTelemetria.motivos.push('sincronizacao_offline');
+        qualidadeTelemetria.apta_tempo_real=qualidadeTelemetria.motivos.length===0;
 
         await pool.query(`
             INSERT INTO localizacoes (id_motorista,lat,lon,ultima_atualizacao)
@@ -9154,7 +9273,7 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
         }
 
         let guardiao = null;
-        if(sessaoPiloto?.id_empresa&&req.body.origem_coleta!=='offline_sync'){
+        if(sessaoPiloto?.id_empresa&&qualidadeTelemetria.apta_tempo_real){
             const cp=sessaoPiloto.composicao||{};
             guardiao=await analisarRadarLivreEmpresa({
                 empresa:{id:sessaoPiloto.id_empresa,nome:sessaoPiloto.empresa_nome,modo_sombra:true},
@@ -9193,6 +9312,7 @@ app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localiz
             mensagem: 'Localização atualizada',
             sessao_piloto_id:sessaoPiloto?.id||null,
             modo_sombra:Boolean(sessaoPiloto),
+            qualidade_telemetria:qualidadeTelemetria,
             monitoramento,
             guardiao
         });
@@ -9495,6 +9615,8 @@ async function iniciarServidor() {
     }
 
     app.listen(PORT, '0.0.0.0', () => {
+        setTimeout(processarNotificacoesOutbox,5000);
+        setInterval(processarNotificacoesOutbox,15000);
         // Primeira manutenção 2 min após boot,
         // depois em intervalo configurável.
         setTimeout(
@@ -9517,6 +9639,12 @@ async function iniciarServidor() {
         console.log('🛣️ Desvio automático: ATIVO');
         console.log('========================================');
     });
+}
+
+let processandoNotificacoes=false;
+async function processarNotificacoesOutbox(){
+    if(processandoNotificacoes)return;processandoNotificacoes=true;
+    try{const fila=await pool.query(`SELECT * FROM notificacoes_outbox WHERE status IN('pendente','tentando') AND proxima_tentativa_em<=CURRENT_TIMESTAMP ORDER BY criado_em LIMIT 20`);for(const item of fila.rows){try{await pool.query(`UPDATE notificacoes_outbox SET status='tentando',tentativas=tentativas+1 WHERE id=$1`,[item.id]);if(item.destinatario==='webhook'){if(!ALERT_WEBHOOK_URL)throw new Error('ALERT_WEBHOOK_URL não configurada');await axios.post(ALERT_WEBHOOK_URL,item.payload,{timeout:8000});}else if(item.destinatario!=='painel'){if(!BREVO_API_KEY||!EMAIL_REMETENTE)throw new Error('Canal de e-mail não configurado');await axios.post('https://api.brevo.com/v3/smtp/email',{sender:{name:EMAIL_NOME,email:EMAIL_REMETENTE},to:[{email:item.destinatario}],subject:`Alerta Guardião · ${item.payload?.placa||'veículo'}`,htmlContent:`<h2>Alerta Guardião</h2><p>Veículo: <strong>${item.payload?.placa||'-'}</strong></p><p>Nível: ${item.payload?.nivel||'-'}</p><p>Distância: ${item.payload?.distancia_km??'-'} km</p>`},{headers:{'api-key':BREVO_API_KEY,'Content-Type':'application/json'},timeout:10000});}await pool.query(`UPDATE notificacoes_outbox SET status='enviado',enviado_em=CURRENT_TIMESTAMP,ultimo_erro=NULL WHERE id=$1`,[item.id]);}catch(erro){const tentativas=Number(item.tentativas||0)+1,final=tentativas>=8;await pool.query(`UPDATE notificacoes_outbox SET status=$1,ultimo_erro=$2,proxima_tentativa_em=CURRENT_TIMESTAMP+($3||' seconds')::interval WHERE id=$4`,[final?'falhou':'pendente',String(erro.message||erro).slice(0,1000),Math.min(3600,Math.pow(2,tentativas)*15),item.id]);}}}catch(erro){console.error('Falha processando notificações:',erro.message);}finally{processandoNotificacoes=false;}
 }
 
 
