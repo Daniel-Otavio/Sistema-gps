@@ -6,7 +6,6 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const Joi = require('joi');
 const rateLimit = require('express-rate-limit');
@@ -15,6 +14,11 @@ const helmet = require('helmet');
 const compression = require('compression');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const path = require('path');
+const { executarMigracoesPendentes } = require('./src/database/migration-loader');
+const { criarAgendador } = require('./src/workers/scheduler');
+const { criarAutenticacao } = require('./src/auth/session-auth');
+const { classificarPosicaoGps: classificarQualidadeGps } = require('./src/services/gps/quality');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -1297,22 +1301,11 @@ async function executarMigracoes() {
             versao VARCHAR(80) PRIMARY KEY,
             aplicada_em TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )`);
-        const migracoes = [
-            require('./database/migrations/001-esquema-consolidado'),
-            require('./database/migrations/002-seguranca-multiempresa'),
-            require('./database/migrations/003-sessoes-e-notificacoes-empresa'),
-            require('./database/migrations/004-ingestao-gps-guardiao-fila')
-        ];
-        for (const migracao of migracoes) {
-            const aplicada = await client.query('SELECT 1 FROM schema_migrations WHERE versao=$1', [migracao.versao]);
-            if (!aplicada.rows.length) {
-                await migracao.aplicar({ criarTabelas, client });
-                await client.query('INSERT INTO schema_migrations(versao) VALUES($1)', [migracao.versao]);
-                console.log(`✅ Migração ${migracao.versao} aplicada.`);
-            } else {
-                console.log(`ℹ️ Migração ${migracao.versao} já estava aplicada.`);
-            }
-        }
+        await executarMigracoesPendentes({
+            client,
+            diretorio: path.join(__dirname, 'database', 'migrations'),
+            contexto: { criarTabelas }
+        });
     } finally {
         await client.query('SELECT pg_advisory_unlock($1)', [lockId]).catch(() => {});
         client.release();
@@ -1334,34 +1327,7 @@ async function testarBanco() {
 // ======================================================
 // AUTENTICAÇÃO
 // ======================================================
-async function emitirTokenSessao(usuario, validade = '8h') {
-    const jti=crypto.randomUUID();
-    const token=jwt.sign({...usuario,jti},JWT_SECRET,{expiresIn:validade});
-    const decoded=jwt.decode(token);
-    await pool.query(`INSERT INTO auth_sessoes(jti,tipo_usuario,id_usuario,id_empresa,expira_em)VALUES($1,$2,$3,$4,to_timestamp($5))`,[jti,usuario.tipo,usuario.id,usuario.id_empresa||null,decoded.exp]);
-    return token;
-}
-
-async function autenticar(req, res, next) {
-    const header = req.headers.authorization;
-    if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
-    const token = header.startsWith('Bearer ') ? header.slice(7) : header;
-    try {
-        const decoded=jwt.verify(token,JWT_SECRET);
-        if(!decoded.jti)return res.status(401).json({erro:'Sessão antiga ou inválida. Entre novamente.'});
-        const sessao=await pool.query(`SELECT 1 FROM auth_sessoes WHERE jti=$1 AND revogada_em IS NULL AND expira_em>CURRENT_TIMESTAMP`,[decoded.jti]);
-        if(!sessao.rows.length)return res.status(401).json({erro:'Sessão encerrada ou expirada.'});
-        if(decoded.tipo==='empresa_usuario'){
-            const atual=await pool.query(`SELECT u.token_version,u.ativo,e.ativo AS empresa_ativa FROM empresa_usuarios u JOIN empresas_integracao e ON e.id=u.id_empresa WHERE u.id=$1 AND u.id_empresa=$2`,[decoded.id,decoded.id_empresa]);
-            if(!atual.rows[0]?.ativo||!atual.rows[0]?.empresa_ativa||Number(atual.rows[0].token_version)!==Number(decoded.token_version))return res.status(401).json({erro:'Acesso empresarial revogado.'});
-        }else{
-            const atual=await pool.query(`SELECT ativo,token_version FROM usuarios WHERE id=$1`,[decoded.id]);
-            if(!atual.rows[0]?.ativo||Number(atual.rows[0].token_version)!==Number(decoded.token_version))return res.status(401).json({erro:'Acesso revogado.'});
-        }
-        req.usuario = decoded;
-        next();
-    }catch{return res.status(401).json({erro:'Token inválido'});}
-}
+const { autenticar, emitirTokenSessao } = criarAutenticacao({ pool, jwtSecret: JWT_SECRET });
 
 // ======================================================
 // RATE LIMIT
@@ -8420,6 +8386,7 @@ app.post('/reportar', autenticar, validar(schemas.reporte), async (req, res) => 
 });
 
 app.get('/reportes', autenticar, async (req, res) => {
+    if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
     try {
         await pool.query(`
             UPDATE reportes
@@ -8857,8 +8824,6 @@ async function registrarRequisicaoIntegracao(req,{statusHttp,sucesso,codigo=null
 }
 let monitorIntegracoesEmExecucao=false;
 async function monitorarIntegracoesIndisponiveis(){if(monitorIntegracoesEmExecucao)return;monitorIntegracoesEmExecucao=true;try{const alteradas=await pool.query(`UPDATE empresas_integracao SET status_operacional='offline' WHERE ativo=TRUE AND ultimo_uso_em IS NOT NULL AND ultimo_uso_em<CURRENT_TIMESTAMP-INTERVAL '5 minutes' AND status_operacional<>'offline' RETURNING id,nome,ultimo_uso_em`);for(const e of alteradas.rows)await registrarLogSistema({nivel:'warn',origem:'monitor_integracoes',mensagem:`Integração ${e.nome} sem posições há mais de 5 minutos`,detalhes:{id_empresa:e.id,ultimo_uso_em:e.ultimo_uso_em}});}catch(erro){console.error('Falha no monitor de integrações:',erro.message);}finally{monitorIntegracoesEmExecucao=false;}}
-const monitorIntegracoesTimer=setInterval(monitorarIntegracoesIndisponiveis,60000);
-if(typeof monitorIntegracoesTimer.unref==='function')monitorIntegracoesTimer.unref();
 function exigirEscopo(escopo){return(req,res,next)=>req.chaveIntegracao?.escopos?.includes(escopo)?next():res.status(403).json({erro:`Chave sem permissão ${escopo}.`});}
 async function autenticarEmpresaIntegracao(req,res,next) {
     try {
@@ -9068,8 +9033,57 @@ async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,dir
         const conflito=guardiaoIncompatibilidade(r,{altura_total:perfil.altura,largura:perfil.largura,comprimento:perfil.comprimento,peso_total:perfil.peso,peso:perfil.peso});const tempo=guardiaoTempoMin(km,vel);const nivel=km<=.5||(tempo!==null&&tempo<=.75)?'iminente':km<=2||(tempo!==null&&tempo<=2.5)?'critico':km<=5||(tempo!==null&&tempo<=6)?'atencao':'preventivo';const dados={restricao:r,perfil_composicao:perfil,incompatibilidade:conflito,velocidade_kmh:vel,direcao_graus:rumo,alcance_km:alcance,metodo_analise:metodoAnalise,distancia_lateral_km:lateralKm,distancia_encaixe_rota_km:corredor?.distancia_encaixe_km??null};const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,r.id]);if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);else{const criado=await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)RETURNING *`,[empresa.id,veiculo.id,r.id,nivel,conflito?.tipo||r.tipo,km,tempo,veiculo.placa,JSON.stringify(dados)]);await enfileirarNotificacaoGuardiao(criado.rows[0]);}riscos.push({nivel,distancia_km:Number(km.toFixed(3)),distancia_lateral_km:lateralKm===null?null:Number(lateralKm.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),restricao:r,incompatibilidade:conflito});}
     return{status:riscos.length?'risco':'seguro',metodo_analise:metodoAnalise,alcance_km:alcance,distancia_encaixe_rota_km:corredor?Number(corredor.distancia_encaixe_km.toFixed(3)):null,velocidade_kmh:Number(vel.toFixed(1)),direcao_graus:Number.isFinite(rumo)?Number(rumo.toFixed(1)):null,perfil_composicao:perfil,riscos:riscos.sort((x,y)=>x.distancia_km-y.distancia_km)};
 }
-function classificarPosicaoGps({atual,anterior}){const motivos=[];let classificacao='valida_tempo_real',apta=true;const ts=atual.timestamp?new Date(atual.timestamp):null,tempo=ts?.getTime(),agora=Date.now();if(!ts||!Number.isFinite(tempo)){motivos.push('horario_invalido');classificacao='horario_invalido';apta=false;}else{const idade=(agora-tempo)/1000;if(idade>120){motivos.push('atrasada');classificacao='atrasada';apta=false;}if(idade < -300){motivos.push('relogio_adiantado');classificacao='horario_invalido';apta=false;}if(anterior?.timestamp_dispositivo&&tempo<=new Date(anterior.timestamp_dispositivo).getTime()){motivos.push('fora_de_ordem');classificacao='fora_de_ordem';apta=false;}}if(Number(atual.precisao)>100){motivos.push('precisao_insuficiente');classificacao='precisao_insuficiente';apta=false;}if(anterior){const km=distanciaKmEntrePontos(anterior.lat,anterior.lon,atual.lat,atual.lon),horas=tempo&&anterior.timestamp_dispositivo?(tempo-new Date(anterior.timestamp_dispositivo).getTime())/3600000:0;if(km>5&&(horas<=0||km/horas>180)){motivos.push('salto_impossivel');classificacao='salto_impossivel';apta=false;}}if(atual.offline){motivos.push('armazenada_offline');if(apta)classificacao='valida_historico';apta=false;}return{classificacao,motivos,apta_historico:true,apta_tempo_real:apta};}
-app.post('/integracoes/gps/localizacao',autenticarEmpresaIntegracao,exigirEscopo('telemetria:escrever'),localizacaoLimiter,async(req,res)=>{
+function classificarPosicaoGps({ atual, anterior }) {
+    return classificarQualidadeGps({ atual, anterior, calcularDistanciaKm: distanciaKmEntrePontos });
+}
+async function gravarPosicaoGpsUnificada({empresa,veiculo,idMotorista=null,idViagem=null,sessao,sequencia,origem,payload,requestId}){
+ const lat=Number(payload.lat),lon=Number(payload.lon),client=await pool.connect();
+ try{
+  await client.query('BEGIN');
+  const anterior=(await client.query(`SELECT lat,lon,timestamp_dispositivo,sequencia,sessao_chave FROM gps_ingestoes WHERE id_empresa=$1 AND id_veiculo=$2 ORDER BY timestamp_dispositivo DESC NULLS LAST,recebido_em DESC LIMIT 1 FOR UPDATE`,[empresa.id,veiculo.id])).rows[0];
+  const qualidade=classificarPosicaoGps({atual:{lat,lon,timestamp:payload.timestamp_dispositivo,precisao:payload.precisao_m,offline:payload.offline===true||payload.origem_coleta==='offline_sync'},anterior});
+  if(anterior?.sessao_chave===sessao&&sequencia<Number(anterior.sequencia)){qualidade.motivos.push('sequencia_reiniciada');qualidade.classificacao='fora_de_ordem';qualidade.apta_tempo_real=false;}
+  const ing=await client.query(`INSERT INTO gps_ingestoes(id_empresa,id_veiculo,id_motorista,id_viagem,origem,sessao_chave,sequencia,request_id,lat,lon,velocidade_kmh,direcao_graus,precisao_m,altitude_m,timestamp_dispositivo,classificacao,apta_historico,apta_tempo_real,motivos,payload)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,$17,$18::jsonb,$19::jsonb)ON CONFLICT(id_empresa,id_veiculo,sessao_chave,sequencia)DO NOTHING RETURNING *`,[empresa.id,veiculo.id,idMotorista,idViagem,origem,sessao,sequencia,requestId,lat,lon,payload.velocidade_kmh??null,payload.direcao_graus??null,payload.precisao_m??null,payload.altitude_m??null,payload.timestamp_dispositivo,qualidade.classificacao,qualidade.apta_tempo_real,JSON.stringify(qualidade.motivos),JSON.stringify(payload)]);
+  if(!ing.rows.length){await client.query('ROLLBACK');return{duplicada:true,classificacao:'duplicada',qualidade};}
+  const i=ing.rows[0];
+  await client.query(`INSERT INTO historico_localizacoes(id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em,velocidade_kmh,precisao_m,direcao_graus,altitude_m,timestamp_dispositivo,origem_coleta,id_ingestao,classificacao,motivos_qualidade)VALUES($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,[idMotorista,veiculo.id,idViagem,lat,lon,payload.velocidade_kmh??null,payload.precisao_m??null,payload.direcao_graus??null,payload.altitude_m??null,payload.timestamp_dispositivo,origem,i.id,qualidade.classificacao,JSON.stringify(qualidade.motivos)]);
+  if(qualidade.apta_tempo_real){
+   const porMotorista=idMotorista?await client.query(`UPDATE localizacoes SET id_veiculo=$2,lat=$3,lon=$4,ultima_atualizacao=CURRENT_TIMESTAMP,timestamp_dispositivo=$5 WHERE id_motorista=$1 AND(id_veiculo IS NULL OR id_veiculo=$2)AND(timestamp_dispositivo IS NULL OR $5>timestamp_dispositivo)`,[idMotorista,veiculo.id,lat,lon,payload.timestamp_dispositivo]):{rowCount:0};
+   if(!porMotorista.rowCount)await client.query(`INSERT INTO localizacoes(id_motorista,id_veiculo,lat,lon,ultima_atualizacao,timestamp_dispositivo)VALUES($1,$2,$3,$4,CURRENT_TIMESTAMP,$5)ON CONFLICT(id_veiculo)WHERE id_veiculo IS NOT NULL DO UPDATE SET id_motorista=EXCLUDED.id_motorista,lat=EXCLUDED.lat,lon=EXCLUDED.lon,ultima_atualizacao=CURRENT_TIMESTAMP,timestamp_dispositivo=EXCLUDED.timestamp_dispositivo WHERE localizacoes.timestamp_dispositivo IS NULL OR EXCLUDED.timestamp_dispositivo>localizacoes.timestamp_dispositivo`,[idMotorista,veiculo.id,lat,lon,payload.timestamp_dispositivo]);
+  }
+  if(qualidade.apta_tempo_real)await client.query(`INSERT INTO guardiao_fila(id_ingestao,id_empresa,id_veiculo)VALUES($1,$2,$3)`,[i.id,empresa.id,veiculo.id]);
+  await client.query(`UPDATE empresas_integracao SET ultimo_uso_em=CURRENT_TIMESTAMP,status_operacional='online',ultimo_erro=NULL WHERE id=$1`,[empresa.id]);
+  await client.query('COMMIT');
+  return{duplicada:false,ingestao:i,qualidade};
+ }catch(erro){await client.query('ROLLBACK');throw erro;}finally{client.release();}
+}
+async function processarLocalizacaoUnificada(req,res,next){
+ const inicio=Date.now();
+ try{
+  const integracao=req.usuario?.tipo==='integracao';let empresa,veiculo,idMotorista=null,idViagem=null,sessao,sequencia;
+  if(integracao){
+   const placa=normalizarPlaca(req.body?.placa);const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.*,vg.id AS id_viagem,vg.id_motorista AS viagem_motorista,u.id AS veiculo_motorista FROM empresas_integracao e JOIN empresa_integracao_veiculos ev ON ev.id_empresa=e.id JOIN veiculos v ON v.id=ev.id_veiculo AND v.ativo=TRUE LEFT JOIN LATERAL(SELECT id,id_motorista FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE LEFT JOIN LATERAL(SELECT id FROM usuarios WHERE tipo='motorista' AND id_veiculo=v.id ORDER BY id LIMIT 1)u ON TRUE WHERE e.id=$1 AND v.placa=$2 LIMIT 1`,[req.empresaIntegracao.id,placa]);
+   if(!r.rows.length){await registrarRequisicaoIntegracao(req,{statusHttp:404,sucesso:false,codigo:'PLACA_NAO_AUTORIZADA',mensagem:'Placa não vinculada a esta chave empresarial.',placa,inicio});return res.status(404).json({erro:'Placa não vinculada a esta chave empresarial.',request_id:req.requestId});}
+   empresa={id:req.empresaIntegracao.id,nome:req.empresaIntegracao.nome,modo_sombra:req.empresaIntegracao.modo_sombra};veiculo=r.rows[0];idMotorista=r.rows[0].viagem_motorista||r.rows[0].veiculo_motorista||null;idViagem=r.rows[0].id_viagem||null;sessao=String(req.body?.sessao_id||'').trim();sequencia=Number(req.body?.sequencia);
+  }else{
+   if(req.usuario?.tipo!=='motorista')return next();
+   const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.*,vg.id AS id_viagem FROM usuarios u JOIN veiculos v ON v.id=u.id_veiculo JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id JOIN empresas_integracao e ON e.id=ev.id_empresa AND e.ativo=TRUE LEFT JOIN LATERAL(SELECT id FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE WHERE u.id=$1 LIMIT 1`,[req.usuario.id]);
+   if(!r.rows.length)return next();
+   if(req.body?.sessao_piloto_id){const s=await pool.query(`SELECT 1 FROM piloto_mobile_sessoes WHERE id=$1 AND id_motorista=$2 AND id_veiculo=$3 AND status='ativa'`,[req.body.sessao_piloto_id,req.usuario.id,r.rows[0].id]);if(!s.rows.length)return res.status(409).json({erro:'Sessão do piloto inexistente, encerrada ou pertencente a outro motorista.'});}
+   empresa={id:r.rows[0].empresa_id,nome:r.rows[0].empresa_nome,modo_sombra:r.rows[0].modo_sombra};veiculo=r.rows[0];idMotorista=req.usuario.id;idViagem=r.rows[0].id_viagem||null;sessao=`mobile:${req.body?.sessao_piloto_id||req.usuario.id}`;sequencia=Number(req.body?.sequencia);
+  }
+  const lat=Number(req.body?.lat),lon=Number(req.body?.lon);
+  if(!Number.isFinite(lat)||lat < -90||lat > 90||!Number.isFinite(lon)||lon < -180||lon > 180||!sessao||!Number.isSafeInteger(sequencia)||sequencia<0||!req.body?.timestamp_dispositivo){if(integracao)await registrarRequisicaoIntegracao(req,{statusHttp:422,sucesso:false,codigo:'POSICAO_INVALIDA',mensagem:'Posição empresarial incompleta.',placa:veiculo?.placa,inicio});return res.status(422).json({erro:'Posição empresarial exige lat, lon, sessão, sequência e horário do dispositivo válidos.',request_id:req.requestId});}
+  const resultado=await gravarPosicaoGpsUnificada({empresa,veiculo,idMotorista,idViagem,sessao,sequencia,origem:integracao?'integracao_empresa':(req.body.origem_coleta||'gps_app'),payload:req.body,requestId:req.requestId});
+  if(integracao&&req.chaveIntegracao?.id)await pool.query(`UPDATE empresa_integracao_chaves SET ultimo_uso_em=CURRENT_TIMESTAMP WHERE id=$1`,[req.chaveIntegracao.id]);
+  if(!integracao&&req.body?.sessao_piloto_id)await pool.query(`UPDATE piloto_mobile_sessoes SET ultima_lat=$1,ultima_lon=$2,ultima_precisao_m=$3,ultima_velocidade_kmh=$4,bateria_percentual=COALESCE($5,bateria_percentual),carregando=COALESCE($6,carregando),tipo_rede=COALESCE(NULLIF($7,''),tipo_rede),gps_ativo=COALESCE($8,gps_ativo),app_segundo_plano=COALESCE($9,app_segundo_plano),ultima_sequencia=GREATEST(COALESCE(ultima_sequencia,-1),$10),total_posicoes=total_posicoes+$11,ultima_comunicacao_em=CURRENT_TIMESTAMP WHERE id=$12 AND id_motorista=$13 AND status='ativa'`,[lat,lon,req.body.precisao_m??null,req.body.velocidade_kmh??null,req.body.bateria_percentual??null,req.body.carregando??null,String(req.body.tipo_rede||'').slice(0,30),req.body.gps_ativo??true,req.body.app_segundo_plano??null,sequencia,resultado.duplicada?0:1,req.body.sessao_piloto_id,req.usuario.id]);
+  if(resultado.duplicada){if(integracao)await registrarRequisicaoIntegracao(req,{statusHttp:200,sucesso:true,placa:veiculo.placa,inicio});return res.json({mensagem:'Posição já recebida anteriormente.',duplicada:true,classificacao:'duplicada',request_id:req.requestId,sessao_id:sessao,sequencia});}
+  setTimeout(processarFilaGuardiao,10);
+  if(integracao)await registrarRequisicaoIntegracao(req,{statusHttp:202,sucesso:true,placa:veiculo.placa,inicio});
+  return res.status(202).json({mensagem:resultado.qualidade.apta_tempo_real?'Posição aceita e análise enfileirada.':'Posição preservada apenas no histórico.',request_id:req.requestId,processamento_id:resultado.ingestao.id,empresa:empresa.nome,placa:veiculo.placa,sessao_id:sessao,sequencia,qualidade:resultado.qualidade,guardiao:{status:resultado.qualidade.apta_tempo_real?'na_fila':'nao_processada'}});
+ }catch(erro){if(req.usuario?.tipo==='integracao')await registrarRequisicaoIntegracao(req,{statusHttp:500,sucesso:false,codigo:'ERRO_INTERNO',mensagem:erro.message,placa:normalizarPlaca(req.body?.placa),inicio});return next(erro);}
+}
+app.post('/integracoes/gps/localizacao',autenticarEmpresaIntegracao,exigirEscopo('telemetria:escrever'),localizacaoLimiter,processarLocalizacaoUnificada,async(req,res)=>{
  const inicio=Date.now(),placa=normalizarPlaca(req.body?.placa),lat=Number(req.body?.lat),lon=Number(req.body?.lon),sessao=String(req.body?.sessao_id||'').trim(),sequencia=Number(req.body?.sequencia);
  if(!placa||!Number.isFinite(lat)||lat < -90||lat > 90||!Number.isFinite(lon)||lon < -180||lon > 180||!sessao||!Number.isSafeInteger(sequencia)||sequencia<0){await registrarRequisicaoIntegracao(req,{statusHttp:400,sucesso:false,codigo:'POSICAO_INVALIDA',mensagem:'Informe placa, lat, lon, sessao_id e sequencia válidos.',placa,inicio});return res.status(400).json({erro:'Informe placa, lat, lon, sessao_id e sequencia válidos.',request_id:req.requestId});}
  const client=await pool.connect();
@@ -9166,7 +9180,7 @@ app.get('/piloto-mobile/sessoes', autenticar, async(req,res)=>{
     `,[limite]);res.json(r.rows);}catch(erro){res.status(500).json({erro:erro.message});}
 });
 
-app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localizacao), async (req, res) => {
+app.post('/localizacao', autenticar, localizacaoLimiter, validar(schemas.localizacao), processarLocalizacaoUnificada, async (req, res) => {
     if (req.usuario.tipo !== 'motorista') return res.status(403).json({ erro: 'Acesso negado' });
 
     try {
@@ -9678,7 +9692,10 @@ app.get('/api/traffic', autenticar, validarQuery(schemas.traffic), async (req, r
 // ======================================================
 // V21.8 - FALHAS DE PROCESSO
 // ======================================================
+let tratadoresDeProcessoInstalados = false;
 function instalarTratadoresDeProcesso() {
+if (tratadoresDeProcessoInstalados) return;
+tratadoresDeProcessoInstalados = true;
 process.on('unhandledRejection', motivo => {
         console.error(
             '❌ unhandledRejection:',
@@ -9712,14 +9729,10 @@ process.on('uncaughtException', erro => {
                 serializarErro(erro)
         })
         .catch(() => {})
-        .finally(() => {
-            // Processo em estado desconhecido: Render deve reiniciar.
-            setTimeout(
-                () => process.exit(1),
-                300
-            );
-        });
+        .finally(() => encerrarAplicacao('uncaughtException', 1));
 });
+process.once('SIGTERM', () => encerrarAplicacao('SIGTERM'));
+process.once('SIGINT', () => encerrarAplicacao('SIGINT'));
 }
 
 async function iniciarServidor() {
@@ -9746,23 +9759,8 @@ async function iniciarServidor() {
         console.log('ℹ️ Migrações no boot desativadas. Use npm run migrate antes de iniciar a API.');
     }
 
-    app.listen(PORT, '0.0.0.0', () => {
-        setTimeout(processarNotificacoesOutbox,5000);
-        setInterval(processarNotificacoesOutbox,15000);
-        setTimeout(processarFilaGuardiao,3000);
-        setInterval(processarFilaGuardiao,5000);
-        // Primeira manutenção 2 min após boot,
-        // depois em intervalo configurável.
-        setTimeout(
-            executarManutencaoPeriodica,
-            2 * 60 * 1000
-        );
-
-        setInterval(
-            executarManutencaoPeriodica,
-            MANUTENCAO_INTERVALO_MS
-        );
-
+    servidorHttp = app.listen(PORT, '0.0.0.0', () => {
+        if ((process.env.PROCESS_ROLE || 'all') !== 'api') iniciarProcessadores();
         console.log('========================================');
         console.log(`🚀 Servidor: porta ${PORT}`);
         console.log('🐘 PostgreSQL: ATIVO');
@@ -9773,6 +9771,7 @@ async function iniciarServidor() {
         console.log('🛣️ Desvio automático: ATIVO');
         console.log('========================================');
     });
+    return servidorHttp;
 }
 
 let processandoNotificacoes=false;
@@ -9783,6 +9782,68 @@ async function processarFilaGuardiao(){if(processandoFilaGuardiao)return;process
 async function processarNotificacoesOutbox(){
     if(processandoNotificacoes)return;processandoNotificacoes=true;
     try{const fila=await pool.query(`WITH candidatos AS(SELECT id FROM notificacoes_outbox WHERE((status='pendente' AND proxima_tentativa_em<=CURRENT_TIMESTAMP)OR(status='tentando' AND reservado_em<CURRENT_TIMESTAMP-INTERVAL '5 minutes'))ORDER BY criado_em LIMIT 20 FOR UPDATE SKIP LOCKED)UPDATE notificacoes_outbox n SET status='tentando',tentativas=n.tentativas+1,reservado_em=CURRENT_TIMESTAMP,worker_id=$1 FROM candidatos c WHERE n.id=c.id RETURNING n.*`,[notificacaoWorkerId]);for(const item of fila.rows){try{if(item.destinatario==='webhook'){const cfg=item.id_empresa?(await pool.query(`SELECT webhook_url,webhook_segredo FROM empresa_notificacao_config WHERE id_empresa=$1 AND webhook_ativo=TRUE`,[item.id_empresa])).rows[0]:null,url=cfg?.webhook_url||ALERT_WEBHOOK_URL,segredo=cfg?.webhook_segredo;if(!url)throw new Error('Webhook não configurado');const timestamp=Math.floor(Date.now()/1000),conteudo=JSON.stringify(item.payload),canonico=`${timestamp}.${item.entrega_id}.${item.tentativas}.${conteudo}`,assinatura=segredo?crypto.createHmac('sha256',segredo).update(canonico).digest('hex'):null;await axios.post(url,item.payload,{headers:{'X-Guardiao-Delivery':item.entrega_id,'X-Guardiao-Timestamp':String(timestamp),'X-Guardiao-Attempt':String(item.tentativas),...(assinatura?{'X-Guardiao-Signature':`sha256=${assinatura}`}:{})},timeout:8000});await pool.query(`UPDATE notificacoes_outbox SET assinatura_hmac=$1,assinatura_timestamp=$2 WHERE id=$3 AND worker_id=$4`,[assinatura,timestamp,item.id,notificacaoWorkerId]);}else if(item.destinatario!=='painel'){if(!BREVO_API_KEY||!EMAIL_REMETENTE)throw new Error('Canal de e-mail não configurado');await axios.post('https://api.brevo.com/v3/smtp/email',{sender:{name:EMAIL_NOME,email:EMAIL_REMETENTE},to:[{email:item.destinatario}],subject:`Alerta Guardião · ${item.payload?.placa||'veículo'}`,htmlContent:`<h2>Alerta Guardião</h2><p>Veículo: <strong>${item.payload?.placa||'-'}</strong></p><p>Nível: ${item.payload?.nivel||'-'}</p><p>Distância: ${item.payload?.distancia_km??'-'} km</p>`},{headers:{'api-key':BREVO_API_KEY,'Content-Type':'application/json'},timeout:10000});}await pool.query(`UPDATE notificacoes_outbox SET status='enviado',enviado_em=CURRENT_TIMESTAMP,ultimo_erro=NULL,reservado_em=NULL,worker_id=NULL WHERE id=$1 AND worker_id=$2`,[item.id,notificacaoWorkerId]);}catch(erro){const tentativas=Number(item.tentativas||0),final=tentativas>=8;await pool.query(`UPDATE notificacoes_outbox SET status=$1,ultimo_erro=$2,proxima_tentativa_em=CURRENT_TIMESTAMP+($3||' seconds')::interval,reservado_em=NULL,worker_id=NULL WHERE id=$4 AND worker_id=$5`,[final?'falhou':'pendente',String(erro.message||erro).slice(0,1000),Math.min(3600,Math.pow(2,tentativas)*15),item.id,notificacaoWorkerId]);}}}catch(erro){console.error('Falha processando notificações:',erro.message);}finally{processandoNotificacoes=false;}
+}
+
+let servidorHttp = null;
+let agendadorProcessadores = null;
+let encerrandoAplicacao = false;
+
+function iniciarProcessadores() {
+    if (agendadorProcessadores?.estaAtivo()) return;
+    agendadorProcessadores = criarAgendador({ tarefas: [
+        { nome: 'guardiao', executar: processarFilaGuardiao, atrasoInicialMs: 3000, intervaloMs: 5000 },
+        { nome: 'notificacoes', executar: processarNotificacoesOutbox, atrasoInicialMs: 5000, intervaloMs: 15000 },
+        { nome: 'integracoes', executar: monitorarIntegracoesIndisponiveis, atrasoInicialMs: 10000, intervaloMs: 60000 },
+        { nome: 'manutencao', executar: executarManutencaoPeriodica, atrasoInicialMs: 120000, intervaloMs: MANUTENCAO_INTERVALO_MS }
+    ]});
+    agendadorProcessadores.iniciar();
+    console.log('⚙️ Processadores em segundo plano iniciados.');
+}
+
+function pararProcessadores() {
+    agendadorProcessadores?.parar();
+    agendadorProcessadores = null;
+}
+
+async function liberarReservasDosWorkers() {
+    await Promise.allSettled([
+        pool.query(`UPDATE guardiao_fila SET status='pendente',reservado_em=NULL,worker_id=NULL,proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='processando' AND worker_id=$1`, [guardiaoWorkerId]),
+        pool.query(`UPDATE notificacoes_outbox SET status='pendente',reservado_em=NULL,worker_id=NULL,proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='tentando' AND worker_id=$1`, [notificacaoWorkerId])
+    ]);
+}
+
+async function fecharServidorHttp() {
+    if (!servidorHttp) return;
+    const atual = servidorHttp;
+    servidorHttp = null;
+    await new Promise((resolve, reject) => atual.close(erro => erro ? reject(erro) : resolve()));
+}
+
+async function encerrarAplicacao(motivo = 'encerramento', codigo = 0) {
+    if (encerrandoAplicacao) return;
+    encerrandoAplicacao = true;
+    console.log(`⏹️ Encerramento controlado iniciado: ${motivo}`);
+    const limite = setTimeout(() => process.exit(codigo || 1), 10000);
+    limite.unref?.();
+    pararProcessadores();
+    try {
+        await fecharServidorHttp();
+        await liberarReservasDosWorkers();
+        await pool.end();
+    } catch (erro) {
+        console.error('❌ Falha durante encerramento controlado:', erro.message);
+        codigo = codigo || 1;
+    } finally {
+        clearTimeout(limite);
+        process.exitCode = codigo;
+    }
+}
+
+async function iniciarWorker() {
+    validarAmbiente();
+    if (!await testarBanco()) throw new Error('PostgreSQL indisponível para o worker.');
+    if (process.env.MIGRATE_ON_START === 'true') await executarMigracoes();
+    iniciarProcessadores();
 }
 
 
@@ -9829,4 +9890,15 @@ if (require.main === module) {
     });
 }
 
-module.exports = { app, pool, iniciarServidor, executarMigracoes, validarAmbiente };
+module.exports = {
+    app,
+    pool,
+    iniciarServidor,
+    iniciarWorker,
+    iniciarProcessadores,
+    pararProcessadores,
+    encerrarAplicacao,
+    instalarTratadoresDeProcesso,
+    executarMigracoes,
+    validarAmbiente
+};
