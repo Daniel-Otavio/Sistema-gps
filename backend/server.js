@@ -1386,6 +1386,21 @@ const cadastroLimiter = rateLimit({
     message: { erro: 'Muitas tentativas de cadastro. Aguarde alguns minutos.' }
 });
 
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    store: new PostgresRateLimitStore({ pool, prefixo: 'login' }),
+    keyGenerator: req => {
+        const identificador = String(req.body?.login || req.body?.email || '')
+            .trim().toLowerCase().slice(0, 220);
+        const assinatura = crypto.createHash('sha256').update(identificador).digest('hex').slice(0, 24);
+        return `${req.ip}:${assinatura}`;
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { erro: 'Muitas tentativas de acesso. Aguarde 15 minutos.' }
+});
+
 app.use(globalLimiter);
 app.use('/api/geocodificar', criarRotasGeocodificacao({
     pool,
@@ -1570,12 +1585,7 @@ function gerarChaveRota(origem, destino, perfil, preferencia, altura, peso, comp
 // HOME / HEALTH / ROTA TESTE
 // ======================================================
 app.get('/', (req, res) => {
-    res.json({
-        mensagem: '🚀 GPS Caminhão API',
-        banco: 'PostgreSQL',
-        email: !!BREVO_API_KEY,
-        status: 'online'
-    });
+    res.json({ status: 'online' });
 });
 
 
@@ -2074,34 +2084,14 @@ app.get('/health', async (req, res) => {
     const inicio = Date.now();
 
     try {
-        const resultado =
-            await pool.query(`
-                SELECT
-                    NOW() AS agora,
-                    pg_database_size(
-                        current_database()
-                    ) AS database_bytes
-            `);
+        await pool.query('SELECT 1');
 
         res.json({
             status:'ok',
-            banco:'postgresql',
-            database:'conectado',
-            database_bytes:
-                Number(
-                    resultado.rows[0]
-                        .database_bytes || 0
-                ),
-            brevo:
-                BREVO_API_KEY
-                    ? 'configurado'
-                    : 'não configurado',
-            retencao_gps_dias:
-                GPS_RAW_RETENTION_DAYS,
             tempo_resposta_ms:
                 Date.now() - inicio,
             timestamp:
-                resultado.rows[0].agora
+                new Date().toISOString()
         });
 
     } catch (erro) {
@@ -2120,11 +2110,8 @@ app.get('/health', async (req, res) => {
 
         res.status(500).json({
             status:'erro',
-            database:'desconectado',
             request_id:
-                req.requestId,
-            erro:
-                erro.message
+                req.requestId
         });
     }
 });
@@ -2380,7 +2367,7 @@ app.post('/admin/manutencao/compactar-gps', autenticar, async (req, res) => {
 // ======================================================
 // LOGIN
 // ======================================================
-app.post('/login', validar(schemas.login), async (req, res) => {
+app.post('/login', loginLimiter, validar(schemas.login), async (req, res) => {
     try {
         const identificador = req.body.login.trim();
 
@@ -8850,7 +8837,7 @@ app.use(criarRotasPrivacidade({
 app.use(criarRotasAutenticacaoEmpresarial({
     pool,
     autenticar,
-    cadastroLimiter,
+    cadastroLimiter: loginLimiter,
     emitirTokenSessao,
     estabelecerSessaoWeb,
     limparSessaoWeb
