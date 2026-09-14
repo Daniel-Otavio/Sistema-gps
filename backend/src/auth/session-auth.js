@@ -2,6 +2,44 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
 function criarAutenticacao({ pool, jwtSecret }) {
+    const cookieSeguro = process.env.NODE_ENV === 'production';
+
+    function lerCookies(req) {
+        return String(req.headers.cookie || '').split(';').reduce((acc, parte) => {
+            const indice = parte.indexOf('=');
+            if (indice > 0) acc[parte.slice(0, indice).trim()] = decodeURIComponent(parte.slice(indice + 1).trim());
+            return acc;
+        }, {});
+    }
+
+    function estabelecerSessaoWeb(req, res, token) {
+        if (req.headers['x-client-type'] !== 'dashboard' && !lerCookies(req).gps_session) return null;
+        const csrfToken = crypto.randomBytes(32).toString('hex');
+        const base = { secure: cookieSeguro, sameSite: cookieSeguro ? 'none' : 'lax', path: '/' };
+        res.cookie('gps_session', token, { ...base, httpOnly: true, maxAge: 2 * 60 * 60 * 1000 });
+        res.cookie('gps_csrf', csrfToken, { ...base, httpOnly: true, maxAge: 2 * 60 * 60 * 1000 });
+        return csrfToken;
+    }
+
+    function limparSessaoWeb(res) {
+        const base = { secure: cookieSeguro, sameSite: cookieSeguro ? 'none' : 'lax', path: '/' };
+        res.clearCookie('gps_session', { ...base, httpOnly: true });
+        res.clearCookie('gps_csrf', { ...base, httpOnly: true });
+    }
+
+    function protegerCsrf(req, res, next) {
+        if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+        if (['/login', '/integracoes/portal/login'].includes(req.path)) return next();
+        const cookies = lerCookies(req);
+        if (!cookies.gps_session) return next();
+        const recebido = String(req.headers['x-csrf-token'] || '');
+        const esperado = String(cookies.gps_csrf || '');
+        if (!recebido || !esperado || recebido.length !== esperado.length ||
+            !crypto.timingSafeEqual(Buffer.from(recebido), Buffer.from(esperado))) {
+            return res.status(403).json({ erro: 'Proteção CSRF inválida. Atualize a página e tente novamente.' });
+        }
+        return next();
+    }
     async function emitirTokenSessao(usuario, validade = '8h') {
         const jti = crypto.randomUUID();
         const token = jwt.sign({ ...usuario, jti }, jwtSecret, { expiresIn: validade });
@@ -16,8 +54,9 @@ function criarAutenticacao({ pool, jwtSecret }) {
 
     async function autenticar(req, res, next) {
         const header = req.headers.authorization;
-        if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
-        const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+        const cookieToken = lerCookies(req).gps_session;
+        if (!header && !cookieToken) return res.status(401).json({ erro: 'Sessão não fornecida' });
+        const token = header ? (header.startsWith('Bearer ') ? header.slice(7) : header) : cookieToken;
         try {
             const decoded = jwt.verify(token, jwtSecret);
             if (!decoded.jti) return res.status(401).json({ erro: 'Sessão antiga ou inválida. Entre novamente.' });
@@ -59,7 +98,7 @@ function criarAutenticacao({ pool, jwtSecret }) {
         }
     }
 
-    return { autenticar, emitirTokenSessao };
+    return { autenticar, emitirTokenSessao, estabelecerSessaoWeb, limparSessaoWeb, protegerCsrf };
 }
 
 module.exports = { criarAutenticacao };
