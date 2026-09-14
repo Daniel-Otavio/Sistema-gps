@@ -9,7 +9,11 @@ export type DashboardUser = {
   id_empresa?: string | number;
   [key: string]: ApiValue;
 };
-export type Session = { token: string; usuario: DashboardUser };
+export type Session = {
+  token: string;
+  csrfToken?: string;
+  usuario: DashboardUser;
+};
 export type AreaStatus = {
   estado: "carregando" | "disponivel" | "vazio" | "erro";
   mensagem?: string;
@@ -28,14 +32,21 @@ const KEY = "gps-caminhao-gestor-session";
 export function readSession(): Session | null {
   if (typeof window === "undefined") return null;
   try {
-    return JSON.parse(sessionStorage.getItem(KEY) || "null");
+    const atual = JSON.parse(
+      sessionStorage.getItem(KEY) || "null",
+    ) as Session | null;
+    if (atual && !atual.csrfToken) {
+      sessionStorage.removeItem(KEY);
+      return null;
+    }
+    return atual ? { ...atual, token: "" } : null;
   } catch {
     return null;
   }
 }
 export function saveSession(s: Session | null) {
   if (typeof window === "undefined") return;
-  if (s) sessionStorage.setItem(KEY, JSON.stringify(s));
+  if (s) sessionStorage.setItem(KEY, JSON.stringify({ ...s, token: "" }));
   else sessionStorage.removeItem(KEY);
 }
 async function request<T>(
@@ -45,9 +56,15 @@ async function request<T>(
 ): Promise<T> {
   const r = await fetch(API_BASE + path, {
     ...init,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      "X-Client-Type": "dashboard",
       ...(token ? { Authorization: token } : {}),
+      ...(!["GET", "HEAD"].includes((init.method || "GET").toUpperCase()) &&
+      readSession()?.csrfToken
+        ? { "X-CSRF-Token": readSession()!.csrfToken! }
+        : {}),
       ...init.headers,
     },
   });
@@ -78,7 +95,7 @@ export async function login(
   );
   if (!["admin", "empresa_usuario"].includes(d.usuario?.tipo))
     throw new Error("Este usuário não possui acesso ao painel.");
-  const s = { token: d.token, usuario: d.usuario };
+  const s = { token: "", csrfToken: d.csrfToken, usuario: d.usuario };
   saveSession(s);
   return s;
 }
