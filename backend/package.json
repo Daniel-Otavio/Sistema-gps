@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "worker": "node worker.js",
     "dev": "nodemon server.js",
     "migrate": "node database/migrate.js",
     "test": "node --test tests/*.test.js",
