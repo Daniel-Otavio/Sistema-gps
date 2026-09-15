@@ -26,8 +26,13 @@ const { criarRotasPrivacidade } = require('./src/routes/privacy');
 const { criarRotasAutenticacaoEmpresarial } = require('./src/routes/enterprise-auth');
 const { criarRotasObservabilidade } = require('./src/routes/system-observability');
 const { criarRotasPortalEmpresarial } = require('./src/routes/enterprise-portal');
+const { criarRotasResumoDashboard } = require('./src/routes/dashboard-summary');
 const { criarRotasGps } = require('./src/routes/gps');
 const { criarRotasNotificacoes } = require('./src/routes/notifications');
+const { groupNearbyCandidates, distanceKm: distanciaCandidatoKm, evidenceStatus, priorityScore, priorityLevel } = require('./src/services/restrictions/candidate-intelligence');
+const { instalarConsoleEstruturado, executarComContextoLog, limpar: limparDadosLog } = require('./src/observability/logger');
+
+instalarConsoleEstruturado();
 
 const app = express();
 app.set('trust proxy', 1);
@@ -95,6 +100,11 @@ const SLOW_REQUEST_MS =
         )
     );
 
+const DB_STATEMENT_TIMEOUT_MS = Math.max(2000, Math.min(120000, Number(process.env.DB_STATEMENT_TIMEOUT_MS) || 30000));
+const DB_IDLE_TRANSACTION_TIMEOUT_MS = Math.max(5000, Math.min(300000, Number(process.env.DB_IDLE_TRANSACTION_TIMEOUT_MS) || 60000));
+const DB_QUERY_TIMEOUT_MS = Math.max(DB_STATEMENT_TIMEOUT_MS + 1000, Math.min(125000, Number(process.env.DB_QUERY_TIMEOUT_MS) || 35000));
+const GUARDIAO_SLA_MS = Math.max(1000, Math.min(60000, Number(process.env.GUARDIAO_SLA_MS) || 5000));
+
 
 if (!DATABASE_URL) console.error('❌ DATABASE_URL não configurada!');
 if (!JWT_SECRET) console.error('❌ JWT_SECRET não configurada!');
@@ -110,7 +120,10 @@ const pool = new Pool({
     connectionString: DATABASE_URL,
     max: Math.max(5, Math.min(30, Number(process.env.DB_POOL_MAX) || 10)),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 10000
+    connectionTimeoutMillis: 10000,
+    statement_timeout: DB_STATEMENT_TIMEOUT_MS,
+    query_timeout: DB_QUERY_TIMEOUT_MS,
+    options: `-c idle_in_transaction_session_timeout=${DB_IDLE_TRANSACTION_TIMEOUT_MS}`
 });
 
 pool.on('error', err => {
@@ -181,8 +194,8 @@ async function registrarLogSistema({
         `, [
             nivel,
             origem,
-            String(mensagem || '').slice(0,4000),
-            JSON.stringify(detalhes || {}),
+            String(limparDadosLog(mensagem || '')).slice(0,4000),
+            JSON.stringify(limparDadosLog(detalhes || {})),
             req?.requestId || null,
             req?.method || null,
             req?.originalUrl || null,
@@ -246,7 +259,7 @@ app.use((req, res, next) => {
                 nivel: 'error', origem: 'resposta_5xx', mensagem: String(detalhe),
                 detalhes: { resposta_original: body }, req, statusHttp: res.statusCode
             }).catch(() => {});
-            return jsonOriginal({ erro: 'Erro interno do servidor', request_id: req.requestId });
+            return jsonOriginal({ codigo:'ERRO_INTERNO', erro:'Erro interno do servidor', request_id:req.requestId });
         }
         return jsonOriginal(body);
     };
@@ -288,7 +301,7 @@ app.use((req, res, next) => {
         }
     });
 
-    next();
+    executarComContextoLog({ req }, next);
 });
 
 
@@ -1354,7 +1367,7 @@ const globalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 500,
     store: new PostgresRateLimitStore({ pool, prefixo: 'global' }),
-    skip: req => ['/health', '/localizacao', '/integracoes/gps/localizacao'].includes(req.path),
+    skip: req => ['/health', '/localizacao', '/integracoes/gps/localizacao', '/dashboard/resumo', '/dashboard/localizacoes'].includes(req.path),
     message: { erro: 'Muitas requisições.' }
 });
 
@@ -1401,7 +1414,26 @@ const loginLimiter = rateLimit({
     message: { erro: 'Muitas tentativas de acesso. Aguarde 15 minutos.' }
 });
 
+const dashboardLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 240,
+    store: new PostgresRateLimitStore({ pool, prefixo: 'dashboard' }),
+    keyGenerator: req => req.usuario?.tipo === 'empresa_usuario'
+        ? `empresa:${req.usuario.id_empresa}:usuario:${req.usuario.id}`
+        : `admin:${req.usuario?.id || req.ip}`,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { erro: 'Muitas atualizações do painel. Aguarde alguns instantes.' }
+});
+
 app.use(globalLimiter);
+app.use(criarRotasResumoDashboard({
+    pool,
+    autenticar,
+    limiter: dashboardLimiter,
+    analisarPosicaoNaRota,
+    registrarLogSistema
+}));
 app.use('/api/geocodificar', criarRotasGeocodificacao({
     pool,
     autenticar,
@@ -2329,7 +2361,8 @@ app.get('/admin/saude-producao', autenticar, async (req, res) => {
 app.use(criarRotasObservabilidade({
     pool,
     autenticar,
-    registrarLogSistema
+    registrarLogSistema,
+    guardiaoSlaMs:GUARDIAO_SLA_MS
 }));
 app.post('/admin/manutencao/compactar-gps', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
@@ -2975,6 +3008,8 @@ const anttDatasetCache = new NodeCache({
     checkperiod: 10 * 60
 });
 const osmCruzamentoCache = new NodeCache({stdTTL:6*60*60,checkperiod:10*60});
+async function lerCircuitoOsmRegional(){const r=await pool.query(`SELECT falhas_consecutivas,aberto_ate FROM integracao_circuitos WHERE provedor='osm_overpass_regional'`).catch(()=>({rows:[]}));return r.rows[0]||{falhas_consecutivas:0,aberto_ate:null};}
+async function registrarCircuitoOsmRegional(sucesso,erro=null){if(sucesso)return pool.query(`INSERT INTO integracao_circuitos(provedor,falhas_consecutivas,aberto_ate,ultimo_sucesso_em,ultimo_erro)VALUES('osm_overpass_regional',0,NULL,CURRENT_TIMESTAMP,NULL)ON CONFLICT(provedor)DO UPDATE SET falhas_consecutivas=0,aberto_ate=NULL,ultimo_sucesso_em=CURRENT_TIMESTAMP,ultimo_erro=NULL,atualizado_em=CURRENT_TIMESTAMP`).catch(()=>{});return pool.query(`INSERT INTO integracao_circuitos(provedor,falhas_consecutivas,ultima_falha_em,ultimo_erro)VALUES('osm_overpass_regional',1,CURRENT_TIMESTAMP,$1)ON CONFLICT(provedor)DO UPDATE SET falhas_consecutivas=integracao_circuitos.falhas_consecutivas+1,aberto_ate=CASE WHEN integracao_circuitos.falhas_consecutivas+1>=3 THEN CURRENT_TIMESTAMP+INTERVAL '2 minutes' ELSE integracao_circuitos.aberto_ate END,ultima_falha_em=CURRENT_TIMESTAMP,ultimo_erro=$1,atualizado_em=CURRENT_TIMESTAMP`,[String(erro||'Falha').slice(0,500)]).catch(()=>{});}
 
 function numeroLimiteOSM(valor){if(valor===null||valor===undefined)return null;const n=Number(String(valor).replace(',','.').match(/[0-9]+(?:\.[0-9]+)?/)?.[0]);return Number.isFinite(n)&&n>0?n:null;}
 async function cruzarCandidatosComOSM(candidatos){
@@ -2988,6 +3023,27 @@ async function cruzarCandidatosComOSM(candidatos){
         candidatos.forEach((x,indice)=>{const proximos=unicos.map(e=>({e,lat:Number(e.lat??e.center?.lat),lon:Number(e.lon??e.center?.lon)})).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lon)).map(p=>({...p,distancia_km:distanciaKmEntrePontos(x.reg.latitude,x.reg.longitude,p.lat,p.lon)})).filter(p=>p.distancia_km<=.12).sort((a,b)=>a.distancia_km-b.distancia_km).slice(0,5);porIndice.set(indice,proximos);});
         const resultado={porIndice,aviso:null};osmCruzamentoCache.set(chave,resultado);return resultado;
     }catch(erro){return{porIndice:new Map(),aviso:`OpenStreetMap indisponível para cruzamento: ${erro.message}`};}
+}
+
+async function consultarRestricoesOSMRegionais({lat,lon,raioKm}){
+    const circuito=await lerCircuitoOsmRegional();if(circuito.aberto_ate&&new Date(circuito.aberto_ate).getTime()>Date.now())throw new Error('Consulta OSM regional temporariamente suspensa após falhas consecutivas');
+    const chave=`osm_regional_${Number(lat).toFixed(3)}_${Number(lon).toFixed(3)}_${Number(raioKm).toFixed(1)}`;
+    const cache=osmCruzamentoCache.get(chave);if(cache)return cache;
+    const raioMetros=Math.min(8000,Math.max(1000,Math.round(Number(raioKm)*1000))),elementos=[];
+    try{for(const filtros of [['maxheight','maxweight','maxlength','maxwidth'],['bridge','tunnel']]){
+        const blocos=filtros.map(tag=>`nwr(around:${raioMetros},${Number(lat)},${Number(lon)})["${tag}"];`).join(''),query=`[out:json][timeout:18];(${blocos});out center tags;`;
+        const resposta=await axios.post('https://overpass-api.de/api/interpreter',new URLSearchParams({data:query}).toString(),{
+            headers:{'Content-Type':'application/x-www-form-urlencoded','User-Agent':'GPS-Caminhao-Restricoes/1.0'},timeout:22000,maxContentLength:6*1024*1024
+        });elementos.push(...(resposta.data?.elements||[]));
+    }await registrarCircuitoOsmRegional(true);}catch(erro){await registrarCircuitoOsmRegional(false,erro.message);throw erro;}
+    const resultado=[...new Map(elementos.map(elemento=>[`${elemento.type}/${elemento.id}`,elemento])).values()]
+        .map(elemento=>{
+            const tags=elemento.tags||{},latitude=Number(elemento.lat??elemento.center?.lat),longitude=Number(elemento.lon??elemento.center?.lon);
+            if(!Number.isFinite(latitude)||!Number.isFinite(longitude))return null;
+            const tipo=tags.tunnel?'tunel':tags.maxheight?'restricao_altura':tags.maxweight?'restricao_peso':tags.maxwidth?'restricao_largura':tags.maxlength?'restricao_comprimento':'ponte_viaduto';
+            return{elemento,reg:{categoria:'OSM_REGIONAL',tipo,nome:tags.name||tags.ref||tags.bridge||tags.tunnel||'Estrutura mapeada no OSM',rodovia:tags.ref||tags.name||null,km:null,latitude,longitude},fonte:{fonte:'osm',fonte_id:`${elemento.type}/${elemento.id}`,lat:latitude,lng:longitude,limite_altura:numeroLimiteOSM(tags.maxheight),limite_peso:numeroLimiteOSM(tags.maxweight),limite_largura:numeroLimiteOSM(tags.maxwidth),limite_comprimento:numeroLimiteOSM(tags.maxlength),tags}};
+        }).filter(Boolean);
+    osmCruzamentoCache.set(chave,resultado);return resultado;
 }
 
 function semAcentoANTT(valor) {
@@ -4528,6 +4584,11 @@ function valorPositivoOuNulo(v) {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : null;
 }
+function validarLimitesRestricao(body={}){
+    const regras={limite_altura:10,limite_largura:10,limite_comprimento:60,limite_peso:200,limite_eixo:40};
+    for(const[campo,maximo]of Object.entries(regras)){const bruto=body[campo];if(bruto===null||bruto===undefined||bruto==='')continue;const valor=Number(bruto);if(!Number.isFinite(valor)||valor<=0||valor>maximo)return{campo,maximo};}
+    return null;
+}
 
 function restricaoIncompativelComVeiculo(restricao, veiculo) {
     const motivos = [];
@@ -4898,6 +4959,7 @@ app.get('/rotas/minha-rota', autenticar, async (req, res) => {
                 vg.carga,
                 vg.altura_total,
                 vg.peso_total,
+                (SELECT ev.id_empresa FROM empresa_integracao_veiculos ev WHERE ev.id_veiculo=vg.id_veiculo LIMIT 1) AS id_empresa,
                 vg.saida_prevista,
                 vg.saida_real,
                 vg.chegada_prevista,
@@ -6770,6 +6832,7 @@ function guardiaoPontoNaRotaPorPercentual(geojson, percentual) {
 // Restrição efêmera para ensaio do Guardião. É ignorada pelo roteamento e pré-check.
 app.post('/guardiao/teste/restricao', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    if (IS_PRODUCTION && process.env.ENABLE_GUARDIAO_TEST_ENDPOINTS !== 'true') return res.status(404).json({ erro:'Recurso não disponível.' });
 
     const idViagem = Number(req.body?.id_viagem);
     const percentual = Math.max(5, Math.min(95, Number(req.body?.percentual ?? 50)));
@@ -6831,6 +6894,7 @@ app.post('/guardiao/teste/restricao', autenticar, async (req, res) => {
 
 app.delete('/guardiao/teste/restricoes/:id', autenticar, async (req, res) => {
     if (req.usuario.tipo !== 'admin') return res.status(403).json({ erro:'Acesso negado' });
+    if (IS_PRODUCTION && process.env.ENABLE_GUARDIAO_TEST_ENDPOINTS !== 'true') return res.status(404).json({ erro:'Recurso não disponível.' });
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ erro:'Restrição inválida.' });
 
@@ -7325,6 +7389,54 @@ app.get('/monitoramento/viagens', autenticar, async (req, res) => {
 // ======================================================
 // SCANNER ANTT / CENTRAL DE VALIDAÇÃO
 // ======================================================
+async function calcularExposicoesRestricoesEmLote(pontos,idEmpresa){
+    if(!idEmpresa||!pontos.length)return new Map();
+    const entrada=pontos.map((item,indice)=>({indice,lat:Number(item.reg.latitude),lng:Number(item.reg.longitude)}));
+    const result=await pool.query(`WITH pontos AS(SELECT * FROM jsonb_to_recordset($1::jsonb)AS p(indice int,lat double precision,lng double precision))
+        SELECT p.indice,COUNT(h.id)::int AS observacoes,COUNT(DISTINCT h.id_veiculo)::int AS veiculos,
+          COUNT(DISTINCT h.id_viagem)::int AS viagens,MAX(h.registrado_em) AS ultima
+        FROM pontos p LEFT JOIN historico_localizacoes h ON h.registrado_em>CURRENT_TIMESTAMP-INTERVAL '180 days'
+          AND h.lat BETWEEN p.lat-.0018 AND p.lat+.0018 AND h.lon BETWEEN p.lng-.0018 AND p.lng+.0018
+          AND EXISTS(SELECT 1 FROM empresa_integracao_veiculos ev WHERE ev.id_empresa=$2 AND ev.id_veiculo=h.id_veiculo)
+        GROUP BY p.indice`,[JSON.stringify(entrada),idEmpresa]);
+    return new Map(result.rows.map(row=>[Number(row.indice),row]));
+}
+
+async function registrarGrupoRiscoCatalogo({ client = pool, idEmpresa = null, reg, tipo, fonteId, fontes, distanciaRotaKm, exposicao = null }) {
+    const lat = Number(reg.latitude), lng = Number(reg.longitude);
+    const proximos = await client.query(`SELECT id,lat,lng,fontes,total_ocorrencias,evidencia_atualizada_em,evidencia_validade_dias
+        FROM restricoes_risco_catalogo
+        WHERE status IN ('possivel_risco','em_revisao','validada') AND COALESCE(id_empresa,0)=COALESCE($1,0)
+          AND tipo=$2 AND lat BETWEEN $3 AND $4 AND lng BETWEEN $5 AND $6
+        ORDER BY atualizado_em DESC LIMIT 30`, [idEmpresa, tipo, lat - .0015, lat + .0015, lng - .0015, lng + .0015]);
+    const existente = proximos.rows.find(item => distanciaCandidatoKm({lat,lng},{lat:Number(item.lat),lng:Number(item.lng)}) <= .12);
+    const exp = exposicao || {};
+    const mergedSources = [...new Map([...(existente?.fontes || []), ...fontes].map(item => [`${item.fonte}:${item.fonte_id}`, item])).values()];
+    const evidence = evidenceStatus(existente?.evidencia_atualizada_em, existente?.evidencia_validade_dias || 180);
+    const hasDimension = mergedSources.some(item => item.limite_altura || item.limite_peso || item.limite_largura);
+    const score = priorityScore({passages:exp.observacoes,vehicles:exp.veiculos,trips:exp.viagens,sources:mergedSources.length,hasDimension,evidence,distanceRouteKm:distanciaRotaKm});
+    const groupKey = existente ? null : `${tipo}:${lat.toFixed(4)}:${lng.toFixed(4)}:${crypto.createHash('sha1').update(fonteId).digest('hex').slice(0,10)}`;
+    const result = existente
+        ? await client.query(`UPDATE restricoes_risco_catalogo SET nome=COALESCE($1,nome),lat=$2,lng=$3,fontes=$4::jsonb,
+              total_ocorrencias=GREATEST(total_ocorrencias,$5),total_passagens=$6,total_veiculos_expostos=$7,total_viagens_expostas=$8,
+              ultima_passagem_em=$9,prioridade_score=$10,prioridade_nivel=$11,ultima_deteccao_em=CURRENT_TIMESTAMP,atualizado_em=CURRENT_TIMESTAMP
+              WHERE id=$12 RETURNING *`,[reg.nome||reg.tipo||null,lat,lng,JSON.stringify(mergedSources),mergedSources.length,exp.observacoes||0,exp.veiculos||0,exp.viagens||0,exp.ultima||null,score,priorityLevel(score),existente.id])
+        : await client.query(`INSERT INTO restricoes_risco_catalogo(id_empresa,grupo_chave,tipo,nome,lat,lng,fontes,total_ocorrencias,
+              total_passagens,total_veiculos_expostos,total_viagens_expostas,ultima_passagem_em,prioridade_score,prioridade_nivel)
+              VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,[idEmpresa,groupKey,tipo,reg.nome||reg.tipo||null,lat,lng,JSON.stringify(mergedSources),mergedSources.length,exp.observacoes||0,exp.veiculos||0,exp.viagens||0,exp.ultima||null,score,priorityLevel(score)]);
+    const catalog = result.rows[0];
+    if(fontes.length)await client.query(`WITH entrada AS(SELECT * FROM jsonb_to_recordset($2::jsonb)AS x(fonte text,fonte_id text,lat double precision,lng double precision,dados jsonb))
+        INSERT INTO restricao_catalogo_ocorrencias(id_catalogo,fonte,fonte_id,lat,lng,dados)
+        SELECT $1,fonte,fonte_id,COALESCE(lat,$3),COALESCE(lng,$4),dados FROM entrada
+        ON CONFLICT(id_catalogo,fonte,fonte_id)DO UPDATE SET dados=EXCLUDED.dados,lat=EXCLUDED.lat,lng=EXCLUDED.lng,detectada_em=CURRENT_TIMESTAMP`,
+        [catalog.id,JSON.stringify(fontes.map(source=>({fonte:source.fonte,fonte_id:source.fonte_id,lat:source.lat??lat,lng:source.lng??lng,dados:source}))),lat,lng]);
+    if(idEmpresa)await client.query(`INSERT INTO restricao_catalogo_exposicao_empresa(id_catalogo,id_empresa,total_posicoes,total_veiculos,total_viagens,ultima_passagem_em)
+        VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(id_catalogo,id_empresa)DO UPDATE SET total_posicoes=EXCLUDED.total_posicoes,total_veiculos=EXCLUDED.total_veiculos,
+        total_viagens=EXCLUDED.total_viagens,ultima_passagem_em=EXCLUDED.ultima_passagem_em,atualizado_em=CURRENT_TIMESTAMP`,
+        [catalog.id,idEmpresa,exp.observacoes||0,exp.veiculos||0,exp.viagens||0,exp.ultima||null]);
+    return catalog;
+}
+
 app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, res) => {
     if (req.usuario.tipo !== 'admin') {
         return res.status(403).json({ erro: 'Acesso negado' });
@@ -7368,16 +7480,24 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             ...infraestrutura.deteccaoAltura
         ];
 
-        const candidatosNaRota = registros.map(reg=>({reg,analise:analisarPosicaoNaRota(
+        const candidatosBrutosNaRota = registros.map(reg=>({reg,analise:analisarPosicaoNaRota(
                 viagem.dados_geojson,
                 reg.latitude,
                 reg.longitude
             )})).filter(x=>x.analise.distanciaRotaKm!==null&&x.analise.distanciaRotaKm<=.08);
+        const gruposProximos = groupNearbyCandidates(candidatosBrutosNaRota, 120);
+        const candidatosNaRota = gruposProximos.map(grupo => ({
+            ...grupo.representative,
+            reg: {...grupo.representative.reg, latitude:grupo.center.lat, longitude:grupo.center.lng},
+            analise: grupo.members.reduce((best,item)=>item.analise.distanciaRotaKm<best.distanciaRotaKm?item.analise:best,grupo.representative.analise),
+            membros: grupo.members.map(item=>item.reg)
+        }));
         const cruzamentoOSM=await cruzarCandidatosComOSM(candidatosNaRota);
+        const exposicoes=await calcularExposicoesRestricoesEmLote(candidatosNaRota,viagem.id_empresa);
         const salvos = [];
 
         for (let indice=0;indice<candidatosNaRota.length;indice++) {
-            const {reg,analise}=candidatosNaRota[indice];
+            const {reg,analise,membros}=candidatosNaRota[indice];
             const osm=(cruzamentoOSM.porIndice.get(indice)||[]).map(x=>({id:`${x.e.type}/${x.e.id}`,distancia_m:Math.round(x.distancia_km*1000),tags:x.e.tags||{}}));
             const limitesOSM=osm.map(x=>({altura:numeroLimiteOSM(x.tags.maxheight),peso:numeroLimiteOSM(x.tags.maxweight),fonte:x.id})).filter(x=>x.altura||x.peso);
             const incompatibilidades=limitesOSM.flatMap(x=>[x.altura&&valorPositivoOuNulo(viagem.altura_total)>x.altura?{tipo:'altura',veiculo:viagem.altura_total,limite:x.altura,fonte:x.fonte}:null,x.peso&&valorPositivoOuNulo(viagem.peso)>x.peso?{tipo:'peso',veiculo:viagem.peso,limite:x.peso,fonte:x.fonte}:null].filter(Boolean));
@@ -7398,6 +7518,13 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             const fonteId =
                 `${reg.categoria}/${hashFonteANTT(reg)}`;
 
+            const fontesCatalogo = [
+                ...membros.map(item=>({fonte:'antt',fonte_id:`${item.categoria}/${hashFonteANTT(item)}`,lat:item.latitude,lng:item.longitude,categoria:item.categoria,rodovia:item.rodovia,km:item.km})),
+                ...osm.map(item=>({fonte:'osm',fonte_id:item.id,lat:reg.latitude,lng:reg.longitude,limite_altura:numeroLimiteOSM(item.tags.maxheight),limite_peso:numeroLimiteOSM(item.tags.maxweight),tags:item.tags}))
+            ];
+            const catalogo = await registrarGrupoRiscoCatalogo({idEmpresa:viagem.id_empresa,reg,tipo,fonteId,fontes:fontesCatalogo,
+                distanciaRotaKm:analise.distanciaRotaKm,exposicao:exposicoes.get(indice)});
+
             const tags = {
                 categoria_antt: reg.categoria,
                 tipo_antt: reg.tipo,
@@ -7414,6 +7541,13 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 fontes_divergentes:fontesDivergentes,
                 classificacao_triagem:classificacao,
                 requer_validacao_humana:true
+                ,grupo_catalogo_id:catalogo.id
+                ,estruturas_agrupadas:membros.length
+                ,prioridade_score:catalogo.prioridade_score
+                ,prioridade_nivel:catalogo.prioridade_nivel
+                ,passagens_reais:catalogo.total_passagens
+                ,veiculos_expostos:catalogo.total_veiculos_expostos
+                ,viagens_expostas:catalogo.total_viagens_expostas
             };
 
             const observacao =
@@ -7424,7 +7558,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             const salvo = await pool.query(`
                 INSERT INTO restricoes_candidatas
                 (
-                    id_viagem,id_rota,id_rota_especifica,id_veiculo,
+                    id_viagem,id_rota,id_rota_especifica,id_veiculo,id_catalogo,
                     fonte,fonte_id,tipo,nome,
                     lat,lng,distancia_rota_km,
                     compatibilidade,risco,confianca,tags,observacao,
@@ -7432,7 +7566,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 )
                 VALUES
                 (
-                    $1,$2,$3,$4,
+                    $1,$2,$3,$4,$15,
                     'antt',$5,$6,$7,
                     $8,$9,$10,
                     'verificar',$14,$11,$12::jsonb,$13,
@@ -7448,6 +7582,7 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                     tags = EXCLUDED.tags,
                     risco = EXCLUDED.risco,
                     observacao = EXCLUDED.observacao,
+                    id_catalogo = EXCLUDED.id_catalogo,
                     ultima_deteccao = CURRENT_TIMESTAMP
                 RETURNING *
             `, [
@@ -7464,7 +7599,8 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
                 reg.categoria === 'PONTE_SIMILAR' ? 90 : 92,
                 JSON.stringify(tags),
                 observacao,
-                classificacao==='alta_prioridade'?'alto':classificacao==='possivel_risco'?'medio':'baixo'
+                classificacao==='alta_prioridade'?'alto':classificacao==='possivel_risco'?'medio':'baixo',
+                catalogo.id
             ]);
 
             salvos.push(salvo.rows[0]);
@@ -7474,7 +7610,10 @@ app.post('/viagens/:id/scan-restricoes', autenticar, heavyLimiter, async (req, r
             mensagem: 'Varredura ANTT concluída.',
             fonte: 'ANTT',
             candidatos_na_rota: salvos.length,
-            fora_do_corredor: Math.max(0, registros.length - candidatosNaRota.length),
+            estruturas_brutas_no_corredor: candidatosBrutosNaRota.length,
+            estruturas_agrupadas: candidatosNaRota.length,
+            duplicadas_consolidadas: Math.max(0,candidatosBrutosNaRota.length-candidatosNaRota.length),
+            fora_do_corredor: Math.max(0, registros.length - candidatosBrutosNaRota.length),
             triagem: salvos.reduce((total,item)=>{
                 const categoria=item.tags?.classificacao_triagem||'inventario';
                 total[categoria]=(total[categoria]||0)+1;
@@ -7512,7 +7651,16 @@ app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
     try {
         const resultado = await pool.query(`
             SELECT
-                rc.*,
+                rc.id,rc.id_viagem,rc.id_rota,rc.id_rota_especifica,rc.id_veiculo,rc.id_catalogo,
+                rc.fonte,rc.fonte_id,rc.tipo,rc.nome,rc.lat,rc.lng,rc.distancia_rota_km,
+                rc.limite_altura,rc.limite_largura,rc.limite_comprimento,rc.limite_peso,rc.limite_eixo,
+                rc.compatibilidade,rc.risco,rc.confianca,rc.status_validacao,rc.observacao,rc.validado_por,rc.validado_em,
+                rc.primeira_deteccao,rc.ultima_deteccao,
+                jsonb_build_object('categoria_antt',rc.tags->'categoria_antt','rodovia',rc.tags->'rodovia','km',rc.tags->'km',
+                  'sentido',rc.tags->'sentido','fontes_consultadas',rc.tags->'fontes_consultadas','classificacao_triagem',rc.tags->'classificacao_triagem',
+                  'requer_validacao_humana',TRUE,'prioridade_score',rc.tags->'prioridade_score','prioridade_nivel',rc.tags->'prioridade_nivel',
+                  'estruturas_agrupadas',rc.tags->'estruturas_agrupadas','incompatibilidades',rc.tags->'incompatibilidades',
+                  'correspondencias_osm',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',elem.value->'id','distancia_m',elem.value->'distancia_m')) FROM jsonb_array_elements(COALESCE(rc.tags->'correspondencias_osm','[]'::jsonb))AS elem(value)),'[]'::jsonb)) AS tags,
                 v.placa,
                 r.nome AS rota_nome,
                 rv.id AS restricao_global_id,
@@ -7554,6 +7702,126 @@ app.get('/viagens/:id/restricoes-candidatas', autenticar, async (req, res) => {
     } catch (erro) {
         res.status(500).json({ erro: erro.message });
     }
+});
+
+app.get('/restricoes-catalogo', autenticar, async (req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    try{
+        const status=String(req.query.status||'pendentes');
+        const rows=await pool.query(`SELECT c.id,c.id_empresa,c.tipo,c.nome,c.lat,c.lng,c.status,c.prioridade_score,c.prioridade_nivel,
+            COALESCE((SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('fonte',elem.value->'fonte','fonte_id',elem.value->'fonte_id','categoria',elem.value->'categoria',
+              'rodovia',elem.value->'rodovia','km',elem.value->'km','limite_altura',elem.value->'limite_altura','limite_peso',elem.value->'limite_peso'))) FROM jsonb_array_elements(c.fontes)AS elem(value)),'[]'::jsonb) AS fontes,
+            c.total_ocorrencias,c.total_passagens,c.total_veiculos_expostos,c.total_viagens_expostas,c.ultima_passagem_em,
+            c.evidencia_atualizada_em,c.evidencia_validade_dias,c.revisado_em,c.decisao_observacao,c.ultima_deteccao_em,
+            u.nome AS revisado_por_nome,COALESCE(e.evidencias,'[]'::json) AS evidencias,
+            CASE WHEN c.evidencia_atualizada_em IS NULL THEN 'sem_evidencia'
+                 WHEN c.evidencia_atualizada_em+c.evidencia_validade_dias*INTERVAL '1 day'<CURRENT_TIMESTAMP THEN 'vencida'
+                 WHEN c.evidencia_atualizada_em+c.evidencia_validade_dias*.8*INTERVAL '1 day'<CURRENT_TIMESTAMP THEN 'envelhecendo'
+                 ELSE 'atual' END AS evidencia_status
+          FROM restricoes_risco_catalogo c LEFT JOIN usuarios u ON u.id=c.revisado_por
+          LEFT JOIN LATERAL(SELECT json_agg(json_build_object('id',x.id,'tipo',x.tipo,'url',x.url,'descricao',x.descricao,'fonte',x.fonte,
+              'coordenada_lat',x.coordenada_lat,'coordenada_lng',x.coordenada_lng,'capturada_em',x.capturada_em,'criada_em',x.criada_em)
+              ORDER BY x.capturada_em DESC) AS evidencias FROM restricao_catalogo_evidencias x WHERE x.id_catalogo=c.id)e ON TRUE
+          WHERE($1='todos' OR($1='pendentes' AND c.status IN('possivel_risco','em_revisao'))OR c.status=$1)
+          ORDER BY c.prioridade_score DESC,c.ultima_passagem_em DESC NULLS LAST LIMIT 1000`,[status]);
+        res.json(rows.rows);
+    }catch(erro){res.status(500).json({erro:'Não foi possível carregar a fila de validação.',request_id:req.requestId});}
+});
+
+app.get('/restricoes-catalogo/:id/revisoes',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    try{const result=await pool.query(`SELECT r.id,r.acao,r.status_anterior,r.status_novo,r.observacao,r.criado_em,u.nome AS revisado_por_nome
+        FROM restricao_catalogo_revisoes r LEFT JOIN usuarios u ON u.id=r.revisado_por WHERE r.id_catalogo=$1 ORDER BY r.criado_em DESC LIMIT 200`,[req.params.id]);res.json(result.rows);}
+    catch(erro){res.status(500).json({erro:'Não foi possível carregar o histórico de revisão.',request_id:req.requestId});}
+});
+
+app.post('/restricoes-catalogo/:id/evidencias',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    const tipo=String(req.body?.tipo||''),descricao=String(req.body?.descricao||'').trim(),url=String(req.body?.url||'').trim()||null;
+    const capturada=new Date(req.body?.capturada_em||'');
+    if(!['foto','documento','link','vistoria','relato'].includes(tipo)||!descricao||Number.isNaN(capturada.getTime()))return res.status(422).json({erro:'Informe tipo, descrição e data da evidência.'});
+    if(capturada.getTime()>Date.now()+5*60000)return res.status(422).json({erro:'A data da evidência não pode estar no futuro.'});
+    if(url&&!/^https:\/\//i.test(url))return res.status(422).json({erro:'A evidência externa deve usar endereço HTTPS.'});
+    let conteudo=null,hash=null,mimeType=null,tamanho=null,nomeArquivo=null;
+    if(req.body?.conteudo_base64){
+        try{conteudo=Buffer.from(String(req.body.conteudo_base64),'base64');}catch{return res.status(422).json({erro:'Arquivo de evidência inválido.'});}
+        if(!conteudo.length||conteudo.length>1024*1024)return res.status(422).json({erro:'A evidência deve ter no máximo 1 MB.'});
+        mimeType=String(req.body?.mime_type||'application/octet-stream').slice(0,120);if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(mimeType))return res.status(422).json({erro:'Formato de evidência não permitido.'});
+        tamanho=conteudo.length;nomeArquivo=String(req.body?.nome_arquivo||'evidencia').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,255);hash=crypto.createHash('sha256').update(conteudo).digest('hex');
+    }
+    if(!url&&!conteudo)return res.status(422).json({erro:'Informe um link HTTPS ou anexe uma cópia da evidência.'});
+    const client=await pool.connect();
+    try{await client.query('BEGIN');
+        const catalog=(await client.query(`SELECT id,status FROM restricoes_risco_catalogo WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];
+        if(!catalog){await client.query('ROLLBACK');return res.status(404).json({erro:'Candidato não encontrado'});}
+        const evidence=await client.query(`INSERT INTO restricao_catalogo_evidencias(id_catalogo,tipo,url,descricao,fonte,coordenada_lat,coordenada_lng,capturada_em,adicionada_por,conteudo,conteudo_hash_sha256,mime_type,tamanho_bytes,nome_arquivo)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id,tipo,url,descricao,fonte,coordenada_lat,coordenada_lng,capturada_em,criada_em,conteudo_hash_sha256,mime_type,tamanho_bytes,nome_arquivo`,
+            [catalog.id,tipo,url,descricao.slice(0,2000),String(req.body?.fonte||'').slice(0,120)||null,Number.isFinite(Number(req.body?.lat))?Number(req.body.lat):null,Number.isFinite(Number(req.body?.lng))?Number(req.body.lng):null,capturada.toISOString(),req.usuario.id,conteudo,hash,mimeType,tamanho,nomeArquivo]);
+        await client.query(`UPDATE restricoes_risco_catalogo SET status=CASE WHEN status='possivel_risco' THEN 'em_revisao' ELSE status END,
+            evidencia_atualizada_em=GREATEST(COALESCE(evidencia_atualizada_em,'epoch'),$1),atualizado_em=CURRENT_TIMESTAMP WHERE id=$2`,[capturada.toISOString(),catalog.id]);
+        await client.query(`INSERT INTO restricao_catalogo_revisoes(id_catalogo,acao,status_anterior,status_novo,observacao,revisado_por)
+            VALUES($1,'evidencia_adicionada',$2,CASE WHEN $2='possivel_risco' THEN 'em_revisao' ELSE $2 END,$3,$4)`,[catalog.id,catalog.status,descricao.slice(0,1000),req.usuario.id]);
+        await client.query('COMMIT');res.status(201).json(evidence.rows[0]);
+    }catch(erro){await client.query('ROLLBACK').catch(()=>{});res.status(500).json({erro:'Não foi possível anexar a evidência.',request_id:req.requestId});}finally{client.release();}
+});
+app.get('/restricoes-catalogo/evidencias/:id/arquivo',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    const r=await pool.query(`SELECT e.conteudo,e.mime_type,e.nome_arquivo,e.conteudo_hash_sha256 FROM restricao_catalogo_evidencias e JOIN restricoes_risco_catalogo c ON c.id=e.id_catalogo WHERE e.id=$1 AND e.conteudo IS NOT NULL`,[req.params.id]);
+    if(!r.rowCount)return res.status(404).json({erro:'Arquivo de evidência não encontrado.'});
+    const x=r.rows[0];res.set({'Content-Type':x.mime_type||'application/octet-stream','Content-Disposition':`attachment; filename="${String(x.nome_arquivo||'evidencia').replace(/["\\]/g,'_')}"`,'X-Content-SHA256':x.conteudo_hash_sha256,'Cache-Control':'private, no-store'});return res.send(x.conteudo);
+});
+
+app.patch('/restricoes-catalogo/:id/revisao',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    const decisao=String(req.body?.decisao||''),observacao=String(req.body?.observacao||'').trim();
+    const novo={manter_possivel:'possivel_risco',iniciar_revisao:'em_revisao',descartar:'descartada'}[decisao];
+    if(!novo||observacao.length<10)return res.status(422).json({erro:'Escolha uma decisão e registre uma justificativa com pelo menos 10 caracteres.'});
+    const client=await pool.connect();
+    try{await client.query('BEGIN');const anterior=(await client.query(`SELECT status FROM restricoes_risco_catalogo WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];if(!anterior){await client.query('ROLLBACK');return res.status(404).json({erro:'Candidato não encontrado'});}
+        if(anterior.status==='descartada'&&decisao!=='iniciar_revisao'){await client.query('ROLLBACK');return res.status(409).json({erro:'Reabra formalmente o candidato antes de tomar uma nova decisão.'});}
+        const result=await client.query(`UPDATE restricoes_risco_catalogo SET status=$1,decisao_observacao=$2,revisado_por=$3,revisado_em=CURRENT_TIMESTAMP,atualizado_em=CURRENT_TIMESTAMP WHERE id=$4 RETURNING id,status,revisado_em`,[novo,observacao.slice(0,2000),req.usuario.id,req.params.id]);
+        await client.query(`INSERT INTO restricao_catalogo_revisoes(id_catalogo,acao,status_anterior,status_novo,observacao,revisado_por)VALUES($1,$2,$3,$4,$5,$6)`,[req.params.id,decisao,anterior.status,novo,observacao.slice(0,2000),req.usuario.id]);
+        if(novo==='descartada')await client.query(`UPDATE guardiao_sombra_eventos SET ativo=FALSE,status_operacional='descartado',resolvido_por=$1,resolvido_em=CURRENT_TIMESTAMP,
+            resolucao=$2 WHERE id_restricao IS NULL AND dados->>'id_catalogo'=$3 AND ativo=TRUE`,[req.usuario.id,observacao.slice(0,2000),String(req.params.id)]);
+        await client.query('COMMIT');res.json(result.rows[0]);
+    }catch(erro){await client.query('ROLLBACK').catch(()=>{});res.status(500).json({erro:'Não foi possível registrar a revisão.',request_id:req.requestId});}finally{client.release();}
+});
+
+// Promoção exclusivamente humana de um candidato regional privado da empresa.
+app.post('/restricoes-catalogo/:id/validar',autenticar,async(req,res)=>{
+    if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});
+    const observacao=String(req.body?.observacao||'').trim(),tipoInformado=String(req.body?.tipo||'').trim();
+    const limiteInvalido=validarLimitesRestricao(req.body);if(limiteInvalido)return res.status(422).json({erro:`Valor inválido para ${limiteInvalido.campo}; máximo operacional aceito: ${limiteInvalido.maximo}.`});
+    const limites={altura:valorPositivoOuNulo(req.body?.limite_altura),largura:valorPositivoOuNulo(req.body?.limite_largura),comprimento:valorPositivoOuNulo(req.body?.limite_comprimento),peso:valorPositivoOuNulo(req.body?.limite_peso),eixo:valorPositivoOuNulo(req.body?.limite_eixo)};
+    const validaDias=Math.max(1,Math.min(3650,Number(req.body?.valida_dias)||180)),raioMetros=Math.max(30,Math.min(1500,Number(req.body?.raio_metros)||180));
+    if(observacao.length<10)return res.status(422).json({erro:'Registre a conclusão técnica da revisão humana com pelo menos 10 caracteres.'});
+    const client=await pool.connect();
+    try{await client.query('BEGIN');
+        const catalogo=(await client.query(`SELECT id,id_empresa,tipo,nome,lat,lng,status,fontes FROM restricoes_risco_catalogo WHERE id=$1 FOR UPDATE`,[req.params.id])).rows[0];
+        if(!catalogo){await client.query('ROLLBACK');return res.status(404).json({erro:'Candidato regional não encontrado.'});}
+        if(!catalogo.id_empresa){await client.query('ROLLBACK');return res.status(409).json({erro:'O candidato não pertence a uma empresa. Defina a responsabilidade antes da validação.'});}
+        if(catalogo.status==='descartada'){await client.query('ROLLBACK');return res.status(409).json({erro:'Reabra formalmente o candidato descartado antes de validá-lo.'});}
+        if(catalogo.status==='validada'){await client.query('ROLLBACK');return res.status(409).json({erro:'Este candidato regional já foi validado.'});}
+        const evidencias=(await client.query(`SELECT id,tipo,url,descricao,fonte,coordenada_lat,coordenada_lng,capturada_em,criada_em FROM restricao_catalogo_evidencias WHERE id_catalogo=$1 ORDER BY capturada_em DESC`,[catalogo.id])).rows;
+        if(!evidencias.length){await client.query('ROLLBACK');return res.status(422).json({erro:'Anexe ao menos uma evidência antes da validação humana.'});}
+        const tipo=(tipoInformado||catalogo.tipo||'restricao_operacional').slice(0,60),dispensaLimite=['proibicao_caminhao','acesso_restrito'].includes(tipo);
+        if(!dispensaLimite&&Object.values(limites).every(v=>v===null)){await client.query('ROLLBACK');return res.status(422).json({erro:'Informe pelo menos um limite confirmado ou escolha proibição de caminhão/acesso restrito.'});}
+        const fontes=Array.isArray(catalogo.fontes)?catalogo.fontes:[],fontePrincipal=fontes[0]||{};
+        const validada=(await client.query(`INSERT INTO restricoes_validadas(fonte,fonte_id,id_empresa,tipo,nome,lat,lng,raio_metros,limite_altura,limite_largura,limite_comprimento,limite_peso,limite_eixo,
+            sentido,rodovia,km,evidencia_url,evidencia_texto,observacao,confianca,ativa,valida_ate,validado_por,validado_em,atualizada_em,status_confiabilidade,id_catalogo_origem,evidencias,evidencia_atualizada_em,evidencia_validade_dias)
+            VALUES('catalogo_regional',$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,100,TRUE,CURRENT_TIMESTAMP+($19||' days')::INTERVAL,$20,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,'confirmada',$21,$22::jsonb,$23,$19)
+            ON CONFLICT((COALESCE(id_empresa,0)),fonte,fonte_id)DO UPDATE SET tipo=EXCLUDED.tipo,nome=EXCLUDED.nome,lat=EXCLUDED.lat,lng=EXCLUDED.lng,raio_metros=EXCLUDED.raio_metros,
+            limite_altura=EXCLUDED.limite_altura,limite_largura=EXCLUDED.limite_largura,limite_comprimento=EXCLUDED.limite_comprimento,limite_peso=EXCLUDED.limite_peso,limite_eixo=EXCLUDED.limite_eixo,
+            sentido=EXCLUDED.sentido,rodovia=EXCLUDED.rodovia,km=EXCLUDED.km,evidencia_url=EXCLUDED.evidencia_url,evidencia_texto=EXCLUDED.evidencia_texto,observacao=EXCLUDED.observacao,
+            confianca=100,ativa=TRUE,valida_ate=EXCLUDED.valida_ate,validado_por=EXCLUDED.validado_por,validado_em=CURRENT_TIMESTAMP,atualizada_em=CURRENT_TIMESTAMP,status_confiabilidade='confirmada',evidencias=EXCLUDED.evidencias,evidencia_atualizada_em=EXCLUDED.evidencia_atualizada_em,evidencia_validade_dias=EXCLUDED.evidencia_validade_dias
+            RETURNING id,id_empresa,fonte,fonte_id,tipo,nome,lat,lng,raio_metros,limite_altura,limite_largura,limite_comprimento,limite_peso,limite_eixo,confianca,ativa,valida_ate,validado_em`,[
+            `catalogo/${catalogo.id}`,catalogo.id_empresa,tipo,String(req.body?.nome||catalogo.nome||tipo).slice(0,500),catalogo.lat,catalogo.lng,raioMetros,limites.altura,limites.largura,limites.comprimento,limites.peso,limites.eixo,
+            req.body?.sentido||fontePrincipal.tags?.direction||null,req.body?.rodovia||fontePrincipal.rodovia||fontePrincipal.tags?.ref||null,req.body?.km||fontePrincipal.km||null,evidencias[0]?.url||null,evidencias[0]?.descricao||null,observacao,validaDias,req.usuario.id,catalogo.id,JSON.stringify(evidencias),evidencias[0].capturada_em
+        ])).rows[0];
+        await client.query(`UPDATE restricoes_risco_catalogo SET status='validada',id_restricao_validada=$1,revisado_por=$2,revisado_em=CURRENT_TIMESTAMP,decisao_observacao=$3,evidencia_atualizada_em=$4,atualizado_em=CURRENT_TIMESTAMP WHERE id=$5`,[validada.id,req.usuario.id,observacao,evidencias[0].capturada_em,catalogo.id]);
+        await client.query(`INSERT INTO restricao_catalogo_revisoes(id_catalogo,acao,status_anterior,status_novo,observacao,revisado_por)VALUES($1,'validar',$2,'validada',$3,$4)`,[catalogo.id,catalogo.status,observacao,req.usuario.id]);
+        await client.query('COMMIT');return res.json({mensagem:'Restrição regional validada por revisão humana para a empresa responsável.',restricao:validada});
+    }catch(erro){await client.query('ROLLBACK').catch(()=>{});return res.status(500).json({erro:'Não foi possível validar o candidato regional.',request_id:req.requestId});}finally{client.release();}
 });
 
 // Confirma somente a existência; ainda não vai para a base global.
@@ -7599,17 +7867,19 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
         return res.status(403).json({ erro: 'Acesso negado' });
     }
 
+    const limiteInvalido=validarLimitesRestricao(req.body);if(limiteInvalido)return res.status(422).json({erro:`Valor inválido para ${limiteInvalido.campo}; máximo operacional aceito: ${limiteInvalido.maximo}.`});
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
         const candidatoResult = await client.query(`
-            SELECT *
-            FROM restricoes_candidatas
-            WHERE id = $1
+            SELECT rc.*,catalogo.id_empresa AS catalogo_id_empresa,catalogo.status AS catalogo_status
+            FROM restricoes_candidatas rc
+            LEFT JOIN restricoes_risco_catalogo catalogo ON catalogo.id=rc.id_catalogo
+            WHERE rc.id = $1
             LIMIT 1
-            FOR UPDATE
+            FOR UPDATE OF rc
         `, [req.params.id]);
 
         if (!candidatoResult.rows.length) {
@@ -7636,6 +7906,19 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
 
         const raioMetros =
             Math.max(30, Math.min(1500, Number(req.body?.raio_metros || 180)));
+
+        const evidenciasCatalogo=c.id_catalogo?(await client.query(`SELECT id,tipo,url,descricao,fonte,coordenada_lat,coordenada_lng,capturada_em,criada_em
+            FROM restricao_catalogo_evidencias WHERE id_catalogo=$1 ORDER BY capturada_em DESC`,[c.id_catalogo])).rows:[];
+        if(c.id_catalogo){const estado=(await client.query(`SELECT status FROM restricoes_risco_catalogo WHERE id=$1`,[c.id_catalogo])).rows[0];if(estado?.status==='descartada'){
+            await client.query('ROLLBACK');return res.status(409).json({erro:'Este candidato foi descartado. Reabra a revisão antes de validá-lo.'});}}
+        if(!evidenciaUrl&&!evidenciaTexto&&!evidenciasCatalogo.length){
+            await client.query('ROLLBACK');
+            return res.status(422).json({erro:'A validação humana exige pelo menos uma foto, documento, vistoria ou relato anexado.'});
+        }
+        if(!observacao||observacao.length<10){
+            await client.query('ROLLBACK');
+            return res.status(422).json({erro:'Registre a conclusão técnica da revisão humana.'});
+        }
 
         // Para tipos dimensionais, exige pelo menos um limite.
         const exigeLimite =
@@ -7666,6 +7949,7 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
             (
                 fonte,
                 fonte_id,
+                id_empresa,
                 candidato_origem_id,
                 tipo,
                 nome,
@@ -7693,7 +7977,7 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
             )
             VALUES
             (
-                $1,$2,$3,$4,$5,$6,$7,$8,
+                $1,$2,$23,$3,$4,$5,$6,$7,$8,
                 $9,$10,$11,$12,$13,
                 $14,$15,$16,$17,
                 $18,$19,$20,
@@ -7750,7 +8034,8 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
             evidenciaTexto,
             observacao,
             validaDias,
-            req.usuario.id
+            req.usuario.id,
+            c.catalogo_id_empresa
         ]);
 
         await client.query(`
@@ -7776,6 +8061,16 @@ app.post('/restricoes-candidatas/:id/validar-global', autenticar, async (req, re
             req.usuario.id,
             c.id
         ]);
+
+        if(c.id_catalogo){
+            const anteriorCatalogo=(await client.query(`SELECT status FROM restricoes_risco_catalogo WHERE id=$1 FOR UPDATE`,[c.id_catalogo])).rows[0];
+            await client.query(`UPDATE restricoes_risco_catalogo SET status='validada',id_restricao_validada=$1,revisado_por=$2,revisado_em=CURRENT_TIMESTAMP,
+                decisao_observacao=$3,evidencia_atualizada_em=COALESCE((SELECT MAX(capturada_em) FROM restricao_catalogo_evidencias WHERE id_catalogo=$4),CURRENT_TIMESTAMP),atualizado_em=CURRENT_TIMESTAMP WHERE id=$4`,[global.rows[0].id,req.usuario.id,observacao,c.id_catalogo]);
+            await client.query(`UPDATE restricoes_validadas SET id_catalogo_origem=$1,evidencias=$2::jsonb,evidencia_atualizada_em=COALESCE($3,CURRENT_TIMESTAMP),evidencia_validade_dias=$4,
+                status_confiabilidade='confirmada' WHERE id=$5`,[c.id_catalogo,JSON.stringify(evidenciasCatalogo),evidenciasCatalogo[0]?.capturada_em||null,validaDias,global.rows[0].id]);
+            await client.query(`INSERT INTO restricao_catalogo_revisoes(id_catalogo,acao,status_anterior,status_novo,observacao,revisado_por)
+                VALUES($1,'validar',$2,'validada',$3,$4)`,[c.id_catalogo,anteriorCatalogo?.status||'em_revisao',observacao,req.usuario.id]);
+        }
 
         await client.query('COMMIT');
 
@@ -7838,7 +8133,11 @@ app.get('/restricoes-validadas', autenticar, async (req, res) => {
         const resultado = await pool.query(`
             SELECT
                 rv.*,
-                u.nome AS validado_por_nome
+                u.nome AS validado_por_nome,
+                CASE WHEN rv.evidencia_atualizada_em IS NULL AND rv.evidencia_url IS NULL THEN 'sem_evidencia'
+                     WHEN COALESCE(rv.evidencia_atualizada_em,rv.validado_em)+rv.evidencia_validade_dias*INTERVAL '1 day'<CURRENT_TIMESTAMP THEN 'vencida'
+                     WHEN COALESCE(rv.evidencia_atualizada_em,rv.validado_em)+rv.evidencia_validade_dias*.8*INTERVAL '1 day'<CURRENT_TIMESTAMP THEN 'envelhecendo'
+                     ELSE 'atual' END AS evidencia_status
             FROM restricoes_validadas rv
             LEFT JOIN usuarios u ON u.id = rv.validado_por
             ORDER BY
@@ -8817,14 +9116,14 @@ app.get('/integracoes/empresas/:id/diagnostico',autenticar,async(req,res)=>{
 app.get('/integracoes/empresas/:id/historico',autenticar,async(req,res)=>{
     if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});const limite=Math.min(1000,Math.max(1,Number(req.query.limite)||200));
     try{const [posicoes,analises,alertas]=await Promise.all([
-        pool.query(`SELECT h.*,v.placa FROM historico_localizacoes h JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=h.id_veiculo JOIN veiculos v ON v.id=h.id_veiculo WHERE ev.id_empresa=$1 ORDER BY h.registrado_em DESC LIMIT $2`,[req.params.id,limite]),
-        pool.query(`SELECT a.*,v.placa FROM guardiao_analises a JOIN veiculos v ON v.id=a.id_veiculo WHERE a.id_empresa=$1 ORDER BY a.analisado_em DESC LIMIT $2`,[req.params.id,limite]),
-        pool.query(`SELECT * FROM guardiao_sombra_eventos WHERE id_empresa=$1 ORDER BY ultimo_evento_em DESC LIMIT $2`,[req.params.id,limite])]);res.json({posicoes:posicoes.rows,analises:analises.rows,alertas:alertas.rows});
+        pool.query(`SELECT h.id,h.id_veiculo,h.id_motorista,h.id_viagem,h.lat,h.lon,h.registrado_em,h.velocidade_kmh,h.precisao_m,h.direcao_graus,h.altitude_m,h.timestamp_dispositivo,h.origem_coleta,h.classificacao,h.motivos_qualidade,v.placa FROM historico_localizacoes h JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=h.id_veiculo JOIN veiculos v ON v.id=h.id_veiculo WHERE ev.id_empresa=$1 ORDER BY h.registrado_em DESC LIMIT $2`,[req.params.id,limite]),
+        pool.query(`SELECT a.id,a.id_empresa,a.id_veiculo,a.request_id,a.lat,a.lon,a.velocidade_kmh,a.direcao_graus,a.status,a.alcance_km,a.riscos_encontrados,a.resultado,a.analisado_em,v.placa FROM guardiao_analises a JOIN veiculos v ON v.id=a.id_veiculo WHERE a.id_empresa=$1 ORDER BY a.analisado_em DESC LIMIT $2`,[req.params.id,limite]),
+        pool.query(`SELECT id,id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,status_operacional,classificacao,ativo,primeiro_evento_em,ultimo_evento_em,resolvido_em,resolucao FROM guardiao_sombra_eventos WHERE id_empresa=$1 ORDER BY ultimo_evento_em DESC LIMIT $2`,[req.params.id,limite])]);res.json({posicoes:posicoes.rows,analises:analises.rows,alertas:alertas.rows});
     }catch(erro){res.status(500).json({erro:erro.message});}
 });
 app.get('/integracoes/empresas/:id/usuarios',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});try{const r=await pool.query(`SELECT id,id_empresa,nome,email,perfil,ativo,created_at,updated_at FROM empresa_usuarios WHERE id_empresa=$1 ORDER BY nome`,[req.params.id]);res.json(r.rows);}catch(erro){res.status(500).json({erro:erro.message});}});
 app.post('/integracoes/empresas/:id/usuarios',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});const perfil=String(req.body?.perfil||''),senha=String(req.body?.senha||'');if(!['administrador','supervisor','analista','somente_leitura'].includes(perfil)||!req.body?.nome||!req.body?.email||senha.length<8)return res.status(400).json({erro:'Informe nome, e-mail, perfil e senha com pelo menos 8 caracteres.'});try{const r=await pool.query(`INSERT INTO empresa_usuarios(id_empresa,nome,email,perfil,senha_hash)VALUES($1,$2,LOWER($3),$4,$5)ON CONFLICT(id_empresa,email)DO UPDATE SET nome=EXCLUDED.nome,perfil=EXCLUDED.perfil,senha_hash=EXCLUDED.senha_hash,ativo=TRUE,token_version=empresa_usuarios.token_version+1 RETURNING id,id_empresa,nome,email,perfil,ativo,created_at`,[req.params.id,String(req.body.nome).trim(),String(req.body.email).trim(),perfil,bcrypt.hashSync(senha,10)]);await auditarEmpresa({req,idEmpresa:Number(req.params.id),acao:'USUARIO_EMPRESARIAL_SALVO',recurso:'usuario',recursoId:r.rows[0].id,depois:r.rows[0]});res.status(201).json(r.rows[0]);}catch(erro){res.status(500).json({erro:erro.message});}});
-async function salvarConfigNotificacaoEmpresa(idEmpresa,body){const emails=Array.isArray(body.emails)?body.emails.map(x=>String(x).trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0,20):[];const webhookUrl=String(body.webhook_url||'').trim()||null;if(webhookUrl&&!/^https:\/\//i.test(webhookUrl))throw Object.assign(new Error('O webhook empresarial precisa usar HTTPS.'),{status:400});const segredo=String(body.webhook_segredo||'').trim()||crypto.randomBytes(32).toString('hex');const severidade=String(body.severidade_minima||'atencao');if(!['preventivo','atencao','critico','iminente'].includes(severidade))throw Object.assign(new Error('Severidade mínima inválida.'),{status:400});const r=await pool.query(`INSERT INTO empresa_notificacao_config(id_empresa,painel_ativo,webhook_ativo,webhook_url,webhook_segredo,emails,email_ativo,severidade_minima)VALUES($1,$2,$3,$4,$5,$6,$7,$8)ON CONFLICT(id_empresa)DO UPDATE SET painel_ativo=EXCLUDED.painel_ativo,webhook_ativo=EXCLUDED.webhook_ativo,webhook_url=EXCLUDED.webhook_url,webhook_segredo=EXCLUDED.webhook_segredo,emails=EXCLUDED.emails,email_ativo=EXCLUDED.email_ativo,severidade_minima=EXCLUDED.severidade_minima,atualizado_em=CURRENT_TIMESTAMP RETURNING *`,[idEmpresa,body.painel_ativo!==false,body.webhook_ativo===true,webhookUrl,segredo,emails,body.email_ativo===true,severidade]);return{...r.rows[0],webhook_segredo:segredo,aviso:'Copie o segredo agora. Uma nova gravação rotaciona a assinatura.'};}
+async function salvarConfigNotificacaoEmpresa(idEmpresa,body){const emails=Array.isArray(body.emails)?body.emails.map(x=>String(x).trim().toLowerCase()).filter(x=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0,20):[];const webhookUrl=String(body.webhook_url||'').trim()||null;if(webhookUrl&&!/^https:\/\//i.test(webhookUrl))throw Object.assign(new Error('O webhook empresarial precisa usar HTTPS.'),{status:400});const segredo=String(body.webhook_segredo||'').trim()||crypto.randomBytes(32).toString('hex');const severidade=String(body.severidade_minima||'atencao');if(!['preventivo','atencao','critico','iminente'].includes(severidade))throw Object.assign(new Error('Severidade mínima inválida.'),{status:400});const r=await pool.query(`INSERT INTO empresa_notificacao_config(id_empresa,painel_ativo,webhook_ativo,webhook_url,webhook_segredo,emails,email_ativo,severidade_minima)VALUES($1,$2,$3,$4,$5,$6,$7,$8)ON CONFLICT(id_empresa)DO UPDATE SET painel_ativo=EXCLUDED.painel_ativo,webhook_ativo=EXCLUDED.webhook_ativo,webhook_url=EXCLUDED.webhook_url,webhook_segredo=EXCLUDED.webhook_segredo,emails=EXCLUDED.emails,email_ativo=EXCLUDED.email_ativo,severidade_minima=EXCLUDED.severidade_minima,atualizado_em=CURRENT_TIMESTAMP RETURNING id_empresa,painel_ativo,webhook_ativo,webhook_url,emails,email_ativo,severidade_minima,atualizado_em`,[idEmpresa,body.painel_ativo!==false,body.webhook_ativo===true,webhookUrl,segredo,emails,body.email_ativo===true,severidade]);return{...r.rows[0],webhook_segredo:segredo,aviso:'Copie o segredo agora. Uma nova gravação rotaciona a assinatura.'};}
 app.get('/integracoes/empresas/:id/notificacoes-config',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});const r=await pool.query(`SELECT id_empresa,painel_ativo,webhook_ativo,webhook_url,emails,email_ativo,severidade_minima,atualizado_em,(webhook_segredo IS NOT NULL) AS possui_segredo FROM empresa_notificacao_config WHERE id_empresa=$1`,[req.params.id]);res.json(r.rows[0]||null);});
 app.put('/integracoes/empresas/:id/notificacoes-config',autenticar,async(req,res)=>{if(req.usuario.tipo!=='admin')return res.status(403).json({erro:'Acesso negado'});try{const c=await salvarConfigNotificacaoEmpresa(Number(req.params.id),req.body||{});await auditarEmpresa({req,idEmpresa:Number(req.params.id),acao:'NOTIFICACOES_CONFIGURADAS',recurso:'notificacao_config',recursoId:req.params.id,depois:{...c,webhook_segredo:'[PROTEGIDO]'}});res.json(c);}catch(e){res.status(e.status||500).json({erro:e.message});}});
 app.use(criarRotasPrivacidade({
@@ -8926,7 +9225,69 @@ function guardiaoRestricaoNoCorredor(corredor,lat,lon){
     return melhor;
 }
 const cacheRestricoesRadarEmpresa=new Map();
-async function buscarRestricoesRadarEmpresa(idEmpresa,lat,lon,margem){const chave=`${idEmpresa}:${Number(lat).toFixed(2)}:${Number(lon).toFixed(2)}:${Number(margem).toFixed(3)}`,agora=Date.now(),existente=cacheRestricoesRadarEmpresa.get(chave);if(existente&&existente.expiraEm>agora)return existente.promise;const promise=pool.query(`SELECT * FROM restricoes_validadas WHERE ativa=TRUE AND(id_empresa IS NULL OR id_empresa=$1)AND(vigencia_inicio IS NULL OR vigencia_inicio<=CURRENT_TIMESTAMP)AND(valida_ate IS NULL OR valida_ate>CURRENT_TIMESTAMP)AND lat BETWEEN $2 AND $3 AND lng BETWEEN $4 AND $5`,[idEmpresa,lat-margem,lat+margem,lon-margem,lon+margem]).then(r=>r.rows).catch(erro=>{cacheRestricoesRadarEmpresa.delete(chave);throw erro;});cacheRestricoesRadarEmpresa.set(chave,{expiraEm:agora+2000,promise});if(cacheRestricoesRadarEmpresa.size>500)for(const[k,v]of cacheRestricoesRadarEmpresa)if(v.expiraEm<=agora)cacheRestricoesRadarEmpresa.delete(k);return promise;}
+async function buscarRestricoesRadarEmpresa(idEmpresa,lat,lon,margem){const chave=`${idEmpresa}:${Number(lat).toFixed(2)}:${Number(lon).toFixed(2)}:${Number(margem).toFixed(3)}`,agora=Date.now(),existente=cacheRestricoesRadarEmpresa.get(chave);if(existente&&existente.expiraEm>agora)return existente.promise;const promise=pool.query(`SELECT id,id_empresa,fonte,fonte_id,tipo,nome,lat,lng,raio_metros,limite_altura,limite_largura,limite_comprimento,limite_peso,confianca,status_confiabilidade,natureza,valida_ate FROM restricoes_validadas WHERE ativa=TRUE AND LOWER(COALESCE(fonte,''))<>'teste_guardiao' AND(id_empresa IS NULL OR id_empresa=$1)AND(vigencia_inicio IS NULL OR vigencia_inicio<=CURRENT_TIMESTAMP)AND(valida_ate IS NULL OR valida_ate>CURRENT_TIMESTAMP)AND lat BETWEEN $2 AND $3 AND lng BETWEEN $4 AND $5`,[idEmpresa,lat-margem,lat+margem,lon-margem,lon+margem]).then(r=>r.rows).catch(erro=>{cacheRestricoesRadarEmpresa.delete(chave);throw erro;});cacheRestricoesRadarEmpresa.set(chave,{expiraEm:agora+2000,promise});if(cacheRestricoesRadarEmpresa.size>500)for(const[k,v]of cacheRestricoesRadarEmpresa)if(v.expiraEm<=agora)cacheRestricoesRadarEmpresa.delete(k);return promise;}
+async function buscarCandidatosRadarEmpresa(idEmpresa,lat,lon,margem){
+    const result=await pool.query(`SELECT c.id,c.id_empresa,c.tipo,c.nome,c.lat,c.lng,c.raio_metros,c.status,c.prioridade_score,c.prioridade_nivel,c.fontes,
+        COALESCE(e.total_posicoes,c.total_passagens,0) AS total_passagens,COALESCE(e.total_veiculos,c.total_veiculos_expostos,0) AS total_veiculos_expostos,
+        COALESCE(e.total_viagens,c.total_viagens_expostas,0) AS total_viagens_expostas,c.evidencia_atualizada_em,c.evidencia_validade_dias
+        FROM restricoes_risco_catalogo c LEFT JOIN restricao_catalogo_exposicao_empresa e ON e.id_catalogo=c.id AND e.id_empresa=$1
+        WHERE c.status IN('possivel_risco','em_revisao') AND(c.id_empresa IS NULL OR c.id_empresa=$1)
+          AND c.lat BETWEEN $2 AND $3 AND c.lng BETWEEN $4 AND $5`,
+        [idEmpresa,lat-margem,lat+margem,lon-margem,lon+margem]);
+    return result.rows;
+}
+const indexacoesRegionaisEmCurso=new Map();
+function tipoRestricaoInfraestrutura(reg){const texto=semAcentoANTT(reg.tipo).toLowerCase();return reg.categoria==='DETECCAO_ALTURA'?'equipamento_deteccao_altura':texto.includes('passagem inferior')?'passagem_inferior':'ponte_viaduto';}
+async function indexarCatalogoRegional({idEmpresa,lat,lon,raioKm=12}){
+    const celula=`${Math.floor(Number(lat)*20)/20}:${Math.floor(Number(lon)*20)/20}`,chave=`${idEmpresa}:${celula}`;
+    if(indexacoesRegionaisEmCurso.has(chave))return indexacoesRegionaisEmCurso.get(chave);
+    const tarefa=(async()=>{
+        const cobertura=(await pool.query(`SELECT status,cobertura_status,atualizada_em FROM restricao_catalogo_cobertura WHERE id_empresa=$1 AND celula=$2`,[idEmpresa,celula])).rows[0];
+        if(cobertura?.status==='concluida'&&cobertura?.cobertura_status==='completa'&&Date.now()-new Date(cobertura.atualizada_em).getTime()<86400000)return{reutilizada:true,coberturaStatus:'completa'};
+        await pool.query(`INSERT INTO restricao_catalogo_cobertura(id_empresa,celula,centro_lat,centro_lng,raio_km,status,atualizada_em)
+            VALUES($1,$2,$3,$4,$5,'processando',CURRENT_TIMESTAMP) ON CONFLICT(id_empresa,celula)DO UPDATE SET status='processando',ultimo_erro=NULL,atualizada_em=CURRENT_TIMESTAMP`,[idEmpresa,celula,lat,lon,raioKm]);
+        try{
+            const infraestrutura=await carregarInfraestruturaANTT(),registros=[...infraestrutura.pontes,...infraestrutura.deteccaoAltura]
+                .filter(reg=>distanciaCandidatoKm({lat:Number(lat),lng:Number(lon)},{lat:Number(reg.latitude),lng:Number(reg.longitude)})<=raioKm);
+            const brutos=registros.map(reg=>({reg,analise:{distanciaRotaKm:null}})),grupos=groupNearbyCandidates(brutos,120);
+            const candidatos=grupos.map(grupo=>({...grupo.representative,reg:{...grupo.representative.reg,latitude:grupo.center.lat,longitude:grupo.center.lng},membros:grupo.members.map(item=>item.reg)}));
+            const [cruzamento,osmRegionalResultado]=await Promise.allSettled([cruzarCandidatosComOSM(candidatos),consultarRestricoesOSMRegionais({lat,lon,raioKm})]);
+            const cruzamentoValor=cruzamento.status==='fulfilled'?cruzamento.value:{porIndice:new Map(),aviso:'Cruzamento OSM indisponível'};
+            const osmRegionais=osmRegionalResultado.status==='fulfilled'?osmRegionalResultado.value:[];
+            const exposicoes=await calcularExposicoesRestricoesEmLote(candidatos,idEmpresa);
+            for(let indice=0;indice<candidatos.length;indice++){
+                const {reg,membros}=candidatos[indice],tipo=tipoRestricaoInfraestrutura(reg),fonteId=`${reg.categoria}/${hashFonteANTT(reg)}`;
+                const osm=(cruzamentoValor.porIndice.get(indice)||[]).map(item=>({fonte:'osm',fonte_id:`${item.e.type}/${item.e.id}`,lat:item.lat,lng:item.lon,
+                    limite_altura:numeroLimiteOSM(item.e.tags?.maxheight),limite_peso:numeroLimiteOSM(item.e.tags?.maxweight),tags:item.e.tags||{}}));
+                const fontes=[...membros.map(item=>({fonte:'antt',fonte_id:`${item.categoria}/${hashFonteANTT(item)}`,lat:item.latitude,lng:item.longitude,
+                    categoria:item.categoria,rodovia:item.rodovia,km:item.km})),...osm];
+                await registrarGrupoRiscoCatalogo({idEmpresa,reg,tipo,fonteId,fontes,distanciaRotaKm:null,exposicao:exposicoes.get(indice)});
+            }
+            const candidatosOsm=osmRegionais.map(item=>({reg:item.reg,analise:{distanciaRotaKm:null}}));
+            const exposicoesOsm=await calcularExposicoesRestricoesEmLote(candidatosOsm,idEmpresa);
+            for(let indice=0;indice<osmRegionais.length;indice++){
+                const item=osmRegionais[indice];
+                await registrarGrupoRiscoCatalogo({idEmpresa,reg:item.reg,tipo:item.reg.tipo,fonteId:item.fonte.fonte_id,fontes:[item.fonte],distanciaRotaKm:null,exposicao:exposicoesOsm.get(indice)});
+            }
+            const coberturaStatus=osmRegionalResultado.status==='fulfilled'?'completa':'parcial_somente_antt';
+            const fontesFalha=osmRegionalResultado.status==='rejected'?[String(osmRegionalResultado.reason?.message||'OpenStreetMap regional indisponível').slice(0,500)]:[];
+            await pool.query(`UPDATE restricao_catalogo_cobertura SET status='concluida',cobertura_status=$1,candidatos_encontrados=$2,fontes=$3::jsonb,fontes_falha=$4::jsonb,indexada_em=CURRENT_TIMESTAMP,
+                atualizada_em=CURRENT_TIMESTAMP WHERE id_empresa=$5 AND celula=$6`,[coberturaStatus,candidatos.length+osmRegionais.length,JSON.stringify(['ANTT',...(osmRegionalResultado.status==='fulfilled'?['OpenStreetMap regional']:[])]),JSON.stringify(fontesFalha),idEmpresa,celula]);
+            return{indexados:candidatos.length+osmRegionais.length,antt:candidatos.length,osm:osmRegionais.length,coberturaStatus,fontesFalha};
+        }catch(erro){await pool.query(`UPDATE restricao_catalogo_cobertura SET status='falhou',ultimo_erro=$1,atualizada_em=CURRENT_TIMESTAMP WHERE id_empresa=$2 AND celula=$3`,[String(erro.message||erro).slice(0,500),idEmpresa,celula]).catch(()=>{});throw erro;}
+    })().finally(()=>indexacoesRegionaisEmCurso.delete(chave));
+    indexacoesRegionaisEmCurso.set(chave,tarefa);return tarefa;
+}
+async function enfileirarIndexacaoRegional({idEmpresa,lat,lon,raioKm=12}){
+    const celula=`${Math.floor(Number(lat)*20)/20}:${Math.floor(Number(lon)*20)/20}`;
+    await pool.query(`INSERT INTO indexacao_regional_fila(id_empresa,celula,lat,lng,raio_km)VALUES($1,$2,$3,$4,$5)
+        ON CONFLICT(id_empresa,celula)DO UPDATE SET lat=EXCLUDED.lat,lng=EXCLUDED.lng,raio_km=EXCLUDED.raio_km,ultima_solicitacao_em=CURRENT_TIMESTAMP,
+          status=CASE WHEN indexacao_regional_fila.status='concluido' AND COALESCE(indexacao_regional_fila.ultima_indexacao_em,indexacao_regional_fila.concluido_em)<CURRENT_TIMESTAMP-INTERVAL '24 hours' THEN 'pendente'
+                      WHEN indexacao_regional_fila.status='falhou' AND indexacao_regional_fila.proxima_tentativa_em<=CURRENT_TIMESTAMP THEN 'pendente'
+                      ELSE indexacao_regional_fila.status END,
+          tentativas=CASE WHEN indexacao_regional_fila.status='concluido' AND COALESCE(indexacao_regional_fila.ultima_indexacao_em,indexacao_regional_fila.concluido_em)<CURRENT_TIMESTAMP-INTERVAL '24 hours' THEN 0 ELSE indexacao_regional_fila.tentativas END,
+          proxima_tentativa_em=CASE WHEN indexacao_regional_fila.status='concluido' AND COALESCE(indexacao_regional_fila.ultima_indexacao_em,indexacao_regional_fila.concluido_em)<CURRENT_TIMESTAMP-INTERVAL '24 hours' THEN CURRENT_TIMESTAMP ELSE indexacao_regional_fila.proxima_tentativa_em END`,[idEmpresa,celula,lat,lon,raioKm]);
+}
 const cacheCorredorRodoviario=new Map();
 let quotaOrsGuardiao={dia:new Date().toISOString().slice(0,10),usadas:0};
 function guardiaoProjetarDestino(lat,lon,rumo,km){const R=6371,rad=x=>Number(x)*Math.PI/180,deg=x=>x*180/Math.PI,p1=rad(lat),l1=rad(lon),b=rad(rumo),d=km/R;const p2=Math.asin(Math.sin(p1)*Math.cos(d)+Math.cos(p1)*Math.sin(d)*Math.cos(b));const l2=l1+Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(p1),Math.cos(d)-Math.sin(p1)*Math.sin(p2));return{lat:deg(p2),lon:((deg(l2)+540)%360)-180};}
@@ -8934,13 +9295,36 @@ async function registrarConsumoOrs({idEmpresa,idVeiculo,motivo,cacheUsado,sucess
 async function obterCorredorRodoviarioEstimado({idEmpresa,idVeiculo,lat,lon,rumo,alcance,perfil}){
     if(!ORS_API_KEY||!Number.isFinite(Number(rumo)))return null;
     const agora=Date.now(),salvo=cacheCorredorRodoviario.get(String(idVeiculo));
-    if(salvo&&salvo.expiraEm>agora&&diferencaAngularGuardiao(salvo.rumo,rumo)<=30){const reaproveitado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:salvo.coordenadas},lat,lon,alcance);if(reaproveitado&&reaproveitado.distancia_encaixe_km<=.5){registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'map_matching_radar',cacheUsado:true,sucesso:true,latenciaMs:0});return{...reaproveitado,estimado:true,fonte:'openrouteservice_cache'};}}
+    if(salvo&&salvo.expiraEm>agora&&diferencaAngularGuardiao(salvo.rumo,rumo)<=30){const reaproveitado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:salvo.coordenadas},lat,lon,alcance);if(reaproveitado&&reaproveitado.distancia_encaixe_km<=.5){registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'corredor_historico_cache',cacheUsado:true,sucesso:true,latenciaMs:0});return{...reaproveitado,estimado:true,fonte:'openrouteservice_cache'};}}
     const usados=await pool.query(`SELECT COUNT(*)::int AS total FROM ors_consumo WHERE dia=CURRENT_DATE AND cache_usado=FALSE`);if(Number(usados.rows[0]?.total)>=ORS_GUARDIAO_DAILY_LIMIT)return null;const chamadaInicio=Date.now();
-    try{const destino=guardiaoProjetarDestino(lat,lon,rumo,Math.min(alcance,12));const restricoes={height:valorPositivoOuNulo(perfil?.altura),width:valorPositivoOuNulo(perfil?.largura),length:valorPositivoOuNulo(perfil?.comprimento),weight:valorPositivoOuNulo(perfil?.peso)};Object.keys(restricoes).forEach(k=>restricoes[k]==null&&delete restricoes[k]);const resp=await axios.post('https://api.openrouteservice.org/v2/directions/driving-hgv/geojson',{coordinates:[[Number(lon),Number(lat)],[destino.lon,destino.lat]],preference:'recommended',...(Object.keys(restricoes).length?{options:{profile_params:{restrictions:restricoes}}}:{})},{headers:{Authorization:ORS_API_KEY,'Content-Type':'application/json',Accept:'application/json'},timeout:5000});await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'map_matching_radar',cacheUsado:false,sucesso:true,latenciaMs:Date.now()-chamadaInicio,statusHttp:resp.status});const coords=resp.data?.features?.[0]?.geometry?.coordinates;if(!Array.isArray(coords)||coords.length<2)return null;cacheCorredorRodoviario.set(String(idVeiculo),{expiraEm:agora+120000,rumo:Number(rumo),coordenadas:coords});const ajustado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:coords},lat,lon,alcance);return ajustado?{...ajustado,estimado:true,fonte:'openrouteservice'}:null;}catch(erro){await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'map_matching_radar',cacheUsado:false,sucesso:false,latenciaMs:Date.now()-chamadaInicio,statusHttp:erro.response?.status,erro:erro.message});console.warn('Corredor openrouteservice indisponível:',erro.response?.status||erro.message);return null;}
+    try{
+        const historico=(await pool.query(`SELECT lat,lon FROM gps_ingestoes WHERE id_empresa=$1 AND id_veiculo=$2 AND apta_tempo_real=TRUE
+            AND recebido_em>CURRENT_TIMESTAMP-INTERVAL '3 minutes' ORDER BY COALESCE(timestamp_dispositivo,recebido_em) DESC LIMIT 8`,[idEmpresa,idVeiculo])).rows.reverse();
+        const pontos=[];for(const p of [...historico,{lat,lon}]){const coord=[Number(p.lon),Number(p.lat)];if(!coord.every(Number.isFinite))continue;const ultimo=pontos[pontos.length-1];if(!ultimo||distanciaKmEntrePontos(ultimo[1],ultimo[0],coord[1],coord[0])>=.02)pontos.push(coord);}
+        const destino=guardiaoProjetarDestino(lat,lon,rumo,Math.min(alcance,12));pontos.push([destino.lon,destino.lat]);
+        const resp=await axios.post('https://api.openrouteservice.org/v2/directions/driving-hgv/geojson',{coordinates:pontos.slice(-9),preference:'recommended'},{headers:{Authorization:ORS_API_KEY,'Content-Type':'application/json',Accept:'application/json'},timeout:3000});
+        await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'corredor_historico_neutro',cacheUsado:false,sucesso:true,latenciaMs:Date.now()-chamadaInicio,statusHttp:resp.status});
+        const coords=resp.data?.features?.[0]?.geometry?.coordinates;if(!Array.isArray(coords)||coords.length<2)return null;
+        cacheCorredorRodoviario.set(String(idVeiculo),{expiraEm:agora+90000,rumo:Number(rumo),coordenadas:coords});
+        const ajustado=guardiaoCorredorRotaAdiante({type:'LineString',coordinates:coords},lat,lon,alcance),amostras=Math.max(0,pontos.length-1);
+        return ajustado?{...ajustado,estimado:true,fonte:'openrouteservice_historico',amostras_gps:amostras,confianca_corredor:amostras>=4?'alta':amostras>=2?'media':'baixa'}:null;
+    }catch(erro){await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'corredor_historico_neutro',cacheUsado:false,sucesso:false,latenciaMs:Date.now()-chamadaInicio,statusHttp:erro.response?.status,erro:erro.message});console.warn('Corredor openrouteservice indisponível:',erro.response?.status||erro.message);return null;}
 }
-async function enfileirarNotificacaoGuardiao(evento){const ordem={preventivo:0,atencao:1,critico:2,iminente:3},c=(await pool.query(`SELECT * FROM empresa_notificacao_config WHERE id_empresa=$1`,[evento.id_empresa])).rows[0];if(c&&ordem[evento.nivel]<ordem[c.severidade_minima])return;const destinos=[];if(!c||c.painel_ativo)destinos.push('painel');if(c?.webhook_ativo&&c.webhook_url)destinos.push('webhook');if(c?.email_ativo)destinos.push(...(c.emails||[]));if(!c&&ALERT_WEBHOOK_URL)destinos.push('webhook');if(!c&&ALERT_EMAIL_TO)destinos.push(ALERT_EMAIL_TO);for(const destino of [...new Set(destinos)])await pool.query(`INSERT INTO notificacoes_outbox(id_empresa,tipo,referencia_tipo,referencia_id,destinatario,payload)VALUES($1,'alerta_guardiao','guardiao_sombra_evento',$2,$3,$4::jsonb)ON CONFLICT DO NOTHING`,[evento.id_empresa,String(evento.id),destino,JSON.stringify(evento)]);}
+const cacheSugestoesDesvio=new Map();
+const sugestoesDesvioEmCurso=new Set();
+async function obterSugestaoDesvioGuardiao({idEmpresa,idVeiculo,lat,lon,rumo,alcance,perfil,corredor,idRestricao}){
+    if(!ORS_API_KEY)return null;const chave=`${idVeiculo}:${idRestricao}`,agora=Date.now(),cache=cacheSugestoesDesvio.get(chave);if(cache&&cache.expiraEm>agora)return cache.valor;
+    if(sugestoesDesvioEmCurso.has(chave))return null;
+    const destinoCorredor=corredor?.pontos?.[corredor.pontos.length-1],destino=destinoCorredor?{lon:Number(destinoCorredor[0]),lat:Number(destinoCorredor[1])}:guardiaoProjetarDestino(lat,lon,rumo,Math.min(alcance,12));
+    const restricoes={height:valorPositivoOuNulo(perfil?.altura),width:valorPositivoOuNulo(perfil?.largura),length:valorPositivoOuNulo(perfil?.comprimento),weight:valorPositivoOuNulo(perfil?.peso)};Object.keys(restricoes).forEach(k=>restricoes[k]==null&&delete restricoes[k]);if(!Object.keys(restricoes).length)return null;
+    sugestoesDesvioEmCurso.add(chave);
+    const inicio=Date.now();try{const resp=await axios.post('https://api.openrouteservice.org/v2/directions/driving-hgv/geojson',{coordinates:[[Number(lon),Number(lat)],[destino.lon,destino.lat]],preference:'recommended',options:{profile_params:{restrictions:restricoes}}},{headers:{Authorization:ORS_API_KEY,'Content-Type':'application/json',Accept:'application/json'},timeout:5000});
+        const feature=resp.data?.features?.[0];if(!feature?.geometry)return null;const valor={tipo:'sugestao',aplicacao_automatica:false,exige_decisao_supervisor:true,fonte:'openrouteservice',geojson:feature.geometry,resumo:feature.properties?.summary||null};cacheSugestoesDesvio.set(chave,{expiraEm:agora+120000,valor});await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'sugestao_desvio',cacheUsado:false,sucesso:true,latenciaMs:Date.now()-inicio,statusHttp:resp.status});return valor;
+    }catch(erro){await registrarConsumoOrs({idEmpresa,idVeiculo,motivo:'sugestao_desvio',cacheUsado:false,sucesso:false,latenciaMs:Date.now()-inicio,statusHttp:erro.response?.status,erro:erro.message});return null;}finally{sugestoesDesvioEmCurso.delete(chave);}
+}
+async function enfileirarNotificacaoGuardiao(evento){const ordem={preventivo:0,atencao:1,critico:2,iminente:3},c=(await pool.query(`SELECT painel_ativo,webhook_ativo,webhook_url,emails,email_ativo,severidade_minima FROM empresa_notificacao_config WHERE id_empresa=$1`,[evento.id_empresa])).rows[0];if(c&&ordem[evento.nivel]<ordem[c.severidade_minima])return;const destinos=[];if(!c||c.painel_ativo)destinos.push('painel');if(c?.webhook_ativo&&c.webhook_url)destinos.push('webhook');if(c?.email_ativo)destinos.push(...(c.emails||[]));if(!c&&ALERT_WEBHOOK_URL)destinos.push('webhook');if(!c&&ALERT_EMAIL_TO)destinos.push(ALERT_EMAIL_TO);for(const destino of [...new Set(destinos)])await pool.query(`INSERT INTO notificacoes_outbox(id_empresa,tipo,referencia_tipo,referencia_id,destinatario,payload)VALUES($1,'alerta_guardiao','guardiao_sombra_evento',$2,$3,$4::jsonb)ON CONFLICT DO NOTHING`,[evento.id_empresa,String(evento.id),destino,JSON.stringify(evento)]);}
 async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,direcao,perfilForcado=null}){
-    let rumo=Number(direcao),vel=Number(velocidade),a=null;if(!Number.isFinite(rumo)||!Number.isFinite(vel)){const anterior=await pool.query(`SELECT * FROM empresa_telemetria_estado WHERE id_empresa=$1 AND id_veiculo=$2`,[empresa.id,veiculo.id]);a=anterior.rows[0]||null;}if(!Number.isFinite(rumo)&&a&&distanciaKmEntrePontos(a.lat,a.lon,lat,lon)>=.003)rumo=direcaoEntrePontosGuardiao(a.lat,a.lon,lat,lon);if(!Number.isFinite(vel)&&a){const horas=(Date.now()-new Date(a.atualizado_em).getTime())/3600000,km=distanciaKmEntrePontos(a.lat,a.lon,lat,lon);if(horas>0)vel=Math.min(160,km/horas);}if(!Number.isFinite(rumo))rumo=Number(a?.direcao_graus);if(!Number.isFinite(vel))vel=Number(a?.velocidade_kmh)||0;
+    let rumo=Number(direcao),vel=Number(velocidade),a=null;if(!Number.isFinite(rumo)||!Number.isFinite(vel)){const anterior=await pool.query(`SELECT lat,lon,direcao_graus,velocidade_kmh,atualizado_em FROM empresa_telemetria_estado WHERE id_empresa=$1 AND id_veiculo=$2`,[empresa.id,veiculo.id]);a=anterior.rows[0]||null;}if(!Number.isFinite(rumo)&&a&&distanciaKmEntrePontos(a.lat,a.lon,lat,lon)>=.003)rumo=direcaoEntrePontosGuardiao(a.lat,a.lon,lat,lon);if(!Number.isFinite(vel)&&a){const horas=(Date.now()-new Date(a.atualizado_em).getTime())/3600000,km=distanciaKmEntrePontos(a.lat,a.lon,lat,lon);if(horas>0)vel=Math.min(160,km/horas);}if(!Number.isFinite(rumo))rumo=Number(a?.direcao_graus);if(!Number.isFinite(vel))vel=Number(a?.velocidade_kmh)||0;
     await pool.query(`INSERT INTO empresa_telemetria_estado(id_empresa,id_veiculo,lat,lon,velocidade_kmh,direcao_graus,atualizado_em)VALUES($1,$2,$3,$4,$5,$6,CURRENT_TIMESTAMP)ON CONFLICT(id_empresa,id_veiculo)DO UPDATE SET lat=EXCLUDED.lat,lon=EXCLUDED.lon,velocidade_kmh=EXCLUDED.velocidade_kmh,direcao_graus=EXCLUDED.direcao_graus,atualizado_em=CURRENT_TIMESTAMP`,[empresa.id,veiculo.id,lat,lon,vel,Number.isFinite(rumo)?rumo:null]);
     const alcance=guardiaoAlcanceKmPorVelocidade(vel),margem=Math.max(.07,alcance/90);
     const contextoPerfil=await pool.query(`SELECT
@@ -8948,7 +9332,7 @@ async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,dir
             COALESCE(vj.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson) AS dados_geojson
             FROM viagens vj LEFT JOIN rotas_especificas re ON re.id=vj.id_rota_especifica LEFT JOIN rotas r ON r.id=vj.id_rota
             WHERE vj.id_veiculo=$1 AND vj.status='em_andamento' ORDER BY vj.saida_real DESC NULLS LAST,vj.id DESC LIMIT 1)vg) AS viagem,
-        (SELECT row_to_json(pc) FROM(SELECT * FROM perfis_composicao WHERE id_veiculo=$1 AND ativo=TRUE ORDER BY updated_at DESC LIMIT 1)pc) AS composicao`,[veiculo.id]);
+        (SELECT row_to_json(pc) FROM(SELECT id,id_empresa,id_veiculo,nome,carreta,carga,altura,largura,comprimento,peso,eixos,ativo,updated_at FROM perfis_composicao WHERE id_veiculo=$1 AND ativo=TRUE ORDER BY updated_at DESC LIMIT 1)pc) AS composicao`,[veiculo.id]);
     const viagemAtiva=contextoPerfil.rows[0]?.viagem,composicao=contextoPerfil.rows[0]?.composicao;
     const perfil=perfilForcado?{...perfilForcado,origem_dados:'sessao_piloto_mobile'}:viagemAtiva?{
         id_viagem:viagemAtiva.id,nome:'Viagem ativa',origem_dados:'viagem_ativa',carga:viagemAtiva.carga,
@@ -8959,16 +9343,40 @@ async function analisarRadarLivreEmpresa({empresa,veiculo,lat,lon,velocidade,dir
     }:composicao?{...composicao,origem_dados:'composicao_ativa'}:{altura:null,largura:veiculo.largura,comprimento:veiculo.comprimento,peso:veiculo.peso,nome:'Cadastro do veículo',origem_dados:'cadastro_veiculo'};
     let corredor=viagemAtiva?.dados_geojson?guardiaoCorredorRotaAdiante(viagemAtiva.dados_geojson,lat,lon,alcance):null;
     let metodoAnalise=corredor?'corredor_rota':null;
-    if(!corredor){corredor=await obterCorredorRodoviarioEstimado({idEmpresa:empresa.id,idVeiculo:veiculo.id,lat,lon,rumo,alcance,perfil});if(corredor)metodoAnalise=corredor.fonte==='openrouteservice_cache'?'corredor_rodoviario_cache':'corredor_rodoviario_estimado';}
+    if(!corredor){corredor=await obterCorredorRodoviarioEstimado({idEmpresa:empresa.id,idVeiculo:veiculo.id,lat,lon,rumo,alcance,perfil});if(corredor)metodoAnalise=corredor.fonte==='openrouteservice_cache'?'corredor_rodoviario_cache':'corredor_historico_estimado';}
     if(!metodoAnalise)metodoAnalise='radar_direcional';
+    const pedidosIndexacao=[enfileirarIndexacaoRegional({idEmpresa:empresa.id,lat,lon})];
+    if(Number.isFinite(rumo)){const frente=guardiaoProjetarDestino(lat,lon,rumo,Math.min(8,Math.max(3,alcance*.7)));pedidosIndexacao.push(enfileirarIndexacaoRegional({idEmpresa:empresa.id,lat:frente.lat,lon:frente.lon}));}
+    await Promise.all(pedidosIndexacao);
     if(!corredor&&!Number.isFinite(rumo))return{status:'calibrando',metodo_analise:metodoAnalise,alcance_km:alcance,riscos:[]};
     const rr={rows:await buscarRestricoesRadarEmpresa(empresa.id,lat,lon,margem)};const riscos=[];
     for(const r of rr.rows){
         let km,lateralKm=null;
         if(corredor){const p=guardiaoRestricaoNoCorredor(corredor.pontos,Number(r.lat),Number(r.lng));lateralKm=p.distancia_lateral_km;km=p.distancia_adiante_km;const tolerancia=Math.max(.18,Number(r.raio_metros||180)/1000+.08);if(km===null||km>alcance||lateralKm>tolerancia)continue;}
         else{km=distanciaKmEntrePontos(lat,lon,r.lat,r.lng);const dir=direcaoEntrePontosGuardiao(lat,lon,r.lat,r.lng);if(km>alcance||diferencaAngularGuardiao(dir,rumo)>38)continue;}
-        const conflito=guardiaoIncompatibilidade(r,{altura_total:perfil.altura,largura:perfil.largura,comprimento:perfil.comprimento,peso_total:perfil.peso,peso:perfil.peso});const tempo=guardiaoTempoMin(km,vel);const nivel=km<=.5||(tempo!==null&&tempo<=.75)?'iminente':km<=2||(tempo!==null&&tempo<=2.5)?'critico':km<=5||(tempo!==null&&tempo<=6)?'atencao':'preventivo';const dados={restricao:r,perfil_composicao:perfil,incompatibilidade:conflito,velocidade_kmh:vel,direcao_graus:rumo,alcance_km:alcance,metodo_analise:metodoAnalise,distancia_lateral_km:lateralKm,distancia_encaixe_rota_km:corredor?.distancia_encaixe_km??null};const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,r.id]);if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);else{const criado=await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)RETURNING *`,[empresa.id,veiculo.id,r.id,nivel,conflito?.tipo||r.tipo,km,tempo,veiculo.placa,JSON.stringify(dados)]);await enfileirarNotificacaoGuardiao(criado.rows[0]);}riscos.push({nivel,distancia_km:Number(km.toFixed(3)),distancia_lateral_km:lateralKm===null?null:Number(lateralKm.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),restricao:r,incompatibilidade:conflito});}
-    return{status:riscos.length?'risco':'seguro',metodo_analise:metodoAnalise,alcance_km:alcance,distancia_encaixe_rota_km:corredor?Number(corredor.distancia_encaixe_km.toFixed(3)):null,velocidade_kmh:Number(vel.toFixed(1)),direcao_graus:Number.isFinite(rumo)?Number(rumo.toFixed(1)):null,perfil_composicao:perfil,riscos:riscos.sort((x,y)=>x.distancia_km-y.distancia_km)};
+        const conflito=guardiaoIncompatibilidade(r,{altura_total:perfil.altura,largura:perfil.largura,comprimento:perfil.comprimento,peso_total:perfil.peso,peso:perfil.peso});const tempo=guardiaoTempoMin(km,vel);const nivel=km<=.5||(tempo!==null&&tempo<=.75)?'iminente':km<=2||(tempo!==null&&tempo<=2.5)?'critico':km<=5||(tempo!==null&&tempo<=6)?'atencao':'preventivo';const dados={restricao:r,perfil_composicao:perfil,incompatibilidade:conflito,velocidade_kmh:vel,direcao_graus:rumo,alcance_km:alcance,metodo_analise:metodoAnalise,distancia_lateral_km:lateralKm,distancia_encaixe_rota_km:corredor?.distancia_encaixe_km??null};const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,r.id]);if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);else{const criado=await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)RETURNING id,id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados,status_operacional,classificacao,ativo,primeiro_evento_em,ultimo_evento_em`,[empresa.id,veiculo.id,r.id,nivel,conflito?.tipo||r.tipo,km,tempo,veiculo.placa,JSON.stringify(dados)]);await enfileirarNotificacaoGuardiao(criado.rows[0]);}riscos.push({nivel,distancia_km:Number(km.toFixed(3)),distancia_lateral_km:lateralKm===null?null:Number(lateralKm.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),restricao:r,incompatibilidade:conflito});}
+    const riscoParaDesvio=riscos.find(item=>['iminente','critico'].includes(item.nivel)&&item.restricao?.id);
+    let sugestaoDesvio=null;
+    if(riscoParaDesvio){const chaveDesvio=`${veiculo.id}:${riscoParaDesvio.restricao.id}`;sugestaoDesvio=cacheSugestoesDesvio.get(chaveDesvio)?.valor||null;
+        obterSugestaoDesvioGuardiao({idEmpresa:empresa.id,idVeiculo:veiculo.id,lat,lon,rumo,alcance,perfil,corredor,idRestricao:riscoParaDesvio.restricao.id}).catch(()=>{});}
+    const possiveis=[];
+    for(const candidato of await buscarCandidatosRadarEmpresa(empresa.id,lat,lon,margem)){
+        let km,lateralKm=null;
+        if(corredor){const p=guardiaoRestricaoNoCorredor(corredor.pontos,Number(candidato.lat),Number(candidato.lng));lateralKm=p.distancia_lateral_km;km=p.distancia_adiante_km;const tolerancia=Math.max(.18,Number(candidato.raio_metros||180)/1000+.08);if(km===null||km>alcance||lateralKm>tolerancia)continue;}
+        else{km=distanciaKmEntrePontos(lat,lon,candidato.lat,candidato.lng);const dir=direcaoEntrePontosGuardiao(lat,lon,candidato.lat,candidato.lng);if(km>alcance||diferencaAngularGuardiao(dir,rumo)>38)continue;}
+        const tempo=guardiaoTempoMin(km,vel),nivel=candidato.prioridade_nivel==='critica'&&km<=2?'atencao':'preventivo';
+        const dados={id_catalogo:candidato.id,candidato,confirmada:false,interfere_roteamento:false,exige_revisao_humana:true,
+            evidencia_status:evidenceStatus(candidato.evidencia_atualizada_em,candidato.evidencia_validade_dias),velocidade_kmh:vel,direcao_graus:rumo,
+            alcance_km:alcance,metodo_analise:metodoAnalise,distancia_lateral_km:lateralKm};
+        const existente=await pool.query(`SELECT id FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 AND id_restricao IS NULL
+            AND dados->>'id_catalogo'=$3 AND ativo=TRUE AND ultimo_evento_em>CURRENT_TIMESTAMP-INTERVAL '30 minutes' LIMIT 1`,[empresa.id,veiculo.id,String(candidato.id)]);
+        if(existente.rows.length)await pool.query(`UPDATE guardiao_sombra_eventos SET nivel=$1,distancia_km=$2,tempo_estimado_min=$3,dados=$4::jsonb,ultimo_evento_em=CURRENT_TIMESTAMP WHERE id=$5`,[nivel,km,tempo,JSON.stringify(dados),existente.rows[0].id]);
+        else{const criado=await pool.query(`INSERT INTO guardiao_sombra_eventos(id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados,classificacao)
+            VALUES($1,$2,NULL,$3,'possivel_risco_nao_validado',$4,$5,$6,$7::jsonb,'possivel_risco') RETURNING id,id_empresa,id_veiculo,id_restricao,nivel,tipo_risco,distancia_km,tempo_estimado_min,placa,dados,status_operacional,classificacao,ativo,primeiro_evento_em,ultimo_evento_em`,
+            [empresa.id,veiculo.id,nivel,km,tempo,veiculo.placa,JSON.stringify(dados)]);await enfileirarNotificacaoGuardiao(criado.rows[0]);}
+        possiveis.push({nivel,distancia_km:Number(km.toFixed(3)),distancia_lateral_km:lateralKm===null?null:Number(lateralKm.toFixed(3)),tempo_estimado_min:tempo===null?null:Number(tempo.toFixed(2)),candidato,confirmada:false,interfere_roteamento:false,exige_revisao_humana:true});
+    }
+    return{status:riscos.length?'risco':possiveis.length?'possivel_risco':'seguro',metodo_analise:metodoAnalise,confianca_corredor:corredor?.confianca_corredor||null,amostras_gps_corredor:corredor?.amostras_gps||null,alcance_km:alcance,distancia_encaixe_rota_km:corredor?Number(corredor.distancia_encaixe_km.toFixed(3)):null,velocidade_kmh:Number(vel.toFixed(1)),direcao_graus:Number.isFinite(rumo)?Number(rumo.toFixed(1)):null,perfil_composicao:perfil,riscos:riscos.sort((x,y)=>x.distancia_km-y.distancia_km),possiveis_riscos:possiveis.sort((x,y)=>x.distancia_km-y.distancia_km),sugestao_desvio:sugestaoDesvio};
 }
 function classificarPosicaoGps({ atual, anterior }) {
     return classificarQualidadeGps({ atual, anterior, calcularDistanciaKm: distanciaKmEntrePontos });
@@ -8980,7 +9388,7 @@ async function gravarPosicaoGpsUnificada({empresa,veiculo,idMotorista=null,idVia
   const anterior=(await client.query(`SELECT lat,lon,timestamp_dispositivo,sequencia,sessao_chave FROM gps_ingestoes WHERE id_empresa=$1 AND id_veiculo=$2 ORDER BY timestamp_dispositivo DESC NULLS LAST,recebido_em DESC LIMIT 1 FOR UPDATE`,[empresa.id,veiculo.id])).rows[0];
   const qualidade=classificarPosicaoGps({atual:{lat,lon,timestamp:payload.timestamp_dispositivo,precisao:payload.precisao_m,offline:payload.offline===true||payload.origem_coleta==='offline_sync'},anterior});
   if(anterior?.sessao_chave===sessao&&sequencia<Number(anterior.sequencia)){qualidade.motivos.push('sequencia_reiniciada');qualidade.classificacao='fora_de_ordem';qualidade.apta_tempo_real=false;}
-  const ing=await client.query(`INSERT INTO gps_ingestoes(id_empresa,id_veiculo,id_motorista,id_viagem,origem,sessao_chave,sequencia,request_id,lat,lon,velocidade_kmh,direcao_graus,precisao_m,altitude_m,timestamp_dispositivo,classificacao,apta_historico,apta_tempo_real,motivos,payload)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,$17,$18::jsonb,$19::jsonb)ON CONFLICT(id_empresa,id_veiculo,sessao_chave,sequencia)DO NOTHING RETURNING *`,[empresa.id,veiculo.id,idMotorista,idViagem,origem,sessao,sequencia,requestId,lat,lon,payload.velocidade_kmh??null,payload.direcao_graus??null,payload.precisao_m??null,payload.altitude_m??null,payload.timestamp_dispositivo,qualidade.classificacao,qualidade.apta_tempo_real,JSON.stringify(qualidade.motivos),JSON.stringify(payload)]);
+  const ing=await client.query(`INSERT INTO gps_ingestoes(id_empresa,id_veiculo,id_motorista,id_viagem,origem,sessao_chave,sequencia,request_id,lat,lon,velocidade_kmh,direcao_graus,precisao_m,altitude_m,timestamp_dispositivo,classificacao,apta_historico,apta_tempo_real,motivos,payload)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,TRUE,$17,$18::jsonb,$19::jsonb)ON CONFLICT(id_empresa,id_veiculo,sessao_chave,sequencia)DO NOTHING RETURNING id`,[empresa.id,veiculo.id,idMotorista,idViagem,origem,sessao,sequencia,requestId,lat,lon,payload.velocidade_kmh??null,payload.direcao_graus??null,payload.precisao_m??null,payload.altitude_m??null,payload.timestamp_dispositivo,qualidade.classificacao,qualidade.apta_tempo_real,JSON.stringify(qualidade.motivos),JSON.stringify(payload)]);
   if(!ing.rows.length){await client.query('ROLLBACK');return{duplicada:true,classificacao:'duplicada',qualidade};}
   const i=ing.rows[0];
   await client.query(`INSERT INTO historico_localizacoes(id_motorista,id_veiculo,id_viagem,lat,lon,registrado_em,velocidade_kmh,precisao_m,direcao_graus,altitude_m,timestamp_dispositivo,origem_coleta,id_ingestao,classificacao,motivos_qualidade)VALUES($1,$2,$3,$4,$5,CURRENT_TIMESTAMP,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb)`,[idMotorista,veiculo.id,idViagem,lat,lon,payload.velocidade_kmh??null,payload.precisao_m??null,payload.direcao_graus??null,payload.altitude_m??null,payload.timestamp_dispositivo,origem,i.id,qualidade.classificacao,JSON.stringify(qualidade.motivos)]);
@@ -8999,12 +9407,12 @@ async function processarLocalizacaoUnificada(req,res,next){
  try{
   const integracao=req.usuario?.tipo==='integracao';let empresa,veiculo,idMotorista=null,idViagem=null,sessao,sequencia;
   if(integracao){
-   const placa=normalizarPlaca(req.body?.placa);const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.*,vg.id AS id_viagem,vg.id_motorista AS viagem_motorista,u.id AS veiculo_motorista FROM empresas_integracao e JOIN empresa_integracao_veiculos ev ON ev.id_empresa=e.id JOIN veiculos v ON v.id=ev.id_veiculo AND v.ativo=TRUE LEFT JOIN LATERAL(SELECT id,id_motorista FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE LEFT JOIN LATERAL(SELECT id FROM usuarios WHERE tipo='motorista' AND id_veiculo=v.id ORDER BY id LIMIT 1)u ON TRUE WHERE e.id=$1 AND v.placa=$2 LIMIT 1`,[req.empresaIntegracao.id,placa]);
+   const placa=normalizarPlaca(req.body?.placa);const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.id,v.placa,v.frota,v.modelo,v.comprimento,v.largura,v.peso,v.consumo_medio_km_l,v.tipo_combustivel,v.preco_combustivel_ref,v.ativo,vg.id AS id_viagem,vg.id_motorista AS viagem_motorista,u.id AS veiculo_motorista FROM empresas_integracao e JOIN empresa_integracao_veiculos ev ON ev.id_empresa=e.id JOIN veiculos v ON v.id=ev.id_veiculo AND v.ativo=TRUE LEFT JOIN LATERAL(SELECT id,id_motorista FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE LEFT JOIN LATERAL(SELECT id FROM usuarios WHERE tipo='motorista' AND id_veiculo=v.id ORDER BY id LIMIT 1)u ON TRUE WHERE e.id=$1 AND v.placa=$2 LIMIT 1`,[req.empresaIntegracao.id,placa]);
    if(!r.rows.length){await registrarRequisicaoIntegracao(req,{statusHttp:404,sucesso:false,codigo:'PLACA_NAO_AUTORIZADA',mensagem:'Placa não vinculada a esta chave empresarial.',placa,inicio});return res.status(404).json({erro:'Placa não vinculada a esta chave empresarial.',request_id:req.requestId});}
    empresa={id:req.empresaIntegracao.id,nome:req.empresaIntegracao.nome,modo_sombra:req.empresaIntegracao.modo_sombra};veiculo=r.rows[0];idMotorista=r.rows[0].viagem_motorista||r.rows[0].veiculo_motorista||null;idViagem=r.rows[0].id_viagem||null;sessao=String(req.body?.sessao_id||'').trim();sequencia=Number(req.body?.sequencia);
   }else{
    if(req.usuario?.tipo!=='motorista')return next();
-   const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.*,vg.id AS id_viagem FROM usuarios u JOIN veiculos v ON v.id=u.id_veiculo JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id JOIN empresas_integracao e ON e.id=ev.id_empresa AND e.ativo=TRUE LEFT JOIN LATERAL(SELECT id FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE WHERE u.id=$1 LIMIT 1`,[req.usuario.id]);
+   const r=await pool.query(`SELECT e.id AS empresa_id,e.nome AS empresa_nome,e.modo_sombra,v.id,v.placa,v.frota,v.modelo,v.comprimento,v.largura,v.peso,v.consumo_medio_km_l,v.tipo_combustivel,v.preco_combustivel_ref,v.ativo,vg.id AS id_viagem FROM usuarios u JOIN veiculos v ON v.id=u.id_veiculo JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id JOIN empresas_integracao e ON e.id=ev.id_empresa AND e.ativo=TRUE LEFT JOIN LATERAL(SELECT id FROM viagens WHERE id_veiculo=v.id AND status='em_andamento' ORDER BY saida_real DESC NULLS LAST LIMIT 1)vg ON TRUE WHERE u.id=$1 LIMIT 1`,[req.usuario.id]);
    if(!r.rows.length)return next();
    if(req.body?.sessao_piloto_id){const s=await pool.query(`SELECT 1 FROM piloto_mobile_sessoes WHERE id=$1 AND id_motorista=$2 AND id_veiculo=$3 AND status='ativa'`,[req.body.sessao_piloto_id,req.usuario.id,r.rows[0].id]);if(!s.rows.length)return res.status(409).json({erro:'Sessão do piloto inexistente, encerrada ou pertencente a outro motorista.'});}
    empresa={id:r.rows[0].empresa_id,nome:r.rows[0].empresa_nome,modo_sombra:r.rows[0].modo_sombra};veiculo=r.rows[0];idMotorista=req.usuario.id;idViagem=r.rows[0].id_viagem||null;sessao=`mobile:${req.body?.sessao_piloto_id||req.usuario.id}`;sequencia=Number(req.body?.sequencia);
@@ -9710,10 +10118,59 @@ let processandoNotificacoes=false;
 const notificacaoWorkerId=`${process.pid}-${crypto.randomBytes(5).toString('hex')}`;
 let processandoFilaGuardiao=false;
 const guardiaoWorkerId=`${process.pid}-${crypto.randomBytes(5).toString('hex')}`;
-async function processarFilaGuardiao(){if(processandoFilaGuardiao)return;processandoFilaGuardiao=true;try{const fila=await pool.query(`WITH c AS(SELECT id FROM guardiao_fila WHERE((status='pendente' AND proxima_tentativa_em<=CURRENT_TIMESTAMP)OR(status='processando' AND reservado_em<CURRENT_TIMESTAMP-INTERVAL '5 minutes'))ORDER BY criado_em LIMIT 15 FOR UPDATE SKIP LOCKED)UPDATE guardiao_fila f SET status='processando',tentativas=f.tentativas+1,reservado_em=CURRENT_TIMESTAMP,worker_id=$1 FROM c WHERE f.id=c.id RETURNING f.*`,[guardiaoWorkerId]);for(const item of fila.rows){try{const q=await pool.query(`SELECT i.*,e.nome AS empresa_nome,e.modo_sombra,v.placa,v.modelo,v.comprimento,v.largura,v.peso,u.nome AS motorista FROM gps_ingestoes i JOIN empresas_integracao e ON e.id=i.id_empresa JOIN veiculos v ON v.id=i.id_veiculo LEFT JOIN usuarios u ON u.id=i.id_motorista WHERE i.id=$1`,[item.id_ingestao]);if(!q.rows.length)throw new Error('Ingestão não encontrada');const p=q.rows[0],guardiao=await analisarRadarLivreEmpresa({empresa:{id:p.id_empresa,nome:p.empresa_nome,modo_sombra:p.modo_sombra},veiculo:p,lat:p.lat,lon:p.lon,velocidade:p.velocidade_kmh,direcao:p.direcao_graus});let qualidade='completa';if(guardiao.status==='calibrando')qualidade='sem_direcao';else if(guardiao.metodo_analise==='radar_direcional')qualidade='limitada_radar_direcional';else if(guardiao.metodo_analise==='corredor_rodoviario_cache')qualidade='utilizando_cache';else if(guardiao.metodo_analise==='corredor_rodoviario_estimado')qualidade='completa_map_matching';if(!guardiao.perfil_composicao?.altura)qualidade='sem_perfil_completo';guardiao.qualidade_analise=qualidade;await pool.query(`INSERT INTO guardiao_analises(id_empresa,id_veiculo,request_id,lat,lon,velocidade_kmh,direcao_graus,status,alcance_km,riscos_encontrados,resultado)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,[p.id_empresa,p.id_veiculo,p.request_id,p.lat,p.lon,guardiao.velocidade_kmh??p.velocidade_kmh,guardiao.direcao_graus??p.direcao_graus,guardiao.status,guardiao.alcance_km??null,guardiao.riscos?.length||0,JSON.stringify(guardiao)]);await pool.query(`UPDATE guardiao_fila SET status='concluido',qualidade=$1,resultado=$2::jsonb,processado_em=CURRENT_TIMESTAMP,reservado_em=NULL,worker_id=NULL,ultimo_erro=NULL WHERE id=$3 AND worker_id=$4`,[qualidade,JSON.stringify(guardiao),item.id,guardiaoWorkerId]);}catch(erro){const final=Number(item.tentativas)>=6;await pool.query(`UPDATE guardiao_fila SET status=$1,qualidade=$2,ultimo_erro=$3,proxima_tentativa_em=CURRENT_TIMESTAMP+($4||' seconds')::interval,reservado_em=NULL,worker_id=NULL WHERE id=$5 AND worker_id=$6`,[final?'falhou':'pendente',final?'falha_permanente':'falha_temporaria',String(erro.message||erro).slice(0,1000),Math.min(900,Math.pow(2,Number(item.tentativas))*10),item.id,guardiaoWorkerId]);}}}catch(erro){console.error('Falha processando fila do Guardião:',erro.message);}finally{processandoFilaGuardiao=false;}}
+let processandoIndexacaoRegional=false;
+const indexacaoRegionalWorkerId=`${process.pid}-${crypto.randomBytes(5).toString('hex')}`;
+async function processarFilaIndexacaoRegional(){
+    if(processandoIndexacaoRegional)return;processandoIndexacaoRegional=true;
+    try{const fila=await pool.query(`WITH c AS(SELECT id FROM indexacao_regional_fila WHERE((status='pendente' AND proxima_tentativa_em<=CURRENT_TIMESTAMP)
+        OR(status='processando' AND reservado_em<CURRENT_TIMESTAMP-INTERVAL '10 minutes'))ORDER BY criado_em LIMIT 2 FOR UPDATE SKIP LOCKED)
+        UPDATE indexacao_regional_fila f SET status='processando',tentativas=f.tentativas+1,reservado_em=CURRENT_TIMESTAMP,execucao_iniciada_em=CURRENT_TIMESTAMP,worker_id=$1,atualizado_em=CURRENT_TIMESTAMP
+        FROM c WHERE f.id=c.id RETURNING f.id,f.id_empresa,f.lat,f.lng,f.raio_km,f.tentativas`,[indexacaoRegionalWorkerId]);
+        for(const item of fila.rows){try{const resultado=await indexarCatalogoRegional({idEmpresa:item.id_empresa,lat:item.lat,lon:item.lng,raioKm:item.raio_km});const parcial=resultado.coberturaStatus&&resultado.coberturaStatus!=='completa';
+            await pool.query(`UPDATE indexacao_regional_fila SET status=$1,concluido_em=CURRENT_TIMESTAMP,ultima_indexacao_em=CURRENT_TIMESTAMP,execucao_finalizada_em=CURRENT_TIMESTAMP,duracao_ms=GREATEST(0,EXTRACT(EPOCH FROM(CURRENT_TIMESTAMP-execucao_iniciada_em))*1000)::int,cobertura_status=$2,fontes_ok=$3::jsonb,fontes_falha=$4::jsonb,proxima_tentativa_em=CASE WHEN $5 THEN CURRENT_TIMESTAMP+INTERVAL '15 minutes' ELSE proxima_tentativa_em END,reservado_em=NULL,worker_id=NULL,ultimo_erro=NULL,atualizado_em=CURRENT_TIMESTAMP WHERE id=$6 AND worker_id=$7`,[parcial?'pendente':'concluido',resultado.coberturaStatus||'completa',JSON.stringify(['ANTT',...(resultado.osm?['OpenStreetMap regional']:[])]),JSON.stringify(resultado.fontesFalha||[]),parcial,item.id,indexacaoRegionalWorkerId]);
+        }catch(erro){const final=Number(item.tentativas)>=6;await pool.query(`UPDATE indexacao_regional_fila SET status=$1,ultimo_erro=$2,
+            proxima_tentativa_em=CURRENT_TIMESTAMP+($3||' seconds')::interval,reservado_em=NULL,worker_id=NULL,atualizado_em=CURRENT_TIMESTAMP WHERE id=$4 AND worker_id=$5`,
+            [final?'falhou':'pendente',String(erro.message||erro).slice(0,1000),Math.min(3600,Math.pow(2,Number(item.tentativas))*30),item.id,indexacaoRegionalWorkerId]);}}
+    }catch(erro){console.error('Falha processando fila de indexação regional:',erro.message);}finally{processandoIndexacaoRegional=false;}
+}
+const GUARDIAO_CONCORRENCIA=Math.max(1,Math.min(5,Number(process.env.GUARDIAO_CONCORRENCIA)||4));
+async function adquirirLockGuardiao(item){const r=await pool.query(`INSERT INTO guardiao_veiculo_locks(id_empresa,id_veiculo,worker_id,expira_em)
+    VALUES($1,$2,$3,CURRENT_TIMESTAMP+INTERVAL '2 minutes') ON CONFLICT(id_empresa,id_veiculo)DO UPDATE SET worker_id=EXCLUDED.worker_id,
+    reservado_em=CURRENT_TIMESTAMP,expira_em=EXCLUDED.expira_em WHERE guardiao_veiculo_locks.expira_em<CURRENT_TIMESTAMP OR guardiao_veiculo_locks.worker_id=EXCLUDED.worker_id RETURNING id_veiculo`,[item.id_empresa,item.id_veiculo,guardiaoWorkerId]);return Boolean(r.rowCount);}
+async function liberarLockGuardiao(item){await pool.query(`DELETE FROM guardiao_veiculo_locks WHERE id_empresa=$1 AND id_veiculo=$2 AND worker_id=$3`,[item.id_empresa,item.id_veiculo,guardiaoWorkerId]).catch(()=>{});}
+async function processarItemFilaGuardiao(item){
+    if(!await adquirirLockGuardiao(item)){await pool.query(`UPDATE guardiao_fila SET status='pendente',tentativas=GREATEST(0,tentativas-1),proxima_tentativa_em=CURRENT_TIMESTAMP+INTERVAL '1 second',reservado_em=NULL,worker_id=NULL WHERE id=$1 AND worker_id=$2`,[item.id,guardiaoWorkerId]);return;}
+    try{const q=await pool.query(`SELECT i.id,i.id_empresa,i.id_veiculo,i.id_motorista,i.request_id,i.lat,i.lon,i.velocidade_kmh,i.direcao_graus,e.nome AS empresa_nome,e.modo_sombra,v.placa,v.modelo,v.comprimento,v.largura,v.peso,u.nome AS motorista FROM gps_ingestoes i JOIN empresas_integracao e ON e.id=i.id_empresa JOIN veiculos v ON v.id=i.id_veiculo LEFT JOIN usuarios u ON u.id=i.id_motorista WHERE i.id=$1`,[item.id_ingestao]);if(!q.rows.length)throw new Error('Ingestão não encontrada');const p=q.rows[0],guardiao=await analisarRadarLivreEmpresa({empresa:{id:p.id_empresa,nome:p.empresa_nome,modo_sombra:p.modo_sombra},veiculo:p,lat:p.lat,lon:p.lon,velocidade:p.velocidade_kmh,direcao:p.direcao_graus});let qualidade='completa';if(guardiao.status==='calibrando')qualidade='sem_direcao';else if(guardiao.metodo_analise==='radar_direcional')qualidade='limitada_radar_direcional';else if(guardiao.metodo_analise==='corredor_rodoviario_cache')qualidade='utilizando_cache';else if(guardiao.metodo_analise==='corredor_historico_estimado')qualidade=`corredor_historico_${guardiao.confianca_corredor||'baixa'}`;if(!guardiao.perfil_composicao?.altura)qualidade='sem_perfil_completo';guardiao.qualidade_analise=qualidade;await pool.query(`INSERT INTO guardiao_analises(id_empresa,id_veiculo,request_id,lat,lon,velocidade_kmh,direcao_graus,status,alcance_km,riscos_encontrados,resultado)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)`,[p.id_empresa,p.id_veiculo,p.request_id,p.lat,p.lon,guardiao.velocidade_kmh??p.velocidade_kmh,guardiao.direcao_graus??p.direcao_graus,guardiao.status,guardiao.alcance_km??null,(guardiao.riscos?.length||0)+(guardiao.possiveis_riscos?.length||0),JSON.stringify(guardiao)]);await pool.query(`UPDATE guardiao_fila SET status='concluido',qualidade=$1,resultado=$2::jsonb,processado_em=CURRENT_TIMESTAMP,reservado_em=NULL,worker_id=NULL,ultimo_erro=NULL WHERE id=$3 AND worker_id=$4`,[qualidade,JSON.stringify(guardiao),item.id,guardiaoWorkerId]);}
+    catch(erro){const final=Number(item.tentativas)>=6;await pool.query(`UPDATE guardiao_fila SET status=$1,qualidade=$2,ultimo_erro=$3,proxima_tentativa_em=CURRENT_TIMESTAMP+($4||' seconds')::interval,reservado_em=NULL,worker_id=NULL WHERE id=$5 AND worker_id=$6`,[final?'falhou':'pendente',final?'falha_permanente':'falha_temporaria',String(erro.message||erro).slice(0,1000),Math.min(900,Math.pow(2,Number(item.tentativas))*10),item.id,guardiaoWorkerId]);}
+    finally{await liberarLockGuardiao(item);}
+}
+async function processarFilaGuardiao(){if(processandoFilaGuardiao)return;processandoFilaGuardiao=true;try{const fila=await pool.query(`WITH c AS(
+    SELECT f.id FROM guardiao_fila f WHERE((f.status='pendente' AND f.proxima_tentativa_em<=CURRENT_TIMESTAMP)OR(f.status='processando' AND f.reservado_em<CURRENT_TIMESTAMP-INTERVAL '5 minutes'))
+      AND NOT EXISTS(SELECT 1 FROM guardiao_fila anterior WHERE anterior.id_veiculo=f.id_veiculo AND anterior.id<f.id AND anterior.status IN('pendente','processando'))
+    ORDER BY f.criado_em LIMIT 20 FOR UPDATE SKIP LOCKED) UPDATE guardiao_fila f SET status='processando',tentativas=f.tentativas+1,reservado_em=CURRENT_TIMESTAMP,worker_id=$1 FROM c WHERE f.id=c.id RETURNING f.*`,[guardiaoWorkerId]);
+    let indice=0;await Promise.all(Array.from({length:Math.min(GUARDIAO_CONCORRENCIA,fila.rows.length)},async()=>{while(indice<fila.rows.length){const item=fila.rows[indice++];await processarItemFilaGuardiao(item);}}));
+}catch(erro){console.error('Falha processando fila do Guardião:',erro.message);}finally{processandoFilaGuardiao=false;}}
 async function processarNotificacoesOutbox(){
     if(processandoNotificacoes)return;processandoNotificacoes=true;
     try{const fila=await pool.query(`WITH candidatos AS(SELECT id FROM notificacoes_outbox WHERE((status='pendente' AND proxima_tentativa_em<=CURRENT_TIMESTAMP)OR(status='tentando' AND reservado_em<CURRENT_TIMESTAMP-INTERVAL '5 minutes'))ORDER BY criado_em LIMIT 20 FOR UPDATE SKIP LOCKED)UPDATE notificacoes_outbox n SET status='tentando',tentativas=n.tentativas+1,reservado_em=CURRENT_TIMESTAMP,worker_id=$1 FROM candidatos c WHERE n.id=c.id RETURNING n.*`,[notificacaoWorkerId]);for(const item of fila.rows){try{if(item.destinatario==='webhook'){const cfg=item.id_empresa?(await pool.query(`SELECT webhook_url,webhook_segredo FROM empresa_notificacao_config WHERE id_empresa=$1 AND webhook_ativo=TRUE`,[item.id_empresa])).rows[0]:null,url=cfg?.webhook_url||ALERT_WEBHOOK_URL,segredo=cfg?.webhook_segredo;if(!url)throw new Error('Webhook não configurado');const timestamp=Math.floor(Date.now()/1000),conteudo=JSON.stringify(item.payload),canonico=`${timestamp}.${item.entrega_id}.${item.tentativas}.${conteudo}`,assinatura=segredo?crypto.createHmac('sha256',segredo).update(canonico).digest('hex'):null;await axios.post(url,item.payload,{headers:{'X-Guardiao-Delivery':item.entrega_id,'X-Guardiao-Timestamp':String(timestamp),'X-Guardiao-Attempt':String(item.tentativas),...(assinatura?{'X-Guardiao-Signature':`sha256=${assinatura}`}:{})},timeout:8000});await pool.query(`UPDATE notificacoes_outbox SET assinatura_hmac=$1,assinatura_timestamp=$2 WHERE id=$3 AND worker_id=$4`,[assinatura,timestamp,item.id,notificacaoWorkerId]);}else if(item.destinatario!=='painel'){if(!BREVO_API_KEY||!EMAIL_REMETENTE)throw new Error('Canal de e-mail não configurado');await axios.post('https://api.brevo.com/v3/smtp/email',{sender:{name:EMAIL_NOME,email:EMAIL_REMETENTE},to:[{email:item.destinatario}],subject:`Alerta Guardião · ${item.payload?.placa||'veículo'}`,htmlContent:`<h2>Alerta Guardião</h2><p>Veículo: <strong>${item.payload?.placa||'-'}</strong></p><p>Nível: ${item.payload?.nivel||'-'}</p><p>Distância: ${item.payload?.distancia_km??'-'} km</p>`},{headers:{'api-key':BREVO_API_KEY,'Content-Type':'application/json'},timeout:10000});}await pool.query(`UPDATE notificacoes_outbox SET status='enviado',enviado_em=CURRENT_TIMESTAMP,ultimo_erro=NULL,reservado_em=NULL,worker_id=NULL WHERE id=$1 AND worker_id=$2`,[item.id,notificacaoWorkerId]);}catch(erro){const tentativas=Number(item.tentativas||0),final=tentativas>=8;await pool.query(`UPDATE notificacoes_outbox SET status=$1,ultimo_erro=$2,proxima_tentativa_em=CURRENT_TIMESTAMP+($3||' seconds')::interval,reservado_em=NULL,worker_id=NULL WHERE id=$4 AND worker_id=$5`,[final?'falhou':'pendente',String(erro.message||erro).slice(0,1000),Math.min(3600,Math.pow(2,tentativas)*15),item.id,notificacaoWorkerId]);}}}catch(erro){console.error('Falha processando notificações:',erro.message);}finally{processandoNotificacoes=false;}
+}
+
+let monitorandoEvidenciasRestricoes=false;
+async function monitorarEvidenciasRestricoes(){
+    if(monitorandoEvidenciasRestricoes)return;monitorandoEvidenciasRestricoes=true;
+    try{
+        const itens=await pool.query(`SELECT id,id_empresa,tipo,nome,evidencia_atualizada_em,evidencia_validade_dias,
+            evidencia_atualizada_em+evidencia_validade_dias*INTERVAL '1 day' AS vence_em
+          FROM restricoes_risco_catalogo WHERE id_empresa IS NOT NULL AND status IN('possivel_risco','em_revisao','validada')
+            AND evidencia_atualizada_em IS NOT NULL
+            AND evidencia_atualizada_em+evidencia_validade_dias*INTERVAL '1 day'<CURRENT_TIMESTAMP+INTERVAL '30 days'
+            AND(notificado_evidencia_em IS NULL OR notificado_evidencia_em<CURRENT_TIMESTAMP-INTERVAL '7 days') LIMIT 200`);
+        for(const item of itens.rows){const vencida=new Date(item.vence_em).getTime()<Date.now(),payload={id_catalogo:item.id,tipo:item.tipo,nome:item.nome,
+            estado:vencida?'vencida':'proxima_do_vencimento',vence_em:item.vence_em,mensagem:vencida?'Evidência de restrição vencida; revisão humana necessária.':'Evidência próxima do vencimento; programe nova verificação.'};
+            await pool.query(`INSERT INTO notificacoes_outbox(id_empresa,tipo,referencia_tipo,referencia_id,destinatario,payload)
+                VALUES($1,'evidencia_restricao','restricoes_risco_catalogo',$2,'painel',$3::jsonb) ON CONFLICT DO NOTHING`,[item.id_empresa,`${item.id}:${new Date().toISOString().slice(0,10)}`,JSON.stringify(payload)]);
+            await pool.query(`UPDATE restricoes_risco_catalogo SET notificado_evidencia_em=CURRENT_TIMESTAMP WHERE id=$1`,[item.id]);}
+    }catch(erro){console.error('Falha no monitor de evidências de restrições:',erro.message);}finally{monitorandoEvidenciasRestricoes=false;}
 }
 
 let servidorHttp = null;
@@ -9724,8 +10181,10 @@ function iniciarProcessadores() {
     if (agendadorProcessadores?.estaAtivo()) return;
     agendadorProcessadores = criarAgendador({ tarefas: [
         { nome: 'guardiao', executar: processarFilaGuardiao, atrasoInicialMs: 3000, intervaloMs: 5000 },
+        { nome: 'indexacao_regional', executar: processarFilaIndexacaoRegional, atrasoInicialMs: 4000, intervaloMs: 5000 },
         { nome: 'notificacoes', executar: processarNotificacoesOutbox, atrasoInicialMs: 5000, intervaloMs: 15000 },
         { nome: 'integracoes', executar: monitorarIntegracoesIndisponiveis, atrasoInicialMs: 10000, intervaloMs: 60000 },
+        { nome: 'evidencias_restricoes', executar: monitorarEvidenciasRestricoes, atrasoInicialMs: 30000, intervaloMs: 6 * 60 * 60 * 1000 },
         { nome: 'manutencao', executar: executarManutencaoPeriodica, atrasoInicialMs: 120000, intervaloMs: MANUTENCAO_INTERVALO_MS },
         { nome: 'retencao_privacidade', executar: () => executarRetencao({ pool }), atrasoInicialMs: 180000, intervaloMs: 24 * 60 * 60 * 1000 }
     ]});
@@ -9741,6 +10200,8 @@ function pararProcessadores() {
 async function liberarReservasDosWorkers() {
     await Promise.allSettled([
         pool.query(`UPDATE guardiao_fila SET status='pendente',reservado_em=NULL,worker_id=NULL,proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='processando' AND worker_id=$1`, [guardiaoWorkerId]),
+        pool.query(`DELETE FROM guardiao_veiculo_locks WHERE worker_id=$1`, [guardiaoWorkerId]),
+        pool.query(`UPDATE indexacao_regional_fila SET status='pendente',reservado_em=NULL,worker_id=NULL,proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='processando' AND worker_id=$1`, [indexacaoRegionalWorkerId]),
         pool.query(`UPDATE notificacoes_outbox SET status='pendente',reservado_em=NULL,worker_id=NULL,proxima_tentativa_em=CURRENT_TIMESTAMP WHERE status='tentando' AND worker_id=$1`, [notificacaoWorkerId])
     ]);
 }
