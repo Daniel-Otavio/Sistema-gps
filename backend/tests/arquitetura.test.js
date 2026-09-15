@@ -54,6 +54,15 @@ test('dashboard não consulta Nominatim diretamente', () => {
     assert.equal(tela.includes('/api/geocodificar'), true);
 });
 
+test('resumo automático do dashboard minimiza dados pessoais e cadastrais', () => {
+    const resumo = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'dashboard-summary.js'), 'utf8');
+    for (const campo of ['u.email', 'u.login', 'email_verificado', 'consumo_medio_km_l', 'preco_combustivel_ref', 'v.comprimento', 'v.largura', 'v.peso']) {
+        assert.equal(resumo.includes(campo), false, `campo excessivo no resumo: ${campo}`);
+    }
+    assert.equal(resumo.includes('g.dados\n'), false);
+    assert.match(resumo, /motoristas:\[\]/);
+});
+
 test('sessão web usa cookie HttpOnly e exige CSRF em alterações', async () => {
     const pool = { query: async () => ({ rows: [{ ativo: true, token_version: 1 }] }) };
     const auth = criarAutenticacao({ pool, jwtSecret: 'segredo-de-teste-com-tamanho-suficiente' });
