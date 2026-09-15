@@ -6,10 +6,14 @@ const { carregarMigracoes } = require('../src/database/migration-loader');
 const { classificarPosicaoGps } = require('../src/services/gps/quality');
 const { normalizarConsulta } = require('../src/services/geocoding/nominatim');
 const { criarAutenticacao } = require('../src/auth/session-auth');
+const { limpar } = require('../src/observability/logger');
 
 test('descobre e ordena automaticamente as migrações numeradas', () => {
     const migracoes = carregarMigracoes(path.join(__dirname, '..', 'database', 'migrations'));
-    assert.deepEqual(migracoes.map(item => item.numero), ['001', '002', '003', '004', '005', '006', '007']);
+    assert.deepEqual(
+        migracoes.map(item => item.numero),
+        migracoes.map((_, indice) => String(indice + 1).padStart(3, '0'))
+    );
     assert.equal(new Set(migracoes.map(item => item.versao)).size, migracoes.length);
 });
 
@@ -68,4 +72,30 @@ test('sessão web usa cookie HttpOnly e exige CSRF em alterações', async () =>
     auth.protegerCsrf(reqSemCsrf, resSemCsrf, () => assert.fail('CSRF ausente não pode prosseguir'));
     assert.equal(status, 403);
     assert.match(body.erro, /CSRF/);
+});
+
+test('logger remove credenciais e endereços de banco', () => {
+    const seguro = limpar({
+        authorization: 'Bearer token-super-secreto',
+        senha: 'minha-senha',
+        mensagem: 'falhou postgresql://usuario:senha@host:5432/banco'
+    });
+    assert.equal(seguro.authorization, '[PROTEGIDO]');
+    assert.equal(seguro.senha, '[PROTEGIDO]');
+    assert.equal(seguro.mensagem.includes('usuario:senha'), false);
+});
+
+test('contrato OpenAPI cobre integração empresarial principal', () => {
+    const contrato = fs.readFileSync(path.join(__dirname, '..', 'docs', 'openapi.yaml'), 'utf8');
+    assert.match(contrato, /openapi: 3\.1\.0/);
+    assert.match(contrato, /\/integracoes\/gps\/localizacao:/);
+    assert.match(contrato, /X-Guardiao-Signature/);
+    assert.match(contrato, /\/dashboard\/resumo:/);
+});
+
+test('saúde operacional publica SLA e filas sem expor SQL', () => {
+    const rota = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'system-observability.js'), 'utf8');
+    assert.match(rota, /sla_guardiao/);
+    assert.match(rota, /dentro_sla_percentual/);
+    assert.match(rota, /reprocessar-falhas/);
 });
