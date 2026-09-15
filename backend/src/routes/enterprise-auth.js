@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 
-function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, emitirTokenSessao }) {
+function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, emitirTokenSessao, estabelecerSessaoWeb, limparSessaoWeb }) {
     const router = express.Router();
 
     router.post('/integracoes/portal/login', cadastroLimiter, async (req, res) => {
@@ -24,7 +24,9 @@ function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, 
                 return res.status(401).json({ erro: 'Credenciais empresariais inválidas.' });
             }
             const usuario = { id: u.id, nome: u.nome, tipo: 'empresa_usuario', perfil: u.perfil, id_empresa: u.id_empresa, empresa: u.empresa_nome, token_version: u.token_version };
-            return res.json({ token: await emitirTokenSessao(usuario, '2h'), usuario });
+            const token = await emitirTokenSessao(usuario, '2h');
+            const csrfToken = estabelecerSessaoWeb(req, res, token);
+            return res.json({ ...(csrfToken ? { csrfToken } : { token }), usuario });
         } catch {
             return res.status(500).json({ erro: 'Não foi possível iniciar a sessão.' });
         }
@@ -32,6 +34,7 @@ function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, 
 
     router.post('/auth/logout', autenticar, async (req, res) => {
         await pool.query(`UPDATE auth_sessoes SET revogada_em=CURRENT_TIMESTAMP,motivo_revogacao='logout' WHERE jti=$1`, [req.usuario.jti]);
+        limparSessaoWeb(res);
         return res.json({ mensagem: 'Sessão encerrada.' });
     });
 
@@ -39,6 +42,7 @@ function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, 
         const tabela = req.usuario.tipo === 'empresa_usuario' ? 'empresa_usuarios' : 'usuarios';
         await pool.query(`UPDATE ${tabela} SET token_version=token_version+1 WHERE id=$1`, [req.usuario.id]);
         await pool.query(`UPDATE auth_sessoes SET revogada_em=CURRENT_TIMESTAMP,motivo_revogacao='logout_todos' WHERE tipo_usuario=$1 AND id_usuario=$2 AND revogada_em IS NULL`, [req.usuario.tipo, req.usuario.id]);
+        limparSessaoWeb(res);
         return res.json({ mensagem: 'Todas as sessões foram encerradas.' });
     });
 
@@ -49,7 +53,8 @@ function criarRotasAutenticacaoEmpresarial({ pool, autenticar, cadastroLimiter, 
         delete usuario.jti;
         const token = await emitirTokenSessao(usuario, req.usuario.tipo === 'empresa_usuario' ? '2h' : '8h');
         await pool.query(`UPDATE auth_sessoes SET revogada_em=CURRENT_TIMESTAMP,motivo_revogacao='token_renovado' WHERE jti=$1`, [req.usuario.jti]);
-        return res.json({ token });
+        const csrfToken = estabelecerSessaoWeb(req, res, token);
+        return res.json(csrfToken ? { csrfToken } : { token });
     });
 
     router.post('/admin/sessoes/revogar', autenticar, async (req, res) => {
