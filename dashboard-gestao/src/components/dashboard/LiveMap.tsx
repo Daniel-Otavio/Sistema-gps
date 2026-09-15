@@ -3,7 +3,12 @@ import "leaflet/dist/leaflet.css";
 
 const card = "rounded-xl border border-border bg-card shadow-card";
 
-export function LiveMap({ items = [], geojson, risks = [] }: ApiValue) {
+export function LiveMap({
+  items = [],
+  geojson,
+  risks = [],
+  cacheKey,
+}: ApiValue) {
   const host = useRef<HTMLDivElement | null>(null),
     mapRef = useRef<ApiValue>(null),
     layerRef = useRef<ApiValue>(null),
@@ -15,12 +20,43 @@ export function LiveMap({ items = [], geojson, risks = [] }: ApiValue) {
       if (!host.current || mapRef.current) return;
       const L = await import("leaflet");
       if (!alive || !host.current) return;
+      const storageKey = cacheKey ? `gps:map:view:${String(cacheKey)}` : "";
+      let initialView: ApiValue = null;
+      try {
+        if (storageKey)
+          initialView = JSON.parse(
+            sessionStorage.getItem(storageKey) || "null",
+          );
+      } catch {
+        initialView = null;
+      }
       const map = L.map(host.current, {
         zoomControl: false,
         attributionControl: true,
         maxZoom: 18,
         zoomSnap: 1,
-      }).setView([-19.394, -40.064], 13);
+      }).setView(
+        Number.isFinite(Number(initialView?.lat)) &&
+          Number.isFinite(Number(initialView?.lng))
+          ? [Number(initialView.lat), Number(initialView.lng)]
+          : [-19.394, -40.064],
+        Number.isFinite(Number(initialView?.zoom))
+          ? Number(initialView.zoom)
+          : 13,
+      );
+      if (initialView) hasInitialFitRef.current = true;
+      map.on("moveend", () => {
+        if (!storageKey) return;
+        const center = map.getCenter();
+        sessionStorage.setItem(
+          storageKey,
+          JSON.stringify({
+            lat: center.lat,
+            lng: center.lng,
+            zoom: map.getZoom(),
+          }),
+        );
+      });
       L.control.zoom({ position: "topright" }).addTo(map);
       L.tileLayer(
         "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -53,7 +89,7 @@ export function LiveMap({ items = [], geojson, risks = [] }: ApiValue) {
         mapRef.current = null;
       }
     };
-  }, []);
+  }, [cacheKey]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
