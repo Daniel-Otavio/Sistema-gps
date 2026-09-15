@@ -49,12 +49,14 @@ function DashboardPage() {
   const [active, setActive] = useState("dashboard");
   const [data, setData] = useState(empty);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const refresh = useCallback(async () => {
     if (!session) return;
     setBusy(true);
     try {
       setData(await loadDashboard(session.token, session.usuario));
+      setLoaded(true);
       setError("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro ao atualizar");
@@ -143,6 +145,36 @@ function DashboardPage() {
     }
     return features.length ? { type: "FeatureCollection", features } : null;
   }, [running, data.rotas]);
+  const [cachedActiveRoute, setCachedActiveRoute] = useState<ApiValue>(null);
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("gps:map:dashboard:active-routes");
+      if (saved) setCachedActiveRoute(JSON.parse(saved));
+    } catch {
+      sessionStorage.removeItem("gps:map:dashboard:active-routes");
+    }
+  }, []);
+  useEffect(() => {
+    if (!activeRouteGeoJson) return;
+    setCachedActiveRoute(activeRouteGeoJson);
+    try {
+      sessionStorage.setItem(
+        "gps:map:dashboard:active-routes",
+        JSON.stringify(activeRouteGeoJson),
+      );
+    } catch {
+      // Mantém a última rota apenas em memória se o navegador limitar o cache.
+    }
+  }, [activeRouteGeoJson]);
+  useEffect(() => {
+    if (!loaded || running.length || activeRouteGeoJson) return;
+    setCachedActiveRoute(null);
+    try {
+      sessionStorage.removeItem("gps:map:dashboard:active-routes");
+    } catch {
+      // Sem armazenamento disponível.
+    }
+  }, [loaded, running.length, activeRouteGeoJson]);
   const runningVehicles = useMemo(
     () =>
       running
@@ -299,7 +331,8 @@ function DashboardPage() {
                   items={
                     runningVehicles.length ? runningVehicles : data.localizacoes
                   }
-                  geojson={activeRouteGeoJson}
+                  geojson={activeRouteGeoJson || cachedActiveRoute}
+                  cacheKey="dashboard"
                 />
               </div>
               <section className="rounded-xl border border-border bg-card">
