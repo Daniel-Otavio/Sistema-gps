@@ -1,0 +1,28 @@
+# Segredos e configurações locais
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+senhas.txt
+**/senhas.txt
+*.pem
+*.key
+
+# Dependências e artefatos
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.output/
+**/.output/
+coverage/
+*.log
+
+# Arquivos locais e temporários
+tmp/
+output/
+*.zip
+.DS_Store
+Thumbs.db
