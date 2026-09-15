@@ -17,6 +17,7 @@ import {
   login,
   logout,
   loadDashboard,
+  loadDashboardLocations,
   readSession,
   type ApiData,
   type Session,
@@ -64,8 +65,37 @@ function DashboardPage() {
   useEffect(() => {
     refresh();
     if (!session) return;
-    const id = setInterval(refresh, 10000);
-    return () => clearInterval(id);
+    const generalId = setInterval(refresh, 60000);
+    const locationId = setInterval(async () => {
+      try {
+        const localizacoes = await loadDashboardLocations(session.token);
+        setData((current) => ({
+          ...current,
+          localizacoes,
+          viagens: current.viagens.map((viagem) => {
+            const posicao = localizacoes.find(
+              (item) =>
+                String(item.id) === String(viagem.id_veiculo) ||
+                String(item.placa) === String(viagem.placa),
+            );
+            return posicao
+              ? {
+                  ...viagem,
+                  lat: posicao.lat,
+                  lon: posicao.lon,
+                  ultima_atualizacao: posicao.ultima_atualizacao,
+                }
+              : viagem;
+          }),
+        }));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Erro ao atualizar posições");
+      }
+    }, 10000);
+    return () => {
+      clearInterval(generalId);
+      clearInterval(locationId);
+    };
   }, [session, refresh]);
   const live = data.localizacoes.filter(recent);
   const running = data.viagens.filter((v) => v.status === "em_andamento");
