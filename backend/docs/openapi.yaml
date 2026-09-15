@@ -1,0 +1,305 @@
+openapi: 3.1.0
+info:
+  title: Guardião - API de Segurança Logística
+  version: 1.0.0
+  description: Contrato empresarial para telemetria, análise preventiva e operação do Guardião.
+servers:
+  - url: https://sistema-gps-cpf7.onrender.com
+    description: Produção
+tags:
+  - name: Autenticação
+  - name: Telemetria
+  - name: Guardião
+  - name: Dashboard
+  - name: Alertas
+paths:
+  /integracoes/portal/login:
+    post:
+      tags: [Autenticação]
+      summary: Inicia uma sessão empresarial
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [empresa, email, senha]
+              properties:
+                empresa: { type: string }
+                email: { type: string, format: email }
+                senha: { type: string, format: password, writeOnly: true }
+      responses:
+        '200':
+          description: Sessão iniciada por cookie seguro ou token para cliente nativo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Sessao' }
+        '401': { $ref: '#/components/responses/NaoAutorizado' }
+  /auth/logout:
+    post:
+      tags: [Autenticação]
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200': { description: Sessão revogada }
+        '401': { $ref: '#/components/responses/NaoAutorizado' }
+  /integracoes/gps/localizacao:
+    post:
+      tags: [Telemetria]
+      summary: Recebe uma posição idempotente por placa
+      security: [{ apiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PosicaoGps' }
+      responses:
+        '202':
+          description: Posição aceita e processamento enfileirado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PosicaoAceita' }
+        '200':
+          description: Reenvio idempotente já recebido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PosicaoAceita' }
+        '401': { $ref: '#/components/responses/NaoAutorizado' }
+        '422': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '429': { $ref: '#/components/responses/LimiteExcedido' }
+  /integracoes/gps/processamentos/{id}:
+    get:
+      tags: [Guardião]
+      summary: Consulta o resultado assíncrono de uma posição
+      security: [{ apiKey: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: Estado e resultado da análise
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProcessamentoGuardiao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+  /dashboard/resumo:
+    get:
+      tags: [Dashboard]
+      summary: Resumo agregado do painel conforme a empresa da sessão
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200':
+          description: Dados estritamente vinculados à sessão
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResumoDashboard' }
+  /dashboard/localizacoes:
+    get:
+      tags: [Dashboard]
+      summary: Posições atuais para atualização rápida do mapa
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200':
+          description: Lista de posições
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LocalizacaoAtual' }
+  /integracoes/portal/alertas:
+    get:
+      tags: [Alertas]
+      summary: Lista alertas da empresa autenticada
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      responses:
+        '200':
+          description: Alertas empresariais
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Alerta' }
+  /integracoes/portal/alertas/{id}:
+    patch:
+      tags: [Alertas]
+      summary: Atualiza o tratamento operacional de um alerta
+      security: [{ cookieAuth: [] }, { bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [novo, em_analise, monitorando, resolvido, descartado]
+                resolucao: { type: string, maxLength: 1500 }
+      responses:
+        '200': { description: Alerta atualizado }
+        '403': { $ref: '#/components/responses/Proibido' }
+webhooks:
+  alertaGuardiao:
+    post:
+      summary: Alerta assinado enviado ao webhook da empresa
+      parameters:
+        - in: header
+          name: X-Guardiao-Delivery
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: X-Guardiao-Timestamp
+          required: true
+          schema: { type: integer, format: int64 }
+        - in: header
+          name: X-Guardiao-Attempt
+          required: true
+          schema: { type: integer }
+        - in: header
+          name: X-Guardiao-Signature
+          required: true
+          schema: { type: string, example: sha256=hexadecimal }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Alerta' }
+      responses:
+        '2XX': { description: Entrega aceita pela empresa }
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: gps_session
+  schemas:
+    Sessao:
+      type: object
+      required: [usuario]
+      properties:
+        csrfToken: { type: string, description: Enviar em X-CSRF-Token nas alterações do dashboard }
+        token: { type: string, description: Presente apenas para clientes nativos }
+        usuario:
+          type: object
+          required: [id, nome, tipo]
+          properties:
+            id: { type: integer }
+            nome: { type: string }
+            tipo: { type: string, enum: [admin, empresa_usuario, motorista] }
+            perfil: { type: string, enum: [administrador, supervisor, analista, somente_leitura] }
+            id_empresa: { type: integer }
+    PosicaoGps:
+      type: object
+      required: [placa, sessao_id, sequencia, lat, lon, timestamp_dispositivo]
+      properties:
+        placa: { type: string, pattern: '^[A-Z0-9]{7}$' }
+        sessao_id: { type: string, maxLength: 120 }
+        sequencia: { type: integer, format: int64, minimum: 0 }
+        lat: { type: number, minimum: -90, maximum: 90 }
+        lon: { type: number, minimum: -180, maximum: 180 }
+        timestamp_dispositivo: { type: string, format: date-time }
+        velocidade_kmh: { type: number, minimum: 0 }
+        direcao_graus: { type: number, minimum: 0, maximum: 360 }
+        precisao_m: { type: number, minimum: 0 }
+        altitude_m: { type: number }
+        bateria_percentual: { type: number, minimum: 0, maximum: 100 }
+        carregando: { type: boolean }
+        tipo_internet: { type: string }
+    PosicaoAceita:
+      type: object
+      properties:
+        mensagem: { type: string }
+        request_id: { type: string }
+        processamento_id: { type: integer, format: int64 }
+        placa: { type: string }
+        sessao_id: { type: string }
+        sequencia: { type: integer, format: int64 }
+        duplicada: { type: boolean }
+        qualidade: { type: object, additionalProperties: true }
+        guardiao:
+          type: object
+          properties:
+            status: { type: string, enum: [na_fila, nao_processada] }
+    ProcessamentoGuardiao:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        status: { type: string, enum: [pendente, processando, concluido, falhou] }
+        qualidade: { type: string }
+        tentativas: { type: integer }
+        ultimo_erro: { type: string, nullable: true }
+        resultado: { type: object, additionalProperties: true, nullable: true }
+        criado_em: { type: string, format: date-time }
+        processado_em: { type: string, format: date-time, nullable: true }
+    LocalizacaoAtual:
+      type: object
+      properties:
+        id: { type: integer }
+        placa: { type: string }
+        motorista: { type: string, nullable: true }
+        lat: { type: number, nullable: true }
+        lon: { type: number, nullable: true }
+        ultima_atualizacao: { type: string, format: date-time, nullable: true }
+    Alerta:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        placa: { type: string }
+        nivel: { type: string, enum: [preventivo, atencao, critico, iminente] }
+        tipo_risco: { type: string }
+        distancia_km: { type: number }
+        tempo_estimado_min: { type: number, nullable: true }
+        status_operacional: { type: string }
+        classificacao: { type: string }
+        ativo: { type: boolean }
+        ultimo_evento_em: { type: string, format: date-time }
+    ResumoDashboard:
+      type: object
+      required: [veiculos, motoristas, viagens, localizacoes, alertas, reportes, rotas]
+      properties:
+        veiculos: { type: array, items: { type: object, additionalProperties: true } }
+        motoristas: { type: array, items: { type: object, additionalProperties: true } }
+        viagens: { type: array, items: { type: object, additionalProperties: true } }
+        localizacoes: { type: array, items: { $ref: '#/components/schemas/LocalizacaoAtual' } }
+        alertas: { type: array, items: { $ref: '#/components/schemas/Alerta' } }
+        reportes: { type: array, items: { type: object, additionalProperties: true } }
+        rotas: { type: array, items: { type: object, additionalProperties: true } }
+        atualizado_em: { type: string, format: date-time }
+    Erro:
+      type: object
+      required: [erro]
+      properties:
+        codigo: { type: string }
+        erro: { type: string }
+        request_id: { type: string }
+  responses:
+    NaoAutorizado:
+      description: Credencial ausente, inválida, expirada ou revogada
+      content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } }
+    Proibido:
+      description: Perfil sem permissão
+      content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } }
+    NaoEncontrado:
+      description: Recurso não encontrado no escopo da empresa
+      content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } }
+    RequisicaoInvalida:
+      description: Dados inválidos
+      content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } }
+    LimiteExcedido:
+      description: Limite de requisições excedido
+      content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } }
