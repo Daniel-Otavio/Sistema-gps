@@ -2706,7 +2706,7 @@ app.get('/veiculos', autenticar, async (req, res) => {
                 v.tipo_combustivel,
                 v.preco_combustivel_ref,
                 v.ativo, v.created_at,
-                u.id AS id_motorista, u.nome AS motorista, u.email
+                u.id AS id_motorista, u.nome AS motorista
             FROM veiculos v
             LEFT JOIN usuarios u
                 ON u.id_veiculo = v.id
@@ -2826,10 +2826,8 @@ app.get('/motoristas', autenticar, async (req, res) => {
     try {
         const resultado = await pool.query(`
             SELECT
-                u.id, u.nome, u.login, u.email, u.tipo,
-                u.email_verificado, u.id_veiculo,
-                v.placa, v.frota, v.modelo,
-                v.comprimento, v.largura, v.peso
+                u.id, u.nome, u.tipo, u.id_veiculo,
+                v.placa, v.frota, v.modelo
             FROM usuarios u
             LEFT JOIN veiculos v ON v.id = u.id_veiculo
             WHERE u.tipo = 'motorista'
