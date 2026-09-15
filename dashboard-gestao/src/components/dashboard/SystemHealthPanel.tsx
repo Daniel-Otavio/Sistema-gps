@@ -19,9 +19,21 @@ type Health = {
   tempo_resposta_ms: number;
   servicos: Record<
     string,
-    { status: string; ultima_posicao?: string; ultima_analise?: string }
+    {
+      status: string;
+      ultima_posicao?: string;
+      ultima_analise?: string;
+      ultima_atualizacao?: string;
+      ultima_indexacao?: string;
+      conexoes_total?: number;
+      conexoes_ociosas?: number;
+      aguardando_conexao?: number;
+    }
   >;
   metricas: Record<string, ApiValue>;
+  filas?: Record<string, ApiValue>;
+  dashboard?: ApiValue;
+  sla_guardiao?: ApiValue;
   empresas: ApiValue[];
   eventos: ApiValue[];
 };
@@ -51,6 +63,7 @@ export function SystemHealthPanel({ token }: { token: string }) {
     [notifications, setNotifications] = useState<ApiValue>(null),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
+    [queueBusy, setQueueBusy] = useState(""),
     [filter, setFilter] = useState("todos");
   const load = useCallback(async () => {
     setBusy(true);
@@ -95,7 +108,7 @@ export function SystemHealthPanel({ token }: { token: string }) {
       id: "banco",
       name: "Banco de dados",
       icon: Database,
-      detail: "Conexão e consultas PostgreSQL",
+      detail: `${data?.servicos?.["banco"]?.conexoes_total || 0} conexões · ${data?.servicos?.["banco"]?.aguardando_conexao || 0} aguardando`,
     },
     {
       id: "telemetria",
@@ -109,7 +122,40 @@ export function SystemHealthPanel({ token }: { token: string }) {
       icon: ShieldCheck,
       detail: `Última análise: ${date(data?.servicos?.["guardiao"]?.ultima_analise)}`,
     },
+    {
+      id: "notificacoes",
+      name: "Notificações",
+      icon: Radio,
+      detail: `${data?.filas?.["notificacoes"]?.pendentes || 0} pendente(s)`,
+    },
+    {
+      id: "indexacao_regional",
+      name: "Catálogo regional",
+      icon: Database,
+      detail: `Última indexação: ${date(data?.servicos?.["indexacao_regional"]?.ultima_indexacao)}`,
+    },
+    {
+      id: "dashboard",
+      name: "Dashboard",
+      icon: Activity,
+      detail: `P95: ${data?.dashboard?.latencia_p95_ms || 0} ms`,
+    },
   ];
+  const reprocess = async (
+    tipo: "guardiao" | "notificacoes" | "indexacao_regional",
+  ) => {
+    setQueueBusy(tipo);
+    try {
+      await apiRequest(`/admin/filas/${tipo}/reprocessar-falhas`, token, {
+        method: "POST",
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Falha ao reprocessar fila");
+    } finally {
+      setQueueBusy("");
+    }
+  };
   return (
     <main className="flex-1 overflow-y-auto p-5">
       <div className="mb-5 flex items-center gap-3">
@@ -177,6 +223,136 @@ export function SystemHealthPanel({ token }: { token: string }) {
           </div>
         ))}
       </div>
+      <div className="mt-4 grid gap-3 xl:grid-cols-3">
+        {(["guardiao", "notificacoes", "indexacao_regional"] as const).map(
+          (tipo) => {
+            const fila = data?.filas?.[tipo] || {};
+            return (
+              <section key={tipo} className={`${card} p-4`}>
+                <div className="flex items-center gap-2">
+                  <b className="capitalize">Fila do {tipo}</b>
+                  <span
+                    className={`ml-auto rounded-full border px-2 py-1 text-[10px] ${tone(Number(fila.falhas_permanentes || 0) ? "atencao" : "operacional")}`}
+                  >
+                    {fila.falhas_permanentes || 0} falha(s)
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                  <span>
+                    Pendentes:{" "}
+                    <b className="text-foreground">{fila.pendentes || 0}</b>
+                  </span>
+                  <span>
+                    Processando:{" "}
+                    <b className="text-foreground">{fila.processando || 0}</b>
+                  </span>
+                  <span>
+                    Mais antigo:{" "}
+                    <b className="text-foreground">
+                      {fila.item_mais_antigo_seg || 0}s
+                    </b>
+                  </span>
+                  <span>
+                    Tempo médio:{" "}
+                    <b className="text-foreground">
+                      {fila.tempo_medio_ms || 0}ms
+                    </b>
+                  </span>
+                </div>
+                <button
+                  disabled={
+                    !Number(fila.falhas_permanentes || 0) || Boolean(queueBusy)
+                  }
+                  onClick={() => reprocess(tipo)}
+                  className="mt-4 rounded-lg border border-primary px-3 py-2 text-xs text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {queueBusy === tipo
+                    ? "Reprocessando..."
+                    : "Reprocessar falhas"}
+                </button>
+              </section>
+            );
+          },
+        )}
+        <section className={`${card} p-4`}>
+          <b>Desempenho do dashboard · 24 h</b>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+            <span>
+              Chamadas:{" "}
+              <b className="text-foreground">
+                {data?.dashboard?.chamadas_24h || 0}
+              </b>
+            </span>
+            <span>
+              Linhas médias:{" "}
+              <b className="text-foreground">
+                {data?.dashboard?.linhas_medias || 0}
+              </b>
+            </span>
+            <span>
+              Média:{" "}
+              <b className="text-foreground">
+                {data?.dashboard?.latencia_media_ms || 0}ms
+              </b>
+            </span>
+            <span>
+              P95:{" "}
+              <b className="text-foreground">
+                {data?.dashboard?.latencia_p95_ms || 0}ms
+              </b>
+            </span>
+            <span>
+              Máxima:{" "}
+              <b className="text-foreground">
+                {data?.dashboard?.latencia_maxima_ms || 0}ms
+              </b>
+            </span>
+          </div>
+        </section>
+      </div>
+      <section className={`${card} mt-4 p-4`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div>
+            <b>SLA do Guardião · últimas 24 horas</b>
+            <p className="text-xs text-muted-foreground">
+              Meta de análise em até {data?.sla_guardiao?.meta_ms || 5000} ms.
+            </p>
+          </div>
+          <span
+            className={`ml-auto rounded-full border px-3 py-1 text-xs font-bold ${tone(Number(data?.sla_guardiao?.dentro_sla_percentual || 0) >= 95 ? "operacional" : "atencao")}`}
+          >
+            {data?.sla_guardiao?.dentro_sla_percentual || 0}% dentro do prazo
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+          {[
+            ["Recebidas", data?.sla_guardiao?.posicoes_recebidas || 0],
+            ["Analisadas", data?.sla_guardiao?.posicoes_analisadas || 0],
+            [
+              "Disponibilidade",
+              `${data?.sla_guardiao?.disponibilidade_percentual || 0}%`,
+            ],
+            ["P95", `${data?.sla_guardiao?.latencia_p95_ms || 0} ms`],
+            ["Completas", data?.sla_guardiao?.analises_completas || 0],
+            [
+              "Limitadas/degradadas",
+              Number(data?.sla_guardiao?.analises_limitadas || 0) +
+                Number(data?.sla_guardiao?.analises_degradadas || 0),
+            ],
+            [
+              "Alertas entregues/falhos",
+              `${data?.sla_guardiao?.alertas_entregues || 0}/${data?.sla_guardiao?.alertas_falhos || 0}`,
+            ],
+          ].map(([label, value]) => (
+            <div key={String(label)} className="rounded-lg bg-surface-2 p-3">
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                {label}
+              </p>
+              <b className="mt-1 block text-lg">{value}</b>
+            </div>
+          ))}
+        </div>
+      </section>
       <section className={`${card} mt-4`}>
         <div className="flex items-center border-b border-border p-4">
           <div>
