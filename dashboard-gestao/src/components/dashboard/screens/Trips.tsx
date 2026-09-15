@@ -43,6 +43,26 @@ export function Trips({ token, data, refreshDashboard }: P) {
       saida_prevista: "",
     }),
     [msg, setMsg] = useState("");
+  useEffect(() => {
+    try {
+      const id = sessionStorage.getItem("gps:map:trips:selected-route");
+      if (id) setF((current: ApiValue) => ({ ...current, id_rota: id }));
+    } catch {
+      // Armazenamento pode estar indisponível em modo privado restrito.
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      if (f.id_rota)
+        sessionStorage.setItem(
+          "gps:map:trips:selected-route",
+          String(f.id_rota),
+        );
+      else sessionStorage.removeItem("gps:map:trips:selected-route");
+    } catch {
+      // A seleção continua funcionando somente em memória.
+    }
+  }, [f.id_rota]);
   const selectedRoute = r.items.find(
     (route: ApiValue) => String(route.id) === String(f.id_rota),
   );
@@ -71,6 +91,7 @@ export function Trips({ token, data, refreshDashboard }: P) {
         <LiveMap
           items={data.localizacoes}
           geojson={selectedRoute?.dados_geojson || null}
+          cacheKey="viagens"
         />
         <div className="mt-2 flex min-h-9 items-center rounded-lg border border-border bg-card px-3 text-xs">
           {selectedRoute ? (

@@ -41,6 +41,26 @@ export function Routes({ token, data }: P) {
     }),
     [route, setRoute] = useState<ApiValue>(null),
     [msg, setMsg] = useState("");
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("gps:map:routes:geometry");
+      if (saved) setRoute(JSON.parse(saved));
+    } catch {
+      sessionStorage.removeItem("gps:map:routes:geometry");
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      if (route)
+        sessionStorage.setItem(
+          "gps:map:routes:geometry",
+          JSON.stringify(route),
+        );
+      else sessionStorage.removeItem("gps:map:routes:geometry");
+    } catch {
+      // Rotas muito grandes continuam disponíveis enquanto a tela permanecer aberta.
+    }
+  }, [route]);
   async function calculate(e: ApiValue) {
     e.preventDefault();
     try {
@@ -136,7 +156,11 @@ export function Routes({ token, data }: P) {
           <p className="text-xs text-primary">{msg}</p>
         </form>
         <div>
-          <LiveMap items={data.localizacoes || []} geojson={route} />
+          <LiveMap
+            items={data.localizacoes || []}
+            geojson={route}
+            cacheKey="rotas"
+          />
           <div className="mt-3">
             <Cards
               items={q.items}
