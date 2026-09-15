@@ -1,7 +1,8 @@
 export function renderErrorPage(): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="pt-BR" translate="no" class="notranslate">
   <head>
+    <meta name="google" content="notranslate" />
     <meta charset="utf-8" />
     <title>This page didn't load</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
