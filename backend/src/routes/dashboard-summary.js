@@ -8,8 +8,8 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
     async function buscarLocalizacoes(idEmpresa = null) {
         const filtro = idEmpresa === null ? '' : 'JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id AND ev.id_empresa=$1';
         const params = idEmpresa === null ? [] : [idEmpresa];
-        return (await pool.query(`SELECT v.id,u.id AS id_motorista,u.nome,v.placa,v.frota,v.modelo,
-            v.comprimento,v.largura,v.peso,l.lat,l.lon,l.ultima_atualizacao
+        return (await pool.query(`SELECT v.id,u.nome,v.placa,v.frota,v.modelo,
+            l.lat,l.lon,l.ultima_atualizacao
             FROM veiculos v ${filtro}
             LEFT JOIN LATERAL (SELECT id,nome FROM usuarios WHERE tipo='motorista' AND id_veiculo=v.id ORDER BY id LIMIT 1) u ON TRUE
             LEFT JOIN LATERAL (SELECT lat,lon,ultima_atualizacao FROM localizacoes
@@ -39,18 +39,10 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
             const idEmpresa = empresarial ? req.usuario.id_empresa : null;
             const params = empresarial ? [idEmpresa] : [];
             const vinculo = empresarial ? 'JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id AND ev.id_empresa=$1' : '';
-            const [veiculos, motoristas, viagens, localizacoes, eventos, reportes, rotas] = await Promise.all([
-                medir('veiculos', pool.query(`SELECT v.id,v.placa,v.frota,v.modelo,v.comprimento,v.largura,v.peso,
-                    v.consumo_medio_km_l,v.tipo_combustivel,v.preco_combustivel_ref,v.ativo,v.created_at,
-                    u.id AS id_motorista,u.nome AS motorista,u.email FROM veiculos v ${vinculo}
-                    LEFT JOIN usuarios u ON u.id_veiculo=v.id AND u.tipo='motorista' ORDER BY v.placa`, params)),
-                medir('motoristas', pool.query(`SELECT DISTINCT u.id,u.nome,u.login,u.email,u.tipo,u.email_verificado,u.id_veiculo,
-                    v.placa,v.frota,v.modelo,v.comprimento,v.largura,v.peso FROM usuarios u
-                    JOIN veiculos v ON v.id=u.id_veiculo ${vinculo}
-                    WHERE u.tipo='motorista' ORDER BY u.nome`, params)),
-                medir('viagens', pool.query(`SELECT vg.id,vg.id_rota,vg.id_veiculo,vg.id_motorista,vg.status,vg.carga,
-                    vg.altura_total,vg.peso_total,vg.saida_prevista,vg.saida_real,vg.chegada_prevista,
-                    vg.chegada_real,vg.rota_aprovada_geojson,v.placa,v.frota,v.modelo,u.nome AS motorista,
+            const [veiculos, viagens, localizacoes, eventos, reportes, rotas] = await Promise.all([
+                medir('veiculos', pool.query(`SELECT v.id,v.placa,v.frota,v.modelo,v.ativo FROM veiculos v ${vinculo} ORDER BY v.placa`, params)),
+                medir('viagens', pool.query(`SELECT vg.id,vg.id_rota,vg.id_veiculo,vg.status,
+                    vg.saida_prevista,vg.saida_real,vg.chegada_prevista,vg.chegada_real,vg.rota_aprovada_geojson,v.placa,v.frota,v.modelo,
                     r.nome AS rota_nome,r.origem,r.destino,
                     COALESCE(vg.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson) AS dados_geojson,
                     l.lat,l.lon,l.ultima_atualizacao FROM viagens vg JOIN veiculos v ON v.id=vg.id_veiculo
@@ -63,13 +55,14 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
                 medir('localizacoes', buscarLocalizacoes(idEmpresa)).then(rows => ({ rows, rowCount:rows.length })),
                 medir('alertas', pool.query(empresarial
                     ? `SELECT g.id,'guardiao_sombra' AS tipo,CASE WHEN g.nivel IN ('iminente','critico') THEN 'alta' ELSE 'media' END AS severidade,
-                        g.nivel,g.placa,g.id_veiculo,g.distancia_km,g.tempo_estimado_min,g.status_operacional,g.ultimo_evento_em,g.tipo_risco,g.dados
+                        g.nivel,g.placa,g.id_veiculo,g.distancia_km,g.tempo_estimado_min,g.status_operacional,g.ultimo_evento_em,g.tipo_risco,
+                        g.dados->'restricao' AS restricao,g.dados->>'metodo_analise' AS metodo_analise
                         FROM guardiao_sombra_eventos g WHERE g.id_empresa=$1 ORDER BY g.ultimo_evento_em DESC LIMIT 1000`
                     : `SELECT g.id,'guardiao_sombra' AS tipo,CASE WHEN g.nivel IN ('iminente','critico') THEN 'alta' ELSE 'media' END AS severidade,
-                        g.nivel,g.placa,g.id_veiculo,g.distancia_km,g.tempo_estimado_min,g.status_operacional,g.ultimo_evento_em,g.tipo_risco,g.dados,e.nome AS empresa
+                        g.nivel,g.placa,g.id_veiculo,g.distancia_km,g.tempo_estimado_min,g.status_operacional,g.ultimo_evento_em,g.tipo_risco,
+                        g.dados->'restricao' AS restricao,g.dados->>'metodo_analise' AS metodo_analise,e.nome AS empresa
                         FROM guardiao_sombra_eventos g JOIN empresas_integracao e ON e.id=g.id_empresa ORDER BY g.ultimo_evento_em DESC LIMIT 1000`, params)),
-                medir('reportes', pool.query(`SELECT rp.id,rp.tipo,rp.status_reporte,rp.data_hora,rp.lat,rp.lng,
-                    rp.expira_em,rp.resolvido_em,v.placa,u.nome AS motorista FROM reportes rp JOIN veiculos v ON v.id=rp.id_veiculo
+                medir('reportes', pool.query(`SELECT rp.id,rp.tipo,rp.status_reporte,rp.data_hora,v.placa,u.nome AS motorista FROM reportes rp JOIN veiculos v ON v.id=rp.id_veiculo
                     ${vinculo} LEFT JOIN usuarios u ON u.id=rp.id_motorista ORDER BY rp.data_hora DESC LIMIT 1000`, params)),
                 medir('rotas', pool.query(`SELECT DISTINCT r.id,r.nome,r.origem,r.destino,r.status,r.criada_em,r.dados_geojson
                     FROM rotas r LEFT JOIN viagens vg ON vg.id_rota=r.id
@@ -78,7 +71,7 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
             ]);
             const alertas = eventos.rows.map(g => ({ ...g,
                 mensagem:`Guardião ${g.tipo_risco || 'restrição'} a ${Number(g.distancia_km || 0).toFixed(2)} km`,
-                restricao:g.dados?.restricao || null, metodo_analise:g.dados?.metodo_analise || null }));
+                restricao:g.restricao || null, metodo_analise:g.metodo_analise || null }));
             if (!empresarial) {
                 const agora = Date.now();
                 for (const viagem of viagens.rows) {
@@ -114,7 +107,7 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
                     distancia_km:g.distancia_km, tempo_estimado_min:g.tempo_estimado_min,
                     incompatibilidade:g.dados?.incompatibilidade || null, restricao:g.dados?.restricao || null });
             }
-            const linhas = veiculos.rowCount + motoristas.rowCount + viagens.rowCount +
+            const linhas = veiculos.rowCount + viagens.rowCount +
                 localizacoes.rows.length + eventos.rowCount + reportes.rowCount + rotas.rowCount;
             const duracaoMs = Date.now() - inicio;
             for (const [consulta, tempoMs] of Object.entries(consultasMs)) {
@@ -124,7 +117,7 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
             }
             await registrarLogSistema({ nivel:duracaoMs >= 3000 ? 'warn' : 'info', origem:'dashboard_resumo',
                 mensagem:'Resumo do dashboard processado', detalhes:{ linhas, empresarial, consultas_ms:consultasMs }, req, duracaoMs });
-            res.json({ veiculos:veiculos.rows, motoristas:motoristas.rows, viagens:viagens.rows,
+            res.json({ veiculos:veiculos.rows, motoristas:[], viagens:viagens.rows,
                 localizacoes:localizacoes.rows, alertas, reportes:reportes.rows, rotas:rotas.rows,
                 atualizado_em:new Date().toISOString() });
         } catch (erro) { next(erro); }
