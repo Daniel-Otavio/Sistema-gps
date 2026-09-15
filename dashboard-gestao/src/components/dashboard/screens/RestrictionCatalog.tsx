@@ -32,6 +32,8 @@ import {
 
 export function RestrictionCatalog({ token }: P) {
   const q = useLoad(token, "/restricoes-validadas"),
+    catalog = useLoad(token, "/restricoes-catalogo?status=pendentes"),
+    discardedCatalog = useLoad(token, "/restricoes-catalogo?status=descartada"),
     trips = useLoad(token, "/monitoramento/viagens"),
     [filter, setFilter] = useState("todas"),
     [triageFilter, setTriageFilter] = useState("atencao"),
@@ -40,6 +42,19 @@ export function RestrictionCatalog({ token }: P) {
     [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
     [editing, setEditing] = useState<ApiValue>(null),
+    [evidenceEditing, setEvidenceEditing] = useState<ApiValue>(null),
+    [historyCatalog, setHistoryCatalog] = useState<ApiValue>(null),
+    [reviewHistory, setReviewHistory] = useState<ApiValue[]>([]),
+    [evidence, setEvidence] = useState<ApiValue>({
+      tipo: "foto",
+      url: "",
+      descricao: "",
+      fonte: "",
+      conteudo_base64: "",
+      mime_type: "",
+      nome_arquivo: "",
+      capturada_em: new Date().toISOString().slice(0, 16),
+    }),
     [validation, setValidation] = useState<ApiValue>({
       limite_altura: "",
       limite_largura: "",
@@ -87,14 +102,14 @@ export function RestrictionCatalog({ token }: P) {
         "POST",
         {},
       );
-      await loadCandidates();
+      await Promise.all([loadCandidates(), catalog.load()]);
       const t = r.triagem || {},
         aviso =
           Array.isArray(r.avisos) && r.avisos.length
             ? ` · Aviso: ${r.avisos.join("; ")}`
             : "";
       setMessage(
-        `${r.candidatos_na_rota || 0} no corredor de 80 m · ${t.alta_prioridade || 0} alta prioridade · ${t.divergencia_fontes || 0} divergências · ${t.possivel_risco || 0} possíveis riscos · ${t.inventario || 0} inventário · ${r.fora_do_corredor || 0} fora do corredor descartados${aviso}`,
+        `${r.estruturas_brutas_no_corredor || r.candidatos_na_rota || 0} estruturas encontradas, consolidadas em ${r.estruturas_agrupadas || r.candidatos_na_rota || 0} pontos (${r.duplicadas_consolidadas || 0} duplicadas agrupadas) · ${t.alta_prioridade || 0} alta prioridade · ${t.divergencia_fontes || 0} divergências · ${t.possivel_risco || 0} possíveis riscos · ${r.fora_do_corredor || 0} fora do corredor${aviso}`,
       );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Falha na varredura ANTT");
@@ -120,7 +135,9 @@ export function RestrictionCatalog({ token }: P) {
     try {
       await act(
         token,
-        `/restricoes-candidatas/${editing.id}/validar-global`,
+        editing.origem_validacao === "catalogo_regional"
+          ? `/restricoes-catalogo/${editing.id}/validar`
+          : `/restricoes-candidatas/${editing.id}/validar-global`,
         "POST",
         Object.fromEntries(
           Object.entries(validation).map(([k, v]) => [
@@ -134,8 +151,12 @@ export function RestrictionCatalog({ token }: P) {
         ),
       );
       setEditing(null);
-      await Promise.all([loadCandidates(), q.load()]);
-      setMessage("Restrição validada e adicionada à base global de segurança.");
+      await Promise.all([loadCandidates(), q.load(), catalog.load()]);
+      setMessage(
+        editing.origem_validacao === "catalogo_regional"
+          ? "Restrição regional validada por revisão humana para a empresa responsável."
+          : "Restrição validada e adicionada à base de segurança.",
+      );
     } catch (e) {
       setMessage(e instanceof Error ? e.message : "Falha ao validar");
     } finally {
@@ -168,6 +189,77 @@ export function RestrictionCatalog({ token }: P) {
     } catch (e) {
       setMessage(
         e instanceof Error ? e.message : "Falha ao programar restrição",
+      );
+    }
+  };
+  const addEvidence = async () => {
+    if (!evidenceEditing) return;
+    setBusy(true);
+    try {
+      await act(
+        token,
+        `/restricoes-catalogo/${evidenceEditing.id}/evidencias`,
+        "POST",
+        {
+          ...evidence,
+          lat: evidenceEditing.lat,
+          lng: evidenceEditing.lng,
+          capturada_em: new Date(evidence.capturada_em).toISOString(),
+        },
+      );
+      await Promise.all([catalog.load(), discardedCatalog.load()]);
+      setEvidenceEditing(null);
+      setEvidence({
+        tipo: "foto",
+        url: "",
+        descricao: "",
+        fonte: "",
+        conteudo_base64: "",
+        mime_type: "",
+        nome_arquivo: "",
+        capturada_em: new Date().toISOString().slice(0, 16),
+      });
+      setMessage("Evidência anexada. O candidato continua em revisão humana.");
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Falha ao anexar evidência");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reviewCatalog = async (x: ApiValue, decisao: string) => {
+    const label =
+      decisao === "descartar"
+        ? "Motivo do descarte"
+        : "Conclusão provisória da revisão";
+    const observacao = prompt(`${label} (mínimo 10 caracteres):`, "");
+    if (!observacao) return;
+    try {
+      await act(token, `/restricoes-catalogo/${x.id}/revisao`, "PATCH", {
+        decisao,
+        observacao,
+      });
+      await Promise.all([catalog.load(), discardedCatalog.load()]);
+      setMessage(
+        decisao === "descartar"
+          ? "Candidato descartado com auditoria."
+          : "Candidato mantido como possível risco.",
+      );
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Falha ao registrar revisão");
+    }
+  };
+  const showReviewHistory = async (x: ApiValue) => {
+    try {
+      setReviewHistory(
+        await apiRequest<ApiValue[]>(
+          `/restricoes-catalogo/${x.id}/revisoes`,
+          token,
+        ),
+      );
+      setHistoryCatalog(x);
+    } catch (e) {
+      setMessage(
+        e instanceof Error ? e.message : "Falha ao carregar histórico",
       );
     }
   };
@@ -211,6 +303,310 @@ export function RestrictionCatalog({ token }: P) {
       desc="Varredura de viagens com infraestrutura oficial da ANTT e validação operacional."
       icon={<Navigation className="h-5 w-5" />}
     >
+      <section className={`${card} mb-4 p-4`}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h3 className="font-semibold">Fila inteligente de validação</h3>
+            <p className="text-xs text-muted-foreground">
+              Prioriza estruturas cruzadas com trajetos realmente percorridos,
+              mesmo sem rota planejada.
+            </p>
+          </div>
+          <button
+            onClick={catalog.load}
+            className="ml-auto rounded-lg border border-border p-2"
+            title="Atualizar fila"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${catalog.loading ? "animate-spin" : ""}`}
+            />
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {catalog.items
+            .filter((x: ApiValue) =>
+              ["possivel_risco", "em_revisao"].includes(x.status),
+            )
+            .slice(0, 12)
+            .map((x: ApiValue) => (
+              <article
+                key={x.id}
+                className="rounded-xl border border-border bg-surface-2/40 p-4"
+              >
+                <div className="flex items-start gap-3">
+                  <ShieldAlert
+                    className={
+                      x.prioridade_nivel === "critica"
+                        ? "h-5 w-5 text-status-critico"
+                        : "h-5 w-5 text-status-atencao"
+                    }
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap gap-2">
+                      <b className="text-sm">{x.nome || x.tipo}</b>
+                      <span className="rounded-full bg-status-atencao/10 px-2 py-1 text-[10px] uppercase text-status-atencao">
+                        Possível risco
+                      </span>
+                      <span className="rounded-full bg-primary/10 px-2 py-1 text-[10px] uppercase text-primary">
+                        {x.prioridade_nivel} · {x.prioridade_score}/100
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {x.total_veiculos_expostos || 0} veículos ·{" "}
+                      {x.total_viagens_expostas || 0} viagens ·{" "}
+                      {x.total_passagens || 0} posições próximas
+                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {x.total_ocorrencias || 1} registros agrupados ·{" "}
+                      {(x.fontes || []).length} fontes
+                    </p>
+                    <p
+                      className={`mt-2 text-xs ${["vencida", "sem_evidencia"].includes(x.evidencia_status) ? "text-status-critico" : "text-status-normal"}`}
+                    >
+                      Evidência:{" "}
+                      {x.evidencia_status === "sem_evidencia"
+                        ? "não anexada"
+                        : x.evidencia_status}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase text-muted-foreground">
+                      Não bloqueia nem altera rota antes da validação humana
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-3 border-t border-border pt-3">
+                  <button
+                    onClick={() => setEvidenceEditing(x)}
+                    className="text-xs text-primary"
+                  >
+                    Anexar evidência
+                  </button>
+                  <button
+                    onClick={() => {
+                      const fonte = Array.isArray(x.fontes)
+                        ? x.fontes.find(
+                            (item: ApiValue) =>
+                              item.limite_altura ||
+                              item.limite_largura ||
+                              item.limite_comprimento ||
+                              item.limite_peso,
+                          ) || {}
+                        : {};
+                      setEditing({
+                        ...x,
+                        origem_validacao: "catalogo_regional",
+                      });
+                      setValidation({
+                        limite_altura: fonte.limite_altura || "",
+                        limite_largura: fonte.limite_largura || "",
+                        limite_comprimento: fonte.limite_comprimento || "",
+                        limite_peso: fonte.limite_peso || "",
+                        limite_eixo: "",
+                        evidencia_url: "",
+                        observacao: "",
+                        valida_dias: "180",
+                      });
+                    }}
+                    className="text-xs text-status-normal"
+                  >
+                    Validar para a empresa
+                  </button>
+                  <button
+                    onClick={() => reviewCatalog(x, "manter_possivel")}
+                    className="text-xs text-status-atencao"
+                  >
+                    Manter possível risco
+                  </button>
+                  <button
+                    onClick={() => reviewCatalog(x, "descartar")}
+                    className="text-xs text-status-critico"
+                  >
+                    Descartar
+                  </button>
+                  <button
+                    onClick={() => showReviewHistory(x)}
+                    className="text-xs text-muted-foreground"
+                  >
+                    Histórico
+                  </button>
+                </div>
+              </article>
+            ))}
+          {!catalog.loading &&
+            !catalog.items.some((x: ApiValue) =>
+              ["possivel_risco", "em_revisao"].includes(x.status),
+            ) && (
+              <p className="text-sm text-muted-foreground">
+                A fila está vazia. Execute uma varredura para alimentar o
+                catálogo.
+              </p>
+            )}
+        </div>
+        {discardedCatalog.items.length > 0 && (
+          <div className="mt-4 border-t border-border pt-4">
+            <p className="mb-2 text-xs font-semibold">
+              Descartados recentemente
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {discardedCatalog.items.slice(0, 10).map((x: ApiValue) => (
+                <div
+                  key={x.id}
+                  className="rounded-lg border border-border px-3 py-2 text-xs"
+                >
+                  {x.nome || x.tipo}{" "}
+                  <button
+                    onClick={() => reviewCatalog(x, "iniciar_revisao")}
+                    className="ml-2 text-primary"
+                  >
+                    Reabrir revisão
+                  </button>
+                  <button
+                    onClick={() => showReviewHistory(x)}
+                    className="ml-2 text-muted-foreground"
+                  >
+                    Histórico
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+      {historyCatalog && (
+        <section className={`${card} mb-4 p-5`}>
+          <div className="flex items-center">
+            <div>
+              <h3 className="font-semibold">Histórico da revisão</h3>
+              <p className="text-xs text-muted-foreground">
+                {historyCatalog.nome || historyCatalog.tipo}
+              </p>
+            </div>
+            <button
+              onClick={() => setHistoryCatalog(null)}
+              className="ml-auto text-xs text-muted-foreground"
+            >
+              Fechar
+            </button>
+          </div>
+          <div className="mt-4 space-y-2">
+            {reviewHistory.map((item: ApiValue) => (
+              <div
+                key={item.id}
+                className="rounded-lg border border-border p-3 text-xs"
+              >
+                <b>{item.revisado_por_nome || "Usuário removido"}</b> ·{" "}
+                {item.acao} · {new Date(item.criado_em).toLocaleString("pt-BR")}
+                <p className="mt-1 text-muted-foreground">
+                  {item.status_anterior || "-"} → {item.status_novo} ·{" "}
+                  {item.observacao}
+                </p>
+              </div>
+            ))}
+            {!reviewHistory.length && (
+              <p className="text-xs text-muted-foreground">
+                Nenhuma revisão registrada.
+              </p>
+            )}
+          </div>
+        </section>
+      )}
+      {evidenceEditing && (
+        <section className={`${card} mb-4 p-5`}>
+          <div className="flex items-center gap-3">
+            <div>
+              <h3 className="font-semibold">Anexar evidência</h3>
+              <p className="text-xs text-muted-foreground">
+                {evidenceEditing.nome || evidenceEditing.tipo} · coordenada
+                registrada automaticamente
+              </p>
+            </div>
+            <button
+              onClick={() => setEvidenceEditing(null)}
+              className="ml-auto text-xs text-muted-foreground"
+            >
+              Cancelar
+            </button>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="text-xs text-muted-foreground">
+              Tipo
+              <select
+                className={`${input} mt-1`}
+                value={evidence.tipo}
+                onChange={(e) =>
+                  setEvidence({ ...evidence, tipo: e.target.value })
+                }
+              >
+                <option value="foto">Foto</option>
+                <option value="documento">Documento</option>
+                <option value="vistoria">Vistoria</option>
+                <option value="link">Link oficial</option>
+                <option value="relato">Relato operacional</option>
+              </select>
+            </label>
+            <Field
+              label="Data e hora da evidência"
+              type="datetime-local"
+              value={evidence.capturada_em}
+              set={(v: ApiValue) =>
+                setEvidence({ ...evidence, capturada_em: v })
+              }
+            />
+            <Field
+              label="Endereço HTTPS da foto/documento (opcional)"
+              value={evidence.url}
+              set={(v: ApiValue) => setEvidence({ ...evidence, url: v })}
+            />
+            <label className="text-xs text-muted-foreground">
+              Cópia interna da evidência (JPG, PNG, WebP ou PDF; até 1 MB)
+              <input
+                className={`${input} mt-1`}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,application/pdf"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  if (file.size > 1024 * 1024) {
+                    setMessage("A evidência deve ter no máximo 1 MB.");
+                    event.target.value = "";
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onload = () =>
+                    setEvidence({
+                      ...evidence,
+                      conteudo_base64:
+                        String(reader.result || "").split(",")[1] || "",
+                      mime_type: file.type,
+                      nome_arquivo: file.name,
+                    });
+                  reader.readAsDataURL(file);
+                }}
+              />
+            </label>
+            <Field
+              label="Fonte"
+              value={evidence.fonte}
+              set={(v: ApiValue) => setEvidence({ ...evidence, fonte: v })}
+            />
+            <div className="md:col-span-2">
+              <Field
+                label="Descrição da evidência"
+                value={evidence.descricao}
+                set={(v: ApiValue) =>
+                  setEvidence({ ...evidence, descricao: v })
+                }
+              />
+            </div>
+          </div>
+          <button
+            disabled={busy}
+            onClick={addEvidence}
+            className={`${btn} mt-4`}
+          >
+            Salvar evidência e iniciar revisão
+          </button>
+        </section>
+      )}
       <section className={`${card} mb-4 p-4`}>
         <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
           <label className="text-xs text-muted-foreground">
@@ -447,7 +843,9 @@ export function RestrictionCatalog({ token }: P) {
             />
           </div>
           <button disabled={busy} onClick={validate} className={`${btn} mt-4`}>
-            Confirmar e adicionar à base global
+            {editing.origem_validacao === "catalogo_regional"
+              ? "Confirmar para a empresa responsável"
+              : "Confirmar e adicionar à base de segurança"}
           </button>
         </section>
       )}
@@ -512,6 +910,17 @@ export function RestrictionCatalog({ token }: P) {
                   Fonte: {x.fonte || "não informada"} · Confiança:{" "}
                   {x.confianca ?? "-"}%
                 </p>
+                {["vencida", "envelhecendo", "sem_evidencia"].includes(
+                  x.evidencia_status,
+                ) && (
+                  <p className="mt-2 text-xs text-status-critico">
+                    {x.evidencia_status === "vencida"
+                      ? "Evidência vencida: revisar antes de continuar confiando neste limite."
+                      : x.evidencia_status === "envelhecendo"
+                        ? "Evidência próxima do vencimento."
+                        : "Restrição sem evidência anexada."}
+                  </p>
+                )}
                 {x.natureza === "temporaria" && (
                   <p className="mt-2 text-xs text-status-atencao">
                     Vigência:{" "}
