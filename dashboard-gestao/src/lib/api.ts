@@ -103,128 +103,14 @@ export async function loadDashboard(
   token: string,
   usuario?: DashboardUser,
 ): Promise<ApiData> {
-  if (usuario?.tipo === "empresa_usuario") {
-    const paths = [
-      "/integracoes/portal/diagnostico",
-      "/integracoes/portal/motoristas",
-      "/integracoes/portal/viagens",
-      "/integracoes/portal/alertas",
-      "/integracoes/portal/reportes",
-      "/integracoes/portal/rotas",
-    ];
-    const rs = await Promise.allSettled(
-      paths.map((p) => request<ApiValue>(p, token)),
-    );
-    if (rs.every((r) => r.status === "rejected"))
-      throw (rs[0] as PromiseRejectedResult).reason;
-    const value = (i: number) =>
-      rs[i]!.status === "fulfilled"
-        ? (rs[i] as PromiseFulfilledResult<ApiValue>).value
-        : null;
-    const diagnostico = value(0) || {};
-    const list = (i: number) => (Array.isArray(value(i)) ? value(i) : []);
-    const nomes = [
-      "localização",
-      "motoristas",
-      "viagens",
-      "alertas",
-      "reportes",
-      "rotas",
-    ];
-    const status = Object.fromEntries(
-      rs.map((r, i) => [
-        nomes[i],
-        r.status === "fulfilled"
-          ? {
-              estado:
-                (Array.isArray((r as PromiseFulfilledResult<unknown>).value) &&
-                  (r as PromiseFulfilledResult<unknown[]>).value.length ===
-                    0) ||
-                (i === 0 &&
-                  Array.isArray(
-                    (r as PromiseFulfilledResult<ApiValue>).value?.veiculos,
-                  ) &&
-                  (r as PromiseFulfilledResult<ApiValue>).value.veiculos
-                    .length === 0)
-                  ? "vazio"
-                  : "disponivel",
-            }
-          : {
-              estado: "erro",
-              mensagem:
-                (r as PromiseRejectedResult).reason?.message ||
-                "Falha ao carregar",
-            },
-      ]),
-    );
-    return {
-      veiculos: diagnostico.veiculos || [],
-      localizacoes: diagnostico.veiculos || [],
-      motoristas: list(1),
-      viagens: list(2),
-      alertas: list(3),
-      reportes: list(4),
-      rotas: list(5),
-      status,
-    };
-  }
-  const paths = [
-    "/veiculos",
-    "/motoristas",
-    "/monitoramento/viagens",
-    "/localizacoes",
-    "/alertas",
-    "/reportes",
-    "/rotas",
-  ];
-  const rs = await Promise.allSettled(
-    paths.map((p) => request<ApiValue[]>(p, token)),
-  );
-  const val = (i: number) =>
-    rs[i]!.status === "fulfilled" &&
-    Array.isArray((rs[i] as PromiseFulfilledResult<ApiValue[]>).value)
-      ? (rs[i] as PromiseFulfilledResult<ApiValue[]>).value
-      : [];
-  if (rs.every((r) => r.status === "rejected"))
-    throw (rs[0] as PromiseRejectedResult).reason;
-  const nomes = [
-    "veículos",
-    "motoristas",
-    "viagens",
-    "localizações",
-    "alertas",
-    "reportes",
-    "rotas",
-  ];
-  const status = Object.fromEntries(
-    rs.map((r, i) => [
-      nomes[i],
-      r.status === "fulfilled"
-        ? {
-            estado:
-              Array.isArray((r as PromiseFulfilledResult<unknown>).value) &&
-              (r as PromiseFulfilledResult<unknown[]>).value.length === 0
-                ? "vazio"
-                : "disponivel",
-          }
-        : {
-            estado: "erro",
-            mensagem:
-              (r as PromiseRejectedResult).reason?.message ||
-              "Falha ao carregar",
-          },
-    ]),
-  );
-  return {
-    veiculos: val(0),
-    motoristas: val(1),
-    viagens: val(2),
-    localizacoes: val(3),
-    alertas: val(4),
-    reportes: val(5),
-    rotas: val(6),
-    status,
-  };
+  void usuario;
+  return request<ApiData>("/dashboard/resumo", token);
+}
+
+export async function loadDashboardLocations(
+  token: string,
+): Promise<ApiValue[]> {
+  return request<ApiValue[]>("/dashboard/localizacoes", token);
 }
 
 export async function apiRequest<T>(
