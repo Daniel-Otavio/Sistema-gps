@@ -68,7 +68,7 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
                     : `SELECT g.id,'guardiao_sombra' AS tipo,CASE WHEN g.nivel IN ('iminente','critico') THEN 'alta' ELSE 'media' END AS severidade,
                         g.nivel,g.placa,g.id_veiculo,g.distancia_km,g.tempo_estimado_min,g.status_operacional,g.ultimo_evento_em,g.tipo_risco,g.dados,e.nome AS empresa
                         FROM guardiao_sombra_eventos g JOIN empresas_integracao e ON e.id=g.id_empresa ORDER BY g.ultimo_evento_em DESC LIMIT 1000`, params)),
-                medir('reportes', pool.query(`SELECT rp.id,rp.tipo,rp.descricao,rp.status_reporte,rp.data_hora,rp.lat,rp.lng,
+                medir('reportes', pool.query(`SELECT rp.id,rp.tipo,rp.status_reporte,rp.data_hora,rp.lat,rp.lng,
                     rp.expira_em,rp.resolvido_em,v.placa,u.nome AS motorista FROM reportes rp JOIN veiculos v ON v.id=rp.id_veiculo
                     ${vinculo} LEFT JOIN usuarios u ON u.id=rp.id_motorista ORDER BY rp.data_hora DESC LIMIT 1000`, params)),
                 medir('rotas', pool.query(`SELECT DISTINCT r.id,r.nome,r.origem,r.destino,r.status,r.criada_em,r.dados_geojson
