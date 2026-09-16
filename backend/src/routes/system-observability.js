@@ -19,7 +19,7 @@ function criarRotasObservabilidade({ pool, autenticar, registrarLogSistema, guar
     router.get('/admin/saude-sistema', autenticar, somenteAdmin, async (req, res) => {
         const inicio = Date.now();
         try {
-            const [integracoes, guardiao, empresas, eventos, filaGuardiao, filaNotificacoes, filaRegional, dashboard, sla] = await Promise.all([
+            const [integracoes, guardiao, empresas, eventos, filaGuardiao, filaNotificacoes, filaRegional, filaPrivacidade, dashboard, sla] = await Promise.all([
                 pool.query(`SELECT COUNT(*) FILTER(WHERE recebido_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes')::int AS requisicoes_15m,COUNT(*) FILTER(WHERE recebido_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes' AND sucesso)::int AS sucessos_15m,COUNT(*) FILTER(WHERE recebido_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes' AND NOT sucesso)::int AS falhas_15m,ROUND(AVG(duracao_ms) FILTER(WHERE recebido_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes'))::int AS latencia_media_ms,ROUND(PERCENTILE_CONT(.95)WITHIN GROUP(ORDER BY duracao_ms)FILTER(WHERE recebido_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes'))::int AS latencia_p95_ms,MAX(recebido_em) AS ultima_posicao FROM integracao_requisicoes`),
                 pool.query(`SELECT COUNT(*) FILTER(WHERE analisado_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes')::int AS analises_15m,COUNT(*) FILTER(WHERE analisado_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes' AND status='risco')::int AS riscos_15m,COUNT(*) FILTER(WHERE analisado_em>CURRENT_TIMESTAMP-INTERVAL '15 minutes' AND status='seguro')::int AS seguras_15m,MAX(analisado_em) AS ultima_analise FROM guardiao_analises`),
                 pool.query(`SELECT e.id,e.nome,e.status_operacional,e.ultimo_uso_em,e.ultimo_erro_em,COUNT(ev.id_veiculo)::int AS veiculos FROM empresas_integracao e LEFT JOIN empresa_integracao_veiculos ev ON ev.id_empresa=e.id WHERE e.ativo=TRUE GROUP BY e.id ORDER BY CASE e.status_operacional WHEN 'erro' THEN 0 WHEN 'offline' THEN 1 WHEN 'nunca_conectou' THEN 2 ELSE 3 END,e.nome`),
@@ -52,6 +52,13 @@ function criarRotasObservabilidade({ pool, autenticar, registrarLogSistema, guar
                     ROUND(AVG(EXTRACT(EPOCH FROM(execucao_iniciada_em-criado_em))*1000)FILTER(WHERE execucao_iniciada_em>CURRENT_TIMESTAMP-INTERVAL '24 hours'))::int AS espera_media_ms,
                     COUNT(*)FILTER(WHERE cobertura_status<>'completa')::int AS coberturas_parciais,
                     MAX(ultima_indexacao_em) AS ultima_indexacao FROM indexacao_regional_fila`),
+                pool.query(`SELECT COUNT(*)FILTER(WHERE status='pendente')::int AS pendentes,
+                    COUNT(*)FILTER(WHERE status='processando')::int AS processando,
+                    COUNT(*)FILTER(WHERE status='falhou')::int AS falhas_permanentes,
+                    EXTRACT(EPOCH FROM(CURRENT_TIMESTAMP-MIN(criado_em)FILTER(WHERE status='pendente')))::int AS item_mais_antigo_seg,
+                    ROUND(AVG(EXTRACT(EPOCH FROM(processado_em-iniciado_em))*1000)
+                        FILTER(WHERE status='concluido' AND processado_em>CURRENT_TIMESTAMP-INTERVAL '24 hours'))::int AS tempo_medio_ms
+                    FROM privacidade_exportacao_fila`),
                 pool.query(`SELECT COUNT(*)::int AS chamadas_24h,
                     ROUND(AVG(duracao_ms))::int AS latencia_media_ms,
                     ROUND(PERCENTILE_CONT(.95)WITHIN GROUP(ORDER BY duracao_ms))::int AS latencia_p95_ms,
@@ -82,14 +89,16 @@ function criarRotasObservabilidade({ pool, autenticar, registrarLogSistema, guar
             const fg = filaGuardiao.rows[0] || {};
             const fn = filaNotificacoes.rows[0] || {};
             const fr = filaRegional.rows[0] || {};
+            const fp = filaPrivacidade.rows[0] || {};
             const dm = dashboard.rows[0] || {};
             const sl = sla.rows[0] || {};
             const filaGuardiaoStatus = Number(fg.falhas_permanentes || 0) > 0 || Number(fg.item_mais_antigo_seg || 0) > 60 ||
                 (Number(sl.posicoes_recebidas || 0) > 0 && Number(sl.dentro_sla_percentual || 0) < 95) ? 'atencao' : 'operacional';
             const filaNotificacaoStatus = Number(fn.falhas_permanentes || 0) > 0 || Number(fn.item_mais_antigo_seg || 0) > 300 ? 'atencao' : 'operacional';
             const filaRegionalStatus = Number(fr.falhas_permanentes || 0) > 0 || Number(fr.item_mais_antigo_seg || 0) > 900 ? 'atencao' : fr.ultima_indexacao ? 'operacional' : 'sem_dados';
+            const filaPrivacidadeStatus = Number(fp.falhas_permanentes || 0) > 0 || Number(fp.item_mais_antigo_seg || 0) > 600 ? 'atencao' : 'operacional';
             const dashboardStatus = Number(dm.latencia_p95_ms || 0) > 3000 ? 'atencao' : dm.ultima_atualizacao ? 'operacional' : 'sem_dados';
-            const apiStatus = Number(i.falhas_15m || 0) > 0 || filaGuardiaoStatus === 'atencao' || filaRegionalStatus === 'atencao' ? 'atencao' : 'operacional';
+            const apiStatus = Number(i.falhas_15m || 0) > 0 || filaGuardiaoStatus === 'atencao' || filaRegionalStatus === 'atencao' || filaPrivacidadeStatus === 'atencao' ? 'atencao' : 'operacional';
             const telemetriaStatus = !ultima ? 'sem_dados' : Date.now() - ultima.getTime() > 300000 ? 'offline' : 'operacional';
             return res.json({
                 timestamp: new Date(),
@@ -103,10 +112,11 @@ function criarRotasObservabilidade({ pool, autenticar, registrarLogSistema, guar
                     guardiao: { status: g.ultima_analise ? filaGuardiaoStatus : 'sem_dados', ultima_analise: g.ultima_analise },
                     notificacoes: { status: filaNotificacaoStatus },
                     indexacao_regional: { status: filaRegionalStatus, ultima_indexacao:fr.ultima_indexacao },
+                    exportacoes_privacidade: { status: filaPrivacidadeStatus },
                     dashboard: { status: dashboardStatus, ultima_atualizacao: dm.ultima_atualizacao }
                 },
                 metricas: { ...i, ...g },
-                filas: { guardiao: fg, notificacoes: fn, indexacao_regional:fr },
+                filas: { guardiao: fg, notificacoes: fn, indexacao_regional:fr, exportacoes_privacidade:fp },
                 dashboard: dm,
                 sla_guardiao: { ...sl, meta_ms:guardiaoSlaMs },
                 empresas: empresas.rows,
@@ -120,9 +130,12 @@ function criarRotasObservabilidade({ pool, autenticar, registrarLogSistema, guar
 
     router.post('/admin/filas/:tipo/reprocessar-falhas', autenticar, somenteAdmin, async (req, res) => {
         const tipo = String(req.params.tipo || '');
-        if (!['guardiao', 'notificacoes', 'indexacao_regional'].includes(tipo)) return res.status(400).json({ erro:'Fila inválida.' });
+        if (!['guardiao', 'notificacoes', 'indexacao_regional', 'exportacoes_privacidade'].includes(tipo)) return res.status(400).json({ erro:'Fila inválida.' });
         try {
-            const tabela = tipo === 'guardiao' ? 'guardiao_fila' : tipo === 'indexacao_regional' ? 'indexacao_regional_fila' : 'notificacoes_outbox';
+            const tabela = tipo === 'guardiao' ? 'guardiao_fila'
+                : tipo === 'indexacao_regional' ? 'indexacao_regional_fila'
+                : tipo === 'exportacoes_privacidade' ? 'privacidade_exportacao_fila'
+                : 'notificacoes_outbox';
             const resultado = await pool.query(`WITH falhas AS(
                 SELECT id FROM ${tabela} WHERE status='falhou' ORDER BY criado_em LIMIT 100
             ) UPDATE ${tabela} f SET status='pendente',tentativas=0,ultimo_erro=NULL,

@@ -1,17 +1,5 @@
 const express = require('express');
-const crypto = require('crypto');
-
-function chaveExportacao(){
-    const segredo=process.env.PRIVACY_EXPORT_SECRET;
-    if(!segredo||segredo.length<32)throw new Error('PRIVACY_EXPORT_SECRET não configurado com segurança.');
-    return crypto.createHash('sha256').update(segredo).digest();
-}
-function criptografar(dados){
-    const original=Buffer.from(JSON.stringify(dados),'utf8'),iv=crypto.randomBytes(12),cipher=crypto.createCipheriv('aes-256-gcm',chaveExportacao(),iv);
-    const conteudo=Buffer.concat([cipher.update(original),cipher.final()]);
-    return{conteudo,iv,authTag:cipher.getAuthTag(),hash:crypto.createHash('sha256').update(original).digest('hex'),tamanho:original.length};
-}
-function descriptografar(registro){const decipher=crypto.createDecipheriv('aes-256-gcm',chaveExportacao(),registro.iv);decipher.setAuthTag(registro.auth_tag);return Buffer.concat([decipher.update(registro.conteudo_criptografado),decipher.final()]);}
+const { descriptografar } = require('../services/privacy/export-crypto');
 
 function criarRotasPrivacidade({
     pool,
@@ -95,17 +83,11 @@ function criarRotasPrivacidade({
             const verificacoes={veiculo:`SELECT v.placa FROM empresa_integracao_veiculos ev JOIN veiculos v ON v.id=ev.id_veiculo WHERE ev.id_empresa=$1 AND ev.id_veiculo=$2`,usuario:`SELECT NULL::text AS placa FROM empresa_usuarios WHERE id_empresa=$1 AND id=$2`,motorista:`SELECT NULL::text AS placa FROM usuarios u WHERE u.id=$2 AND u.tipo='motorista' AND(EXISTS(SELECT 1 FROM viagens vg JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo AND ev.id_empresa=$1 WHERE vg.id_motorista=u.id)OR EXISTS(SELECT 1 FROM empresa_integracao_veiculos ev WHERE ev.id_empresa=$1 AND ev.id_veiculo=u.id_veiculo))`};
             const titular=(await client.query(verificacoes[solicitacao.titular_tipo],[empresa,id])).rows[0];if(!titular)throw new Error('Titular não pertence mais à empresa; solicitação não executada.');const placaOriginal=titular.placa||null;
             if(solicitacao.tipo==='exportacao'){
-                if(solicitacao.titular_tipo==='veiculo'){const [cadastro,posicoes,viagens,alertas]=await Promise.all([
-                    client.query(`SELECT v.id,v.placa,v.frota,v.modelo,v.comprimento,v.largura,v.peso,v.ativo,v.created_at FROM veiculos v JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=v.id WHERE ev.id_empresa=$1 AND v.id=$2`,[empresa,id]),
-                    client.query(`SELECT lat,lon,velocidade_kmh,direcao_graus,precisao_m,timestamp_dispositivo,recebido_em,classificacao FROM gps_ingestoes WHERE id_empresa=$1 AND id_veiculo=$2 ORDER BY recebido_em DESC LIMIT 10000`,[empresa,id]),
-                    client.query(`SELECT vg.id,vg.status,vg.carga,vg.altura_total,vg.peso_total,vg.saida_real,vg.chegada_real FROM viagens vg JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo WHERE ev.id_empresa=$1 AND vg.id_veiculo=$2 ORDER BY vg.id DESC`,[empresa,id]),
-                    client.query(`SELECT id,nivel,tipo_risco,status_operacional,primeiro_evento_em,ultimo_evento_em,resolvido_em FROM guardiao_sombra_eventos WHERE id_empresa=$1 AND id_veiculo=$2 ORDER BY id DESC`,[empresa,id])]);pacote={cadastro:cadastro.rows[0]||null,posicoes:posicoes.rows,viagens:viagens.rows,alertas:alertas.rows};
-                }else if(solicitacao.titular_tipo==='usuario')pacote={usuario:(await client.query(`SELECT id,nome,email,perfil,ativo,created_at FROM empresa_usuarios WHERE id_empresa=$1 AND id=$2`,[empresa,id])).rows[0]||null};
-                else{const [motorista,viagens,reportes]=await Promise.all([client.query(`SELECT u.id,u.nome,u.login,u.email,u.ativo,u.created_at FROM usuarios u WHERE u.id=$2 AND(EXISTS(SELECT 1 FROM empresa_integracao_veiculos ev WHERE ev.id_empresa=$1 AND ev.id_veiculo=u.id_veiculo)OR EXISTS(SELECT 1 FROM viagens vg JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo AND ev.id_empresa=$1 WHERE vg.id_motorista=u.id))`,[empresa,id]),client.query(`SELECT vg.id,vg.status,vg.saida_real,vg.chegada_real,v.placa FROM viagens vg JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo AND ev.id_empresa=$1 JOIN veiculos v ON v.id=vg.id_veiculo WHERE vg.id_motorista=$2 ORDER BY vg.id DESC`,[empresa,id]),client.query(`SELECT rp.id,rp.tipo,rp.lat,rp.lng,rp.data_hora,rp.status_reporte FROM reportes rp JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=rp.id_veiculo AND ev.id_empresa=$1 WHERE rp.id_motorista=$2 ORDER BY rp.id DESC`,[empresa,id])]);pacote={motorista:motorista.rows[0]||null,viagens:viagens.rows,reportes:reportes.rows};}
-                resultado.registros={itens:pacote?Object.values(pacote).reduce((n,v)=>n+(Array.isArray(v)?v.length:v?1:0),0):0,limite_posicoes:10000};
-                const protegido=criptografar(pacote),exportacaoId=crypto.randomUUID(),horas=Math.max(1,Math.min(168,Number(process.env.PRIVACY_EXPORT_EXPIRATION_HOURS)||24));
-                await client.query(`INSERT INTO privacidade_exportacoes(id,id_solicitacao,id_empresa,conteudo_criptografado,iv,auth_tag,hash_sha256,tamanho_bytes,expira_em) VALUES($1,$2,$3,$4,$5,$6,$7,$8,CURRENT_TIMESTAMP+($9||' hours')::interval)`,[exportacaoId,solicitacao.id,empresa,protegido.conteudo,protegido.iv,protegido.authTag,protegido.hash,protegido.tamanho,horas]);
-                resultado.exportacao={id:exportacaoId,hash_sha256:protegido.hash,tamanho_bytes:protegido.tamanho,expira_em_horas:horas};pacote=null;
+                await client.query(`INSERT INTO privacidade_exportacao_fila(id_solicitacao,status,tentativas,proxima_tentativa_em,reservado_em,iniciado_em,processado_em,worker_id,ultimo_erro) VALUES($1,'pendente',0,CURRENT_TIMESTAMP,NULL,NULL,NULL,NULL,NULL) ON CONFLICT(id_solicitacao) DO UPDATE SET status='pendente',tentativas=0,proxima_tentativa_em=CURRENT_TIMESTAMP,reservado_em=NULL,iniciado_em=NULL,processado_em=NULL,worker_id=NULL,ultimo_erro=NULL`,[solicitacao.id]);
+                await client.query(`UPDATE privacidade_solicitacoes SET status='em_processamento',processado_por=$1,erro_processamento=NULL WHERE id=$2`,[req.usuario.id,solicitacao.id]);
+                await client.query('COMMIT');
+                await registrarLogSistema({nivel:'info',origem:'privacidade',mensagem:'Exportação de privacidade colocada na fila',detalhes:{id_solicitacao:solicitacao.id,id_empresa:empresa},req});
+                return res.status(202).json({solicitacao_id:solicitacao.id,status:'em_processamento',mensagem:'Exportação protegida em processamento.'});
             }else{
                 if(solicitacao.titular_tipo==='usuario'){const r=await client.query(`UPDATE empresa_usuarios SET nome=$1,email=$2,senha_hash=NULL,ativo=FALSE,token_version=token_version+1 WHERE id_empresa=$3 AND id=$4`,[`Usuário anonimizado #${id}`,`anonimo+${empresa}-${id}@invalid.local`,empresa,id]);resultado.registros.usuariosAnonimizados=r.rowCount;}
                 else if(solicitacao.titular_tipo==='motorista'){const r=await client.query(`UPDATE usuarios SET nome=$1,login=$2,email=NULL,senha=$3,ativo=FALSE,token_version=token_version+1,id_veiculo=NULL WHERE id=$4 AND tipo='motorista' AND(EXISTS(SELECT 1 FROM viagens vg JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo AND ev.id_empresa=$5 WHERE vg.id_motorista=usuarios.id)OR EXISTS(SELECT 1 FROM empresa_integracao_veiculos ev WHERE ev.id_empresa=$5 AND ev.id_veiculo=usuarios.id_veiculo))`,[`Motorista anonimizado #${id}`,`anonimo-${empresa}-${id}`,`conta-desativada-${Date.now()}`,id,empresa]);resultado.registros.motoristasAnonimizados=r.rowCount;}

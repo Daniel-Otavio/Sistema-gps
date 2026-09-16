@@ -42,9 +42,11 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
             const [veiculos, viagens, localizacoes, eventos, reportes, rotas] = await Promise.all([
                 medir('veiculos', pool.query(`SELECT v.id,v.placa,v.frota,v.modelo,v.ativo FROM veiculos v ${vinculo} ORDER BY v.placa`, params)),
                 medir('viagens', pool.query(`SELECT vg.id,vg.id_rota,vg.id_veiculo,vg.status,
-                    vg.saida_prevista,vg.saida_real,vg.chegada_prevista,vg.chegada_real,vg.rota_aprovada_geojson,v.placa,v.frota,v.modelo,
+                    vg.saida_prevista,vg.saida_real,vg.chegada_prevista,vg.chegada_real,v.placa,v.frota,v.modelo,
                     r.nome AS rota_nome,r.origem,r.destino,
-                    COALESCE(vg.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson) AS dados_geojson,
+                    CASE WHEN vg.status='em_andamento'
+                         THEN COALESCE(vg.rota_aprovada_geojson,re.dados_geojson,r.dados_geojson)
+                         ELSE NULL END AS dados_geojson,
                     l.lat,l.lon,l.ultima_atualizacao FROM viagens vg JOIN veiculos v ON v.id=vg.id_veiculo
                     ${vinculo} JOIN rotas r ON r.id=vg.id_rota
                     LEFT JOIN rotas_especificas re ON re.id=vg.id_rota_especifica LEFT JOIN usuarios u ON u.id=vg.id_motorista
@@ -64,7 +66,7 @@ function criarRotasResumoDashboard({ pool, autenticar, limiter, analisarPosicaoN
                         FROM guardiao_sombra_eventos g JOIN empresas_integracao e ON e.id=g.id_empresa ORDER BY g.ultimo_evento_em DESC LIMIT 1000`, params)),
                 medir('reportes', pool.query(`SELECT rp.id,rp.tipo,rp.status_reporte,rp.data_hora,v.placa,u.nome AS motorista FROM reportes rp JOIN veiculos v ON v.id=rp.id_veiculo
                     ${vinculo} LEFT JOIN usuarios u ON u.id=rp.id_motorista ORDER BY rp.data_hora DESC LIMIT 1000`, params)),
-                medir('rotas', pool.query(`SELECT DISTINCT r.id,r.nome,r.origem,r.destino,r.status,r.criada_em,r.dados_geojson
+                medir('rotas', pool.query(`SELECT DISTINCT r.id,r.nome,r.origem,r.destino,r.status,r.criada_em
                     FROM rotas r LEFT JOIN viagens vg ON vg.id_rota=r.id
                     ${empresarial ? 'LEFT JOIN empresa_integracao_veiculos ev ON ev.id_veiculo=vg.id_veiculo AND ev.id_empresa=$1 WHERE r.id_empresa=$1 OR ev.id_empresa=$1' : ''}
                     ORDER BY r.criada_em DESC LIMIT 500`, params))
