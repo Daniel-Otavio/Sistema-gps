@@ -88,7 +88,11 @@ function criarAutenticacao({ pool, jwtSecret }) {
             if (decoded.tipo === 'empresa_usuario') {
                 const rotaEmpresarial = req.path.startsWith('/integracoes/portal/');
                 const rotaSessao = req.path.startsWith('/auth/');
-                if (!rotaEmpresarial && !rotaSessao) {
+                const perfisLeitura = new Set(['administrador', 'supervisor', 'analista', 'somente_leitura']);
+                const rotaDashboardLeitura = req.method === 'GET'
+                    && ['/dashboard/resumo', '/dashboard/localizacoes'].includes(req.path)
+                    && perfisLeitura.has(decoded.perfil);
+                if (!rotaEmpresarial && !rotaSessao && !rotaDashboardLeitura) {
                     return res.status(403).json({ erro: 'Use a área empresarial autorizada para esta operação.' });
                 }
             }
