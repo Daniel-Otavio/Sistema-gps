@@ -1,0 +1,21 @@
+{
+  "001-esquema-consolidado.js": "7d981be3e68babc525905b124bd239a441474fe4b97b3bc8838809ba223489f1",
+  "002-seguranca-multiempresa.js": "739db206ef0fcddb2c61f7b4314718b6c46b2b37069a62f09c1d07817e36a926",
+  "003-sessoes-e-notificacoes-empresa.js": "70b7a692f4795d129a8a06a0cb27df1143979abfc9ed2069d45dd56c43e4182d",
+  "004-ingestao-gps-guardiao-fila.js": "f674c8b3ada693f16e45daa283b9053e53ccff2a85887930b4e9e287eadf400a",
+  "005-limites-retencao-privacidade.js": "9b25665d0fc464bd70aef044dbec2e782698ac579e073297a464b74c8d33806d",
+  "006-logs-por-empresa.js": "566a1874bf0bbc1b341cb80f288557db1a56aadc64d9257800577579b9993956",
+  "007-cache-geocodificacao.js": "0a45e656b5e78dbe4b0e0539ebb9510f403fa1c662962cba579c13418853508e",
+  "008-observabilidade-filas-dashboard.js": "01f9e53ca2a84f9529a8a91b87f55d4554dc180387da61f7bae642762275cb27",
+  "009-validacao-inteligente-restricoes.js": "eabc646249718c7bad6f55e43495154fde70fb5c12af1fe37c43eec76a9758aa",
+  "010-cobertura-regional-restricoes.js": "6e2c9337b196a11631b36c9196abf8b3bb7ea10b1f54fe6330d3d0ee7ddb0d7a",
+  "011-fila-indexacao-regional.js": "aa0b62f0f21ca4b492401a27e11521145dadad671d93d880c053b344ede72132",
+  "012-guardiao-corredor-regional.js": "3c17094e00bddeb8d317ec45604e83b19b50b951f0356f8c004f7006279828cb",
+  "013-execucao-privacidade.js": "281f5e11a95c75ff001990e43a851f9cfa9102f66f8d6b63f689ff7734b6681f",
+  "014-privacidade-regional-evidencias.js": "0b9b3b318d4d3a80afe7beafc0952de3583b4477c06f558a774fe8de402888d1",
+  "015-privacy-export-queue.js": "3df92f1dd095e06632d4abcef0d36eba181a430fe48ceee027b2a816bf4417f3",
+  "016-workers-notifications.js": "ae3f7d7b088645336019aad842aa2b9b0a9c1894ff82bd086421088b6262f58b",
+  "017-retention-indexes.js": "ca667ceef0e512827fc69a7f0109e5c12a10f1ba5402259403bd7710c6da9d0a",
+  "018-admin-mfa.js": "850f7e1821a585b7f402ad9850db551f49674bfd3890b88a4156cfae3374a5c6",
+  "snapshots/001-schema.js": "89cb01042155a5a1eb38bf9e7a01a8dad7c8a97b59b154971310e41bf0f15c9c"
+}
