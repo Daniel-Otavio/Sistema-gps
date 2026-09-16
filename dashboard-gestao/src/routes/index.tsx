@@ -15,6 +15,8 @@ import { OperationalPanel } from "@/components/dashboard/OperationalPanel";
 import { LiveMap } from "@/components/dashboard/LiveMap";
 import {
   login,
+  verifyAdminMfa,
+  MfaRequiredError,
   logout,
   loadDashboard,
   loadDashboardLocations,
@@ -173,17 +175,20 @@ function DashboardPage() {
           id: "v",
           label: "VEICULOS ATIVOS",
           value: String(live.length),
-          sub: "de " + data.veiculos.length,
-          progress: data.veiculos.length
-            ? (live.length / data.veiculos.length) * 100
-            : 0,
+          sub: "de " + (data.totais?.veiculos ?? data.veiculos.length),
+          progress:
+            (data.totais?.veiculos ?? data.veiculos.length)
+              ? (live.length /
+                  (data.totais?.veiculos ?? data.veiculos.length)) *
+                100
+              : 0,
           tone: "primary",
           icon: "truck",
         },
         {
           id: "t",
           label: "VIAGENS EM ANDAMENTO",
-          value: String(running.length),
+          value: String(data.totais?.viagens_em_andamento ?? running.length),
           sub: "operacao atual",
           progress: running.length ? 72 : 0,
           tone: "normal",
@@ -192,7 +197,7 @@ function DashboardPage() {
         {
           id: "a",
           label: "ALERTAS CRITICOS",
-          value: String(critical.length),
+          value: String(data.totais?.alertas_ativos ?? critical.length),
           sub: "requerem atencao",
           progress: Math.min(100, critical.length * 15),
           tone: "guardiao",
@@ -213,9 +218,10 @@ function DashboardPage() {
           id: "p",
           label: "REPORTES ATIVOS",
           value: String(
-            data.reportes.filter(
-              (r) => (r.status_reporte || "ativo") === "ativo",
-            ).length,
+            data.totais?.reportes_ativos ??
+              data.reportes.filter(
+                (r) => (r.status_reporte || "ativo") === "ativo",
+              ).length,
           ),
           sub: "ocorrencias abertas",
           progress: 40,
@@ -227,7 +233,10 @@ function DashboardPage() {
   );
   if (!session)
     return (
-      <Login onLogin={async (u, p, e) => setSession(await login(u, p, e))} />
+      <Login
+        onLogin={async (u, p, e) => setSession(await login(u, p, e))}
+        onMfa={async (d, c) => setSession(await verifyAdminMfa(d, c))}
+      />
     );
   const open = (tab: string) => setActive(tab);
   return (
@@ -409,14 +418,18 @@ function DashboardPage() {
 }
 function Login({
   onLogin,
+  onMfa,
 }: {
   onLogin: (u: string, p: string, e?: string) => Promise<void>;
+  onMfa: (desafio: string, codigo: string) => Promise<void>;
 }) {
   const [u, su] = useState("");
   const [p, sp] = useState("");
   const [e, se] = useState("");
   const [empresa, setEmpresa] = useState("");
   const [modoEmpresa, setModoEmpresa] = useState(false);
+  const [desafioMfa, setDesafioMfa] = useState("");
+  const [codigoMfa, setCodigoMfa] = useState("");
   const [b, sb] = useState(false);
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
@@ -426,9 +439,14 @@ function Login({
           sb(true);
           se("");
           try {
-            await onLogin(u, p, modoEmpresa ? empresa : undefined);
+            if (desafioMfa) await onMfa(desafioMfa, codigoMfa);
+            else await onLogin(u, p, modoEmpresa ? empresa : undefined);
           } catch (y) {
-            se(y instanceof Error ? y.message : "Falha no login");
+            if (y instanceof MfaRequiredError) {
+              setDesafioMfa(y.desafioId);
+              setCodigoMfa("");
+              se(y.message);
+            } else se(y instanceof Error ? y.message : "Falha no login");
           } finally {
             sb(false);
           }
@@ -475,17 +493,30 @@ function Login({
           placeholder={modoEmpresa ? "E-mail" : "Usuário ou e-mail"}
           className="mt-3 w-full rounded border border-border bg-surface-2 p-3"
         />
-        <input
-          required
-          type="password"
-          value={p}
-          onChange={(x) => sp(x.target.value)}
-          placeholder="Senha"
-          className="mt-3 w-full rounded border border-border bg-surface-2 p-3"
-        />
+        {!desafioMfa ? (
+          <input
+            required
+            type="password"
+            value={p}
+            onChange={(x) => sp(x.target.value)}
+            placeholder="Senha"
+            className="mt-3 w-full rounded border border-border bg-surface-2 p-3"
+          />
+        ) : (
+          <input
+            required
+            autoFocus
+            inputMode="numeric"
+            maxLength={6}
+            value={codigoMfa}
+            onChange={(x) => setCodigoMfa(x.target.value.replace(/\D/g, ""))}
+            placeholder="Código de segurança de 6 dígitos"
+            className="mt-3 w-full rounded border border-border bg-surface-2 p-3"
+          />
+        )}
         {e && <p className="mt-3 text-xs text-status-critico">{e}</p>}
         <button className="mt-4 w-full rounded bg-primary p-3 font-semibold">
-          {b ? "Autenticando..." : "Entrar"}
+          {b ? "Verificando..." : desafioMfa ? "Confirmar código" : "Entrar"}
         </button>
       </form>
     </div>
