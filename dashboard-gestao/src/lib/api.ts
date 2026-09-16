@@ -26,6 +26,12 @@ export type ApiData = {
   alertas: ApiValue[];
   reportes: ApiValue[];
   rotas: ApiValue[];
+  totais?: {
+    veiculos?: number;
+    viagens_em_andamento?: number;
+    alertas_ativos?: number;
+    reportes_ativos?: number;
+  };
   status?: Record<string, AreaStatus>;
 };
 const KEY = "gps-caminhao-gestor-session";
@@ -75,6 +81,14 @@ async function request<T>(
     );
   return b;
 }
+export class MfaRequiredError extends Error {
+  desafioId: string;
+  constructor(desafioId: string) {
+    super("Digite o código de segurança enviado ao administrador.");
+    this.name = "MfaRequiredError";
+    this.desafioId = desafioId;
+  }
+}
 export async function login(
   login: string,
   senha: string,
@@ -93,9 +107,27 @@ export async function login(
       ),
     },
   );
+  if (d.mfa_required && d.desafio_id)
+    throw new MfaRequiredError(String(d.desafio_id));
   if (!["admin", "empresa_usuario"].includes(d.usuario?.tipo))
     throw new Error("Este usuário não possui acesso ao painel.");
   const s = { token: "", csrfToken: d.csrfToken, usuario: d.usuario };
+  saveSession(s);
+  return s;
+}
+export async function verifyAdminMfa(
+  desafioId: string,
+  codigo: string,
+): Promise<Session> {
+  const d = await request<ApiValue>("/auth/mfa/verificar", undefined, {
+    method: "POST",
+    body: JSON.stringify({ desafio_id: desafioId, codigo }),
+  });
+  const s = {
+    token: "",
+    csrfToken: d.csrfToken,
+    usuario: d.usuario,
+  } as Session;
   saveSession(s);
   return s;
 }
