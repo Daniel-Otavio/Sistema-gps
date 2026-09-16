@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 
 const card = "rounded-xl border border-border bg-card shadow-card";
@@ -14,6 +14,7 @@ export function LiveMap({
     layerRef = useRef<ApiValue>(null),
     hasInitialFitRef = useRef(false),
     routeViewRef = useRef("");
+  const [mapReady, setMapReady] = useState(false);
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -80,10 +81,12 @@ export function LiveMap({
       ).addTo(map);
       mapRef.current = map;
       layerRef.current = L.layerGroup().addTo(map);
+      setMapReady(true);
       setTimeout(() => map.invalidateSize(), 50);
     })();
     return () => {
       alive = false;
+      setMapReady(false);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -250,7 +253,7 @@ export function LiveMap({
     return () => {
       cancelled = true;
     };
-  }, [items, geojson, risks]);
+  }, [items, geojson, risks, mapReady]);
   return (
     <section
       className={

@@ -7,6 +7,8 @@ export type P = {
   token: string;
   data: ApiValue;
   refreshDashboard: () => Promise<void>;
+  routeDraft?: ApiValue;
+  onRouteDraftChange?: (route: ApiValue) => void;
   usuario?: {
     id?: string | number;
     nome?: string;
