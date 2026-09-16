@@ -272,6 +272,27 @@ body.modo-navegacao #btn-tema-mapa { display:none !important; }
     cursor:pointer;
     box-shadow:0 7px 22px rgba(0,0,0,.38);
 }
+
+#btn-iniciar-demo {
+    position:fixed;
+    bottom:65px;
+    left:50%;
+    transform:translateX(-50%);
+    z-index:2500;
+    display:none;
+    min-width:210px;
+    justify-content:center;
+    align-items:center;
+    background:#7c3aed;
+    color:#fff;
+    border:none;
+    padding:11px 20px;
+    border-radius:22px;
+    font-size:13px;
+    font-weight:800;
+    cursor:pointer;
+    box-shadow:0 7px 22px rgba(0,0,0,.38);
+}
 #controles-simulacao {
     position:fixed;
     top:76px;
@@ -356,7 +377,8 @@ body.modo-navegacao #btn-tema-mapa { display:none !important; }
         padding:7px 9px;
         font-size:10px;
     }
-    #controles-simulacao {
+    
+#controles-simulacao {
         top:72px;
         right:10px;
         bottom:auto;
@@ -684,10 +706,9 @@ body.modo-navegacao #build-demo-badge {
 body.modo-navegacao #gps-partida-card {
     display:none !important;
 }
-body.modo-navegacao #controles-simulacao {
-    display:none !important;
-}
-#btn-iniciar-3d:disabled {
+body.modo-navegacao #btn-iniciar-demo { display:none !important; }
+#btn-iniciar-3d:disabled,
+#btn-iniciar-demo:disabled {
     cursor:wait;
     filter:saturate(.65);
 }
@@ -750,6 +771,7 @@ box-shadow:0 4px 14px rgba(0,0,0,.45);
 letter-spacing:.3px;white-space:nowrap;
 ">GPS V22.2 • GPS REAL</div>
 <div id="status-bar">⏳ Carregando...</div>
+<button id="btn-sair-seguro" onclick="sairMotorista()" style="position:fixed;right:12px;top:12px;z-index:9998;border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 12px;background:#1f2937;color:#fff;cursor:pointer;display:none">Sair</button>
 <div id="offline-indicator">📴 OFFLINE • <span id="offline-pendencias">0 pendências</span></div>
 <div id="pacote-offline-status" style="
 position:fixed;top:104px;left:50%;transform:translateX(-50%);
@@ -767,6 +789,7 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <span id="gps-partida-status">Aguardando localização...</span>
 </div>
 <button id="btn-iniciar-3d" onclick="iniciarNavegacao3D()">📍 INICIAR VIAGEM GPS</button>
+<button id="btn-iniciar-demo" onclick="iniciarDemonstracao()">🧪 INICIAR DEMO</button>
 <button id="btn-tema-mapa" title="Tema">◐</button>
 <button id="btn-centralizar" title="Centralizar">◎</button>
 <button id="btn-reportar" title="Reportar">⚑</button>
@@ -778,7 +801,7 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <button onclick="enviarReporte('risco')">🔴 Alto Risco / Roubo</button>
 </div>
 <div id="velocimetro"><span id="velocidade-valor">0</span><span id="velocidade-unidade">km/h</span></div>
-<div id="controles-simulacao" style="display:none !important;">
+<div id="controles-simulacao" style="display:none;">
 <button id="btn-demo-pausar" onclick="pausarSimulacao()">⏸ PAUSAR</button>
 <button id="btn-demo-parar" onclick="pararSimulacao()">⏹ ENCERRAR TESTE</button>
 </div>
@@ -825,7 +848,7 @@ box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:11px;text-align:center;">
 <div id="auth-senha" class="auth-step">
 <h3>Criar senha</h3>
 <div class="step-subtitle">E-mail confirmado. Agora crie sua senha de acesso.</div>
-<div class="grupo"><label>Nova senha</label><input type="password" id="nova-senha" autocomplete="new-password" placeholder="Mínimo 6 caracteres"></div>
+<div class="grupo"><label>Nova senha</label><input type="password" id="nova-senha" autocomplete="new-password" placeholder="Mínimo 12 caracteres"></div>
 <div class="grupo"><label>Confirmar senha</label><input type="password" id="confirmar-senha" autocomplete="new-password" placeholder="Repita a senha"></div>
 <button class="btn-primary" id="btn-criar-conta" onclick="criarSenhaCadastro()">Criar conta</button>
 <div id="senha-status" class="status-box">Sua senha não será enviada por e-mail.</div>
@@ -948,7 +971,7 @@ async function criarSenhaCadastro() {
     const confirmar = document.getElementById('confirmar-senha').value;
     const status = document.getElementById('senha-status');
     const btn = document.getElementById('btn-criar-conta');
-    if (senha.length < 6) { status.innerHTML = '❌ A senha precisa ter pelo menos 6 caracteres.'; return; }
+    if (senha.length < 12) { status.innerHTML = '❌ A senha precisa ter pelo menos 12 caracteres.'; return; }
     if (senha !== confirmar) { status.innerHTML = '❌ As senhas não são iguais.'; return; }
     btn.disabled = true; btn.innerHTML = 'Criando conta...'; status.innerHTML = '🔄 Finalizando cadastro...';
     try {
@@ -994,7 +1017,14 @@ let ultimaInstrucaoDemo = null;
 let indexSimulacao = 0, velocidadeSimulacao = 30;
 let vozFemininaSelecionada = null, marcadoresReportes = [];
 let ultimaLocalizacaoEnviada = 0, envioLocalizacaoEmAndamento = false;
-const INTERVALO_ENVIO_LOCALIZACAO = 5000;
+const INTERVALO_GPS_NORMAL_MS = 15000;
+const INTERVALO_GPS_PARADO_MS = 60000;
+const INTERVALO_GPS_ALERTA_MS = 5000;
+const INTERVALO_GPS_CRITICO_MS = 3000;
+const INTERVALO_GPS_DEMO_MS = 5000;
+const GUARDIAO_ALERTA_EXPIRA_MS = 120000;
+let guardiaoNivelAtual = null;
+let guardiaoUltimoAlertaEm = 0;
 let incidentesProcessados = new Set(), ultimoRecalculo = 0;
 let COOLDOWN_RECALCULO = 120000, MAX_RECALCULOS = 3, totalRecalculos = 0;
 
@@ -1612,9 +1642,13 @@ async function enviarLocalizacaoServidor(lat, lon, telemetria = {}) {
     }
 
     const agora = Date.now();
+    const intervaloEnvio = obterIntervaloEnvioLocalizacao(
+        telemetria.velocidade_kmh,
+        agora
+    );
 
     if (
-        agora - ultimaLocalizacaoEnviada < INTERVALO_ENVIO_LOCALIZACAO ||
+        agora - ultimaLocalizacaoEnviada < intervaloEnvio ||
         envioLocalizacaoEmAndamento
     ) return;
 
@@ -1745,32 +1779,27 @@ async function dbExcluir(storeName, id) {
     });
 }
 
-async function salvarSessaoOffline(usuario = null) {
-    if (!tokenJWT) return;
-
-    try {
-        await dbSalvar(STORE_CACHE, {
-            chave: CACHE_SESSAO,
-            token: tokenJWT,
-            usuario,
-            salvo_em: new Date().toISOString()
-        });
-    } catch (erro) {
-        console.warn('Não foi possível salvar sessão offline:', erro);
-    }
+async function invocarCofreSessao(acao,dados=null){
+    try{
+        if(window.electronAPI){const mapa={salvar:'sessaoSeguraSalvar',carregar:'sessaoSeguraCarregar',apagar:'sessaoSeguraApagar'};return await window.electronAPI[mapa[acao]](dados);}
+        if(window.AndroidSecureSession){return await window.AndroidSecureSession[acao](dados?JSON.stringify(dados):null);}
+    }catch(erro){console.warn('Cofre seguro de sessão indisponível:',erro);}
+    return null;
 }
-
-async function recuperarSessaoOffline() {
-    try {
-        const sessao = await dbObter(STORE_CACHE, CACHE_SESSAO);
-        if (!sessao?.token) return null;
-        tokenJWT = sessao.token;
-        return sessao;
-    } catch (erro) {
-        console.warn('Erro recuperando sessão offline:', erro);
-        return null;
-    }
+async function dbLimpar(storeName){const db=await abrirBancoOffline();return new Promise((resolve,reject)=>{const tx=db.transaction(storeName,'readwrite');const req=tx.objectStore(storeName).clear();req.onsuccess=()=>resolve();req.onerror=()=>reject(req.error);});}
+async function sairMotorista(){
+    if(!confirm('Sair apagará a sessão, a rota e posições ainda não sincronizadas deste aparelho. Continuar?'))return;
+    const tokenAtual=tokenJWT;
+    try{if(tokenAtual)await fetch(`${API_BASE}/auth/logout`,{method:'POST',headers:{Authorization:tokenAtual}});}catch{}
+    if(watchId!==null&&navigator.geolocation){navigator.geolocation.clearWatch(watchId);watchId=null;}
+    for(const id of [intervalMonitoramento,intervalReportes])if(id)clearInterval(id);
+    tokenJWT=null;modoNavegacaoAtivo=false;viagemAtualId=null;dadosGeoJsonAtual=null;pathCoordinates=[];
+    await invocarCofreSessao('apagar');
+    await Promise.allSettled([dbLimpar(STORE_CACHE),dbLimpar(STORE_GPS),dbLimpar(STORE_ACOES),dbLimpar(STORE_REPORTES)]);
+    document.getElementById('btn-sair-seguro').style.display='none';document.getElementById('login-pass').value='';document.getElementById('login-overlay').classList.remove('hidden');mostrarEtapaAuth('login');
 }
+async function salvarSessaoOffline(usuario=null){if(!tokenJWT)return false;await dbExcluir(STORE_CACHE,CACHE_SESSAO).catch(()=>{});return Boolean(await invocarCofreSessao('salvar',{token:tokenJWT,usuario}));}
+async function recuperarSessaoOffline(){await dbExcluir(STORE_CACHE,CACHE_SESSAO).catch(()=>{});const sessao=await invocarCofreSessao('carregar');if(!sessao?.token)return null;tokenJWT=sessao.token;const botao=document.getElementById('btn-sair-seguro');if(botao)botao.style.display='block';return sessao;}
 
 async function salvarRotaOffline(dados) {
     if (!dados?.dados_geojson) return;
@@ -2051,6 +2080,7 @@ async function atualizarIndicadorOffline(mensagemTemporaria = '') {
 let guardiaoUltimaChaveFalado = '';
 let guardiaoUltimaFalaEm = 0;
 let guardiaoUltimoDemoEnvio = 0;
+let guardiaoUltimaDemoDistanciaKm = null;
 
 function garantirCardGuardiao() {
     let card = document.getElementById('guardiao-card');
@@ -2076,18 +2106,46 @@ function esconderGuardiao() {
     if (card) card.style.display='none';
 }
 
+function obterIntervaloEnvioLocalizacao(velocidadeKmh, agora = Date.now()) {
+    // Mantém os testes rápidos sem impor a frequência de produção ao simulador.
+    if (simulacaoAtiva) return INTERVALO_GPS_DEMO_MS;
+
+    const alertaRecente =
+        guardiaoNivelAtual &&
+        agora - guardiaoUltimoAlertaEm <= GUARDIAO_ALERTA_EXPIRA_MS;
+
+    if (alertaRecente) {
+        return guardiaoNivelAtual === 'critico'
+            ? INTERVALO_GPS_CRITICO_MS
+            : INTERVALO_GPS_ALERTA_MS;
+    }
+
+    const velocidade = Number(velocidadeKmh);
+    if (Number.isFinite(velocidade) && velocidade <= 3) {
+        return INTERVALO_GPS_PARADO_MS;
+    }
+
+    return INTERVALO_GPS_NORMAL_MS;
+}
+
 function processarRespostaGuardiao(guardiao) {
     if (!guardiao) return;
 
     if (guardiao.status === 'seguro' || guardiao.status === 'indisponivel') {
+        guardiaoNivelAtual = null;
+        guardiaoUltimoAlertaEm = 0;
         esconderGuardiao();
         return;
     }
 
     if (guardiao.status !== 'alerta') return;
 
+    guardiaoNivelAtual = guardiao.nivel === 'critico' ? 'critico' : 'atencao';
+    guardiaoUltimoAlertaEm = Date.now();
+
     const card=garantirCardGuardiao();
     const critico=guardiao.nivel === 'critico';
+    const baixaConfianca=guardiao.baixa_confianca === true;
 
     card.style.display='block';
     card.style.background=critico?'rgba(127,29,29,.96)':'rgba(120,53,15,.96)';
@@ -2106,7 +2164,7 @@ function processarRespostaGuardiao(guardiao) {
             ${critico?'🔴':'🟠'} GUARDIÃO DE ROTA
         </div>
         <div style="font-size:18px;font-weight:900;margin-top:3px;">
-            ${String(guardiao.tipo_risco||'risco').toUpperCase()} INCOMPATÍVEL
+            ${baixaConfianca?'POSSÍVEL ':''}${String(guardiao.tipo_risco||'risco').toUpperCase()} INCOMPATÍVEL
         </div>
         <div style="font-size:12px;margin-top:5px;line-height:1.45;">
             📍 A <strong>${distancia} km</strong>${tempo?` • ⏱️ ${tempo}`:''}<br>
@@ -2116,6 +2174,7 @@ function processarRespostaGuardiao(guardiao) {
         <div style="font-size:10px;opacity:.84;margin-top:5px;">
             ${guardiao.restricao?.nome || guardiao.restricao?.rodovia || 'Restrição validada'}
             ${guardiao.restricao?.confianca?` • confiança ${guardiao.restricao.confianca}%`:''}
+            ${guardiao.restricao?.fonte?` • fonte ${guardiao.restricao.fonte}`:''}
         </div>
     `;
 
@@ -2690,12 +2749,8 @@ async function prepararMapaOfflineDaRota(dadosRota) {
     );
 
     try {
-        const { ipcRenderer } = require('electron');
-
-        const resposta = await ipcRenderer.invoke(
-            'preparar-mapa-offline',
-            dadosRota
-        );
+        if(!window.electronAPI) throw new Error('Ponte segura do aplicativo indisponível');
+        const resposta = await window.electronAPI.prepararMapaOffline(dadosRota);
 
         if (!resposta?.ok) {
             throw new Error(
@@ -2858,7 +2913,8 @@ async function fazerLoginMotorista() {
         if (!resp.ok) throw new Error(data.erro || 'Erro no login');
         if (data.usuario.tipo !== 'motorista') throw new Error('Acesso negado');
         tokenJWT = data.token;
-        await salvarSessaoOffline(data.usuario || null);
+        if(!await salvarSessaoOffline(data.usuario||null))throw new Error('Este dispositivo não oferece armazenamento seguro para a sessão.');
+        document.getElementById('btn-sair-seguro').style.display='block';
         document.getElementById('login-overlay').classList.add('hidden');
         initMapa();
         await carregarRotaDoMotorista();
@@ -3132,6 +3188,7 @@ async function carregarRotaTeste() {
 }
 function ativarInterface() {
     const btn = document.getElementById('btn-iniciar-3d');
+    const btnDemo = document.getElementById('btn-iniciar-demo');
 
     if (btn) {
         btn.style.display = 'flex';
@@ -3139,6 +3196,11 @@ function ativarInterface() {
         btn.style.opacity = '';
         btn.innerHTML = '📍 INICIAR VIAGEM GPS';
         btn.onclick = iniciarNavegacao3D;
+    }
+
+    if (btnDemo) {
+        btnDemo.style.display = 'flex';
+        btnDemo.disabled = false;
     }
 
     document.getElementById('btn-tema-mapa').style.display = 'flex';
@@ -6058,9 +6120,14 @@ function atualizarMarcadorDemo(posicao) {
         modoDemoMotorista &&
         tokenJWT &&
         navigator.onLine &&
-        Date.now() - guardiaoUltimoDemoEnvio >= 5000
+        (
+            Date.now() - guardiaoUltimoDemoEnvio >= 5000 ||
+            guardiaoUltimaDemoDistanciaKm === null ||
+            Math.abs(distanciaDemoPercorridaKm - guardiaoUltimaDemoDistanciaKm) >= 1.5
+        )
     ) {
         guardiaoUltimoDemoEnvio = Date.now();
+        guardiaoUltimaDemoDistanciaKm = distanciaDemoPercorridaKm;
 
         enviarGPSDireto({
             lat:posicao.lat,
@@ -6098,6 +6165,7 @@ function atualizarBotoesDemo(ativo) {
     const pausar = document.getElementById('btn-demo-pausar');
     const parar = document.getElementById('btn-demo-parar');
     const btnTeste = document.getElementById('btn-iniciar-3d');
+    const btnDemo = document.getElementById('btn-iniciar-demo');
     const legenda = document.getElementById('legenda-reportes-motorista');
 
     if (painel) painel.style.display = ativo ? 'flex' : 'none';
@@ -6105,6 +6173,7 @@ function atualizarBotoesDemo(ativo) {
     if (parar) parar.style.display = ativo ? 'block' : 'none';
 
     if (btnTeste) btnTeste.style.display = ativo ? 'none' : 'flex';
+    if (btnDemo) btnDemo.style.display = ativo ? 'none' : 'flex';
     if (legenda) legenda.style.display = 'none';
 }
 
@@ -6509,12 +6578,43 @@ function finalizarDemoMotorista() {
 
     /*
      * IMPORTANTE:
-     * O DEMO NÃO chama /concluir no servidor e NÃO envia GPS.
-     * Assim podemos testar sem alterar a viagem real.
+     * O DEMO não conclui a viagem no servidor.
+     * Envia somente telemetria simulada periódica para testar o Guardião.
      */
 }
 
-function iniciarDemonstracao() {
+async function prepararViagemParaDemoGuardiao() {
+    const statusBar = document.getElementById('status-bar');
+    if (!viagemAtualId) {
+        statusBar.innerHTML = '❌ A DEMO do Guardião exige uma viagem aprovada.';
+        statusBar.className = 'erro';
+        return false;
+    }
+    if (!navigator.onLine || !tokenJWT) {
+        statusBar.innerHTML = '❌ Conecte à internet para testar o Guardião na DEMO.';
+        statusBar.className = 'erro';
+        return false;
+    }
+    if (dadosRotaOriginal?.viagem_status === 'em_andamento') return true;
+
+    statusBar.innerHTML = '🧪 Preparando viagem de teste no servidor...';
+    statusBar.className = 'carregando';
+    try {
+        const resp = await fetch(`${API_BASE}/viagens/${viagemAtualId}/iniciar`, {
+            method:'POST',
+            headers:{ 'Authorization':tokenJWT }
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.erro || `Falha ao iniciar viagem (HTTP ${resp.status})`);
+        if (dadosRotaOriginal) dadosRotaOriginal.viagem_status = 'em_andamento';
+        return true;
+    } catch (erro) {
+        statusBar.innerHTML = `❌ DEMO não iniciada: ${erro.message}`;
+        statusBar.className = 'erro';
+        return false;
+    }
+}
+async function iniciarDemonstracao() {
     if (!pathCoordinates || pathCoordinates.length < 2) {
         const statusBar =
             document.getElementById('status-bar');
@@ -6527,6 +6627,8 @@ function iniciarDemonstracao() {
     }
 
     if (!marcadorMotorista || !mapa) return;
+
+    if (!(await prepararViagemParaDemoGuardiao())) return;
 
     // Para GPS real para o teste não misturar posição real e posição simulada.
     if (watchId) {
@@ -6548,6 +6650,8 @@ function iniciarDemonstracao() {
     simulacaoAtiva = true;
     simulacaoPausada = false;
     modoDemoMotorista = true;
+    guardiaoUltimoDemoEnvio = 0;
+    guardiaoUltimaDemoDistanciaKm = null;
 
     document.body.classList.add('modo-navegacao');
     const ruaPill = document.getElementById('rua-atual-pill');
@@ -6639,8 +6743,7 @@ function iniciarDemonstracao() {
         );
 
         /*
-         * Continua mostrando reportes/reação visual,
-         * mas o demo não envia a posição simulada ao servidor.
+         * Continua mostrando reportes e a reação visual do Guardião.
          */
         if (
             navigator.onLine &&

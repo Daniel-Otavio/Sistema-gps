@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -484,6 +484,15 @@ async function prepararMapaCache(dadosRota) {
     }
 }
 
+function caminhoSessaoSegura() { return path.join(app.getPath('userData'),'sessao-motorista.bin'); }
+ipcMain.handle('sessao-segura-salvar',async(_event,sessao)=>{
+    if(!safeStorage.isEncryptionAvailable())throw new Error('Cofre criptográfico indisponível');
+    const conteudo=Buffer.from(JSON.stringify({token:String(sessao?.token||''),usuario:sessao?.usuario||null,salvo_em:new Date().toISOString()}),'utf8');
+    const cifrado=safeStorage.encryptString(conteudo.toString('utf8'));
+    fs.writeFileSync(caminhoSessaoSegura(),cifrado,{mode:0o600});return true;
+});
+ipcMain.handle('sessao-segura-carregar',async()=>{try{const arquivo=caminhoSessaoSegura();if(!fs.existsSync(arquivo)||!safeStorage.isEncryptionAvailable())return null;return JSON.parse(safeStorage.decryptString(fs.readFileSync(arquivo)));}catch{return null;}});
+ipcMain.handle('sessao-segura-apagar',async()=>{const arquivo=caminhoSessaoSegura();if(fs.existsSync(arquivo))fs.unlinkSync(arquivo);return true;});
 ipcMain.handle('preparar-mapa-offline', async (_event, dadosRota) => {
     try {
         return await prepararMapaCache(dadosRota);
@@ -503,8 +512,10 @@ function createWindow() {
         width: 1200,
         height: 800,
         webPreferences: {
-            nodeIntegration: true,
-            contextIsolation: false,
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
             backgroundThrottling: false
         },
         icon: path.join(__dirname, 'caminhao-icon.png'),

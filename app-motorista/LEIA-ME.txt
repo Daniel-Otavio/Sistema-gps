@@ -1,0 +1,63 @@
+GPS CAMINHÃO — OFFLINE COM CACHE INTELIGENTE
+
+MELHORIAS DESTA VERSÃO
+
+1. O mapa da viagem é preparado em segundo plano.
+   O motorista pode continuar usando o app enquanto isso acontece.
+
+2. Cada rota específica gera uma chave de cache própria.
+   O mapa fica salvo em:
+       offline_maps/cache/<chave>.pmtiles
+
+3. Se a mesma rota específica voltar:
+   - até 30 dias: reutiliza o mapa existente, sem download;
+   - depois de 30 dias: continua podendo usar o mapa antigo enquanto tenta baixar uma versão nova;
+   - se a atualização falhar, mantém o mapa anterior.
+
+4. Os dados novos da viagem/rota continuam sendo atualizados normalmente pelo backend.
+   O cache é usado principalmente para o mapa pesado.
+
+5. O arquivo:
+       offline_maps/map_cache.json
+   guarda:
+   - quando foi criado;
+   - quando foi atualizado;
+   - último uso;
+   - número de reutilizações;
+   - origem/destino;
+   - id da rota específica;
+   - tamanho do arquivo.
+
+6. O arquivo:
+       offline_maps/viagem_atual.pmtiles
+   aponta para o mapa da viagem atual.
+   Ele só é trocado depois que uma nova versão terminou de baixar com sucesso.
+
+ANTES DO PRIMEIRO TESTE:
+    PREPARAR_OFFLINE.bat
+
+Fluxo:
+    viagem recebida
+        ↓
+    rota é salva imediatamente
+        ↓
+    app calcula chave da rota
+        ↓
+    mapa válido no cache?
+      ├─ SIM → reutiliza imediatamente
+      └─ NÃO → baixa/atualiza em segundo plano
+        ↓
+    internet caiu?
+        ↓
+    continua com rota + mapa já pronto
+
+Validade atual do mapa: 30 dias.
+
+SESSÃO SEGURA
+- No Electron, o JWT é criptografado pelo safeStorage do sistema e fica fora do IndexedDB.
+- O Electron usa contextIsolation=true, sandbox=true e nodeIntegration=false.
+- No Android, a WebView deve expor a ponte AndroidSecureSession usando Android Keystore/EncryptedSharedPreferences.
+- Métodos obrigatórios da ponte: salvar(json), carregar() e apagar().
+- carregar() deve devolver o JSON da sessão ou null. Nunca gravar o JWT em localStorage, sessionStorage ou IndexedDB.
+- No logout/troca de motorista, apagar também rota, fila GPS, ações e reportes locais.
+- Se a ponte segura não existir, o aplicativo recusa persistir a sessão.
