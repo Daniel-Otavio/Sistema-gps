@@ -30,6 +30,25 @@ import {
   muted,
 } from "../panel-shared";
 
+const qualidadeGuardiao = (valor: ApiValue) =>
+  ({
+    completa: "Análise completa",
+    corredor_historico_alta: "Corredor estimado · confiança alta",
+    corredor_historico_media: "Corredor estimado · confiança média",
+    corredor_historico_baixa: "Corredor estimado · confiança baixa",
+    utilizando_cache: "Análise limitada · cache rodoviário",
+    limitada_radar_direcional: "Análise limitada · radar direcional",
+    sem_direcao: "Limitada · sem direção suficiente",
+    sem_perfil_completo: "Limitada · perfil do veículo incompleto",
+    falha_temporaria: "Não concluída · nova tentativa programada",
+    falha_permanente: "Não processada · requer intervenção",
+  })[String(valor || "")] || "Qualidade não informada";
+const metodoGuardiao = (valor: ApiValue) =>
+  ({
+    corredor_historico_estimado: "Corredor estimado",
+    corredor_rodoviario_cache: "Corredor estimado com cache",
+    radar_direcional: "Radar direcional",
+  })[String(valor || "")] || "Método não informado";
 export function EnterprisePanel({
   section,
   token,
@@ -97,7 +116,7 @@ export function EnterprisePanel({
       items: data.alertas,
       titleOf: (x) => x.placa || "Análise",
       detailOf: (x) =>
-        `${x.nivel || "preventivo"} · ${x.status_operacional || "novo"} · ${x.distancia_km ?? "-"} km`,
+        `${x.nivel || "preventivo"} · ${x.status_operacional || "novo"} · ${metodoGuardiao(x.metodo_analise)} · ${x.distancia_km ?? "-"} km`,
     },
     restricoes: {
       title: "Restrições de rotas",
@@ -113,7 +132,7 @@ export function EnterprisePanel({
       items: history.items,
       titleOf: (x) => x.placa || `Análise ${x.id}`,
       detailOf: (x) =>
-        `${x.status || "processada"} · ${x.riscos_encontrados || 0} risco(s) · ${x.analisado_em ? new Date(x.analisado_em).toLocaleString("pt-BR") : "-"}`,
+        `${qualidadeGuardiao(x.qualidade)} · ${x.status || "processada"} · ${x.riscos_encontrados || 0} risco(s) · ${x.analisado_em ? new Date(x.analisado_em).toLocaleString("pt-BR") : "-"}`,
     },
   };
   const current = config[section] ?? config["localizacao"]!;
